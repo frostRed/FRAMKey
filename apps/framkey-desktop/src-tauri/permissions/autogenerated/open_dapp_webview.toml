@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-dapp-webview"
+description = "Enables the open_dapp_webview command without any pre-configured scope."
+commands.allow = ["open_dapp_webview"]
+
+[[permission]]
+identifier = "deny-open-dapp-webview"
+description = "Denies the open_dapp_webview command without any pre-configured scope."
+commands.deny = ["open_dapp_webview"]

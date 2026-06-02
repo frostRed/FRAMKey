@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-pick-vault-backup-file"
+description = "Enables the framkey_pick_vault_backup_file command without any pre-configured scope."
+commands.allow = ["framkey_pick_vault_backup_file"]
+
+[[permission]]
+identifier = "deny-framkey-pick-vault-backup-file"
+description = "Denies the framkey_pick_vault_backup_file command without any pre-configured scope."
+commands.deny = ["framkey_pick_vault_backup_file"]

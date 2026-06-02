@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-dismiss-review-request"
+description = "Enables the framkey_dismiss_review_request command without any pre-configured scope."
+commands.allow = ["framkey_dismiss_review_request"]
+
+[[permission]]
+identifier = "deny-framkey-dismiss-review-request"
+description = "Denies the framkey_dismiss_review_request command without any pre-configured scope."
+commands.deny = ["framkey_dismiss_review_request"]

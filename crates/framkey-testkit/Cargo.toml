@@ -1,0 +1,12 @@
+[package]
+name = "framkey-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+framkey-core = { path = "../framkey-core" }
+framkey-device = { path = "../framkey-device" }

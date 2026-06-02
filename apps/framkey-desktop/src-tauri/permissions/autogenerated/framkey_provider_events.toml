@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-provider-events"
+description = "Enables the framkey_provider_events command without any pre-configured scope."
+commands.allow = ["framkey_provider_events"]
+
+[[permission]]
+identifier = "deny-framkey-provider-events"
+description = "Denies the framkey_provider_events command without any pre-configured scope."
+commands.deny = ["framkey_provider_events"]

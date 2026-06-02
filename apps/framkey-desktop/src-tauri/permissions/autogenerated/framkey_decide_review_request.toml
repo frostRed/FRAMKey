@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-decide-review-request"
+description = "Enables the framkey_decide_review_request command without any pre-configured scope."
+commands.allow = ["framkey_decide_review_request"]
+
+[[permission]]
+identifier = "deny-framkey-decide-review-request"
+description = "Denies the framkey_decide_review_request command without any pre-configured scope."
+commands.deny = ["framkey_decide_review_request"]

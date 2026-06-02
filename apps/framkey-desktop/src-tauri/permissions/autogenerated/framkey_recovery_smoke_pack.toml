@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-recovery-smoke-pack"
+description = "Enables the framkey_recovery_smoke_pack command without any pre-configured scope."
+commands.allow = ["framkey_recovery_smoke_pack"]
+
+[[permission]]
+identifier = "deny-framkey-recovery-smoke-pack"
+description = "Denies the framkey_recovery_smoke_pack command without any pre-configured scope."
+commands.deny = ["framkey_recovery_smoke_pack"]

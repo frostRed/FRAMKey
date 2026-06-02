@@ -1,0 +1,9 @@
+{
+  "name": "dev.framkey.native_host",
+  "description": "FRAMKey development native host",
+  "path": "/absolute/path/to/FRAMKey/target/debug/framkey-native-host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://<extension-id>/"
+  ]
+}

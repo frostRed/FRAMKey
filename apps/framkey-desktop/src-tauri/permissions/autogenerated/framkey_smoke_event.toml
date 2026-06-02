@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-smoke-event"
+description = "Enables the framkey_smoke_event command without any pre-configured scope."
+commands.allow = ["framkey_smoke_event"]
+
+[[permission]]
+identifier = "deny-framkey-smoke-event"
+description = "Denies the framkey_smoke_event command without any pre-configured scope."
+commands.deny = ["framkey_smoke_event"]

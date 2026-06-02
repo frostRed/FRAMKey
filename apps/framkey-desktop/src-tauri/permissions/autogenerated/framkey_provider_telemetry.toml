@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-provider-telemetry"
+description = "Enables the framkey_provider_telemetry command without any pre-configured scope."
+commands.allow = ["framkey_provider_telemetry"]
+
+[[permission]]
+identifier = "deny-framkey-provider-telemetry"
+description = "Denies the framkey_provider_telemetry command without any pre-configured scope."
+commands.deny = ["framkey_provider_telemetry"]

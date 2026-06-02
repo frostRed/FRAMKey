@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dapp-provider-bridge",
+  "description": "Minimal capability for the untrusted dApp WebView test surface. This surface only reaches FRAMKey through provider bridge commands; sensitive commands enforce the trusted main window in Rust.",
+  "windows": ["dapp"],
+  "remote": {
+    "urls": [
+      "https://app.uniswap.org",
+      "https://app.uniswap.org/*",
+      "https://app.aave.com",
+      "https://app.aave.com/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "allow-framkey-provider-request",
+    "allow-framkey-provider-telemetry",
+    "allow-framkey-smoke-event"
+  ]
+}

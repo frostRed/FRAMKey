@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-status"
+description = "Enables the framkey_status command without any pre-configured scope."
+commands.allow = ["framkey_status"]
+
+[[permission]]
+identifier = "deny-framkey-status"
+description = "Denies the framkey_status command without any pre-configured scope."
+commands.deny = ["framkey_status"]

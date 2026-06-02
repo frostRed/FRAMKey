@@ -1,0 +1,8 @@
+/target/
+/.DS_Store
+/.env
+/debug_header.bin
+/extension/chrome/dist/
+/save_image_samples/*
+!/save_image_samples/README.md
+*.log

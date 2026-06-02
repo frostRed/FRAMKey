@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-validate-recovery-set"
+description = "Enables the framkey_validate_recovery_set command without any pre-configured scope."
+commands.allow = ["framkey_validate_recovery_set"]
+
+[[permission]]
+identifier = "deny-framkey-validate-recovery-set"
+description = "Denies the framkey_validate_recovery_set command without any pre-configured scope."
+commands.deny = ["framkey_validate_recovery_set"]

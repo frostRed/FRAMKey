@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-framkey-pick-recovery-files"
+description = "Enables the framkey_pick_recovery_files command without any pre-configured scope."
+commands.allow = ["framkey_pick_recovery_files"]
+
+[[permission]]
+identifier = "deny-framkey-pick-recovery-files"
+description = "Denies the framkey_pick_recovery_files command without any pre-configured scope."
+commands.deny = ["framkey_pick_recovery_files"]

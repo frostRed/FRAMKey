@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-run-dapp-compatibility-check"
+description = "Enables the framkey_run_dapp_compatibility_check command without any pre-configured scope."
+commands.allow = ["framkey_run_dapp_compatibility_check"]
+
+[[permission]]
+identifier = "deny-framkey-run-dapp-compatibility-check"
+description = "Denies the framkey_run_dapp_compatibility_check command without any pre-configured scope."
+commands.deny = ["framkey_run_dapp_compatibility_check"]

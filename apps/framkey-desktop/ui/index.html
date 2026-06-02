@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FRAMKey</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace-tabs" role="tablist" aria-label="FRAMKey navigation">
+        <span id="runtime-summary" class="shell-state-sink" hidden>Personal vault wallet</span>
+        <strong class="status-pill shell-state-sink" id="bridge-state" hidden>Idle</strong>
+        <button
+          class="workspace-tab"
+          id="workspace-tab-wallet"
+          type="button"
+          role="tab"
+          aria-controls="trusted-workspace"
+          aria-selected="true"
+          data-workspace-tab="wallet"
+        >
+          <span>Home</span>
+          <span class="workspace-tab-count" data-workspace-count="wallet" hidden>0</span>
+        </button>
+        <button
+          class="workspace-tab"
+          id="workspace-tab-defi"
+          type="button"
+          role="tab"
+          aria-controls="trusted-workspace"
+          aria-selected="false"
+          data-workspace-tab="defi"
+        >
+          <span>Apps</span>
+          <span class="workspace-tab-count" data-workspace-count="defi" hidden>0</span>
+        </button>
+        <button
+          class="workspace-tab"
+          id="workspace-tab-recovery"
+          type="button"
+          role="tab"
+          aria-controls="trusted-workspace"
+          aria-selected="false"
+          data-workspace-tab="recovery"
+        >
+          <span>Safety</span>
+          <span class="workspace-tab-count" data-workspace-count="recovery" hidden>0</span>
+        </button>
+        <button
+          class="workspace-tab"
+          id="workspace-tab-activity"
+          type="button"
+          role="tab"
+          aria-controls="trusted-workspace"
+          aria-selected="false"
+          data-workspace-tab="activity"
+        >
+          <span>Activity</span>
+          <span class="workspace-tab-count" data-workspace-count="activity" hidden>0</span>
+        </button>
+        <button
+          class="workspace-tab"
+          id="workspace-tab-diagnostics"
+          type="button"
+          role="tab"
+          aria-controls="trusted-workspace"
+          aria-selected="false"
+          data-workspace-tab="diagnostics"
+        >
+          <span>System</span>
+          <span class="workspace-tab-count" data-workspace-count="diagnostics" hidden>0</span>
+        </button>
+      </section>
+
+      <section class="layout" id="trusted-workspace">
+        <section class="wallet-home-panel workspace-panel" data-workspace="wallet">
+          <div class="home-product-grid">
+            <article class="account-card">
+              <div class="account-card-top">
+                <span class="eyebrow">FRAMKey Vault</span>
+                <span id="wallet-home-network">Ethereum</span>
+              </div>
+              <div class="account-card-balance">
+                <span>Available balance</span>
+                <h2 id="wallet-home-balance">0 ETH</h2>
+                <p id="wallet-home-address">No account loaded</p>
+              </div>
+              <div class="product-actions">
+                <button id="wallet-action-connect" type="button">Connect</button>
+                <button id="wallet-action-send" type="button">Send</button>
+                <button id="wallet-action-defi" type="button">Apps</button>
+              </div>
+            </article>
+            <aside class="home-signal-card">
+              <span class="eyebrow">Status</span>
+              <strong id="wallet-home-readiness">Checking</strong>
+              <div class="product-status-grid">
+                <article>
+                  <span>Account</span>
+                  <strong id="wallet-home-account">Not connected</strong>
+                </article>
+                <article>
+                  <span>Network</span>
+                  <strong id="wallet-home-rpc">Not checked</strong>
+                </article>
+                <article>
+                  <span>Assets</span>
+                  <strong id="wallet-home-assets">No snapshot</strong>
+                </article>
+                <article>
+                  <span>Protection</span>
+                  <strong id="wallet-home-security">Signer pending</strong>
+                </article>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <div class="panel portfolio-panel workspace-panel" data-workspace="wallet">
+          <div class="panel-header">
+            <h2>Assets</h2>
+            <button id="refresh-portfolio" type="button">Refresh</button>
+          </div>
+          <div class="portfolio-headline">
+            <strong id="portfolio-summary">Not loaded</strong>
+            <span id="portfolio-block">-</span>
+          </div>
+          <dl class="facts portfolio-facts">
+            <dt>Native</dt>
+            <dd id="portfolio-native">-</dd>
+            <dt>Tokens</dt>
+            <dd id="portfolio-token-count">-</dd>
+            <dt>Updated</dt>
+            <dd id="portfolio-updated">-</dd>
+          </dl>
+          <div id="portfolio-assets" class="portfolio-assets">
+            <div class="review-empty">No portfolio snapshot</div>
+          </div>
+        </div>
+
+        <div class="panel native-send-panel workspace-panel" data-workspace="wallet">
+          <div class="panel-header">
+            <h2>Send ETH</h2>
+            <span id="native-send-status" class="mini-pill" data-tone="idle">Idle</span>
+          </div>
+          <form id="native-send-form" class="native-send-form">
+            <label class="field-label" for="native-send-to">
+              <span>Recipient</span>
+              <input
+                id="native-send-to"
+                class="url-input"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                inputmode="text"
+                placeholder="0x..."
+              />
+            </label>
+            <label class="field-label" for="native-send-amount">
+              <span>Amount</span>
+              <input
+                id="native-send-amount"
+                class="small-input native-send-amount"
+                type="text"
+                inputmode="decimal"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="0.01"
+              />
+            </label>
+            <button id="native-send-submit" type="submit">Review</button>
+          </form>
+          <div id="native-send-detail" class="native-send-detail">
+            <span>Approval stays in this trusted window before signing.</span>
+          </div>
+        </div>
+
+        <div class="panel token-send-panel workspace-panel" data-workspace="wallet">
+          <div class="panel-header">
+            <h2>Send Token</h2>
+            <span id="token-send-status" class="mini-pill" data-tone="idle">No token</span>
+          </div>
+          <div id="token-send-selected" class="token-send-selected">
+            <strong>Select from Assets</strong>
+            <span>ERC-20 transfer</span>
+          </div>
+          <form id="token-send-form" class="native-send-form token-send-form">
+            <label class="field-label" for="token-send-to">
+              <span>Recipient</span>
+              <input
+                id="token-send-to"
+                class="url-input"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                inputmode="text"
+                placeholder="0x..."
+              />
+            </label>
+            <label class="field-label" for="token-send-amount">
+              <span>Amount</span>
+              <input
+                id="token-send-amount"
+                class="small-input native-send-amount"
+                type="text"
+                inputmode="decimal"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="0.0"
+              />
+            </label>
+            <button id="token-send-submit" type="submit" disabled>Review</button>
+          </form>
+          <div id="token-send-detail" class="native-send-detail">
+            <span>Select an ERC-20 token from Assets.</span>
+          </div>
+        </div>
+
+        <div class="panel rpc-health-panel workspace-panel" data-workspace="diagnostics">
+          <div class="panel-header">
+            <h2>Network</h2>
+            <button id="refresh-rpc-health" type="button">Check</button>
+          </div>
+          <div class="portfolio-headline">
+            <strong id="rpc-health-summary">Not checked</strong>
+            <span id="rpc-health-provider">Alchemy</span>
+          </div>
+          <dl class="facts portfolio-facts">
+            <dt>Chain</dt>
+            <dd id="rpc-health-chain">-</dd>
+            <dt>Latest Block</dt>
+            <dd id="rpc-health-block">-</dd>
+            <dt>Latency</dt>
+            <dd id="rpc-health-latency">-</dd>
+            <dt>Checked</dt>
+            <dd id="rpc-health-updated">-</dd>
+          </dl>
+          <div id="rpc-health-detail" class="rpc-health-detail">
+            <span>Token and endpoint are hidden</span>
+          </div>
+        </div>
+
+        <div class="panel vault-account-panel workspace-panel" data-workspace="diagnostics">
+          <div class="panel-header">
+            <h2>Account & Device</h2>
+            <button id="refresh-status" type="button">Refresh</button>
+          </div>
+          <dl class="facts">
+            <dt>Chain</dt>
+            <dd id="chain-id">-</dd>
+            <dt>Network</dt>
+            <dd id="network-name">-</dd>
+            <dt>Address</dt>
+            <dd id="account-address">Not connected</dd>
+            <dt>Balance</dt>
+            <dd id="account-balance">-</dd>
+            <dt>Wallet</dt>
+            <dd id="wallet-mode">-</dd>
+            <dt>RPC</dt>
+            <dd id="rpc-status">-</dd>
+            <dt>Device</dt>
+            <dd id="device">-</dd>
+            <dt>Signer Helper</dt>
+            <dd id="signer-helper">-</dd>
+          </dl>
+          <div class="network-switcher">
+            <label class="field-label" for="network-select">
+              <span>Active Network</span>
+              <select id="network-select" class="network-select" aria-label="Active network"></select>
+            </label>
+            <button id="switch-network" type="button">Switch</button>
+          </div>
+          <div class="actions">
+            <button id="connect-card" type="button">Connect Vault</button>
+            <button id="open-dapp" type="button">Open Local App</button>
+          </div>
+        </div>
+
+        <div class="panel activity-panel workspace-panel" data-workspace="activity">
+          <div class="panel-header">
+            <h2>Recent wallet activity</h2>
+            <div class="panel-actions">
+              <button id="refresh-activity" type="button">Refresh</button>
+              <button id="refresh-receipts" type="button">Check status</button>
+            </div>
+          </div>
+          <div class="review-meta">
+            <span id="activity-count">0 transactions</span>
+            <span id="activity-receipt-tracking" data-tone="idle">No pending receipts</span>
+            <span id="activity-persistence" data-tone="idle">Local session only</span>
+          </div>
+          <div id="transaction-activity" class="transaction-activity">
+            <div class="review-empty">No transaction activity</div>
+          </div>
+        </div>
+
+        <section class="defi-home-panel workspace-panel task-workspace-panel" data-workspace="defi">
+          <div class="workspace-command-strip apps-command-strip">
+            <div>
+              <span class="eyebrow">Apps</span>
+              <h2 id="defi-home-title">Choose an app</h2>
+              <p id="defi-home-subtitle">Open the app first. Wallet access is approved only inside FRAMKey.</p>
+            </div>
+            <span id="defi-home-state" class="product-state-pill">Ready</span>
+          </div>
+          <div class="app-card-grid user-action-grid">
+            <button id="defi-action-uniswap" class="app-card app-card-uniswap" type="button">
+              <span class="app-card-mark">U</span>
+              <strong>Uniswap</strong>
+              <small>Swap tokens</small>
+            </button>
+            <button id="defi-action-aave" class="app-card app-card-aave" type="button">
+              <span class="app-card-mark">A</span>
+              <strong>Aave</strong>
+              <small>Lend and borrow</small>
+            </button>
+            <button id="defi-action-connect" class="app-card app-card-local" type="button">
+              <span class="app-card-mark">T</span>
+              <strong>Test App</strong>
+              <small>Try the wallet flow</small>
+            </button>
+          </div>
+          <div class="journey-steps compact-progress">
+            <article id="defi-step-rpc" data-tone="idle">
+              <span>1</span>
+              <strong>Network</strong>
+              <small>Checking</small>
+            </article>
+            <article id="defi-step-provider" data-tone="idle">
+              <span>2</span>
+              <strong>Wallet</strong>
+              <small>Waiting</small>
+            </article>
+            <article id="defi-step-connect" data-tone="idle">
+              <span>3</span>
+              <strong>Connect</strong>
+              <small>Not connected</small>
+            </article>
+            <article id="defi-step-review" data-tone="idle">
+              <span>4</span>
+              <strong>Review</strong>
+              <small>Clear</small>
+            </article>
+          </div>
+        </section>
+
+        <div class="panel defi-browser-panel workspace-panel" data-workspace="defi">
+          <div class="panel-header">
+            <h2>Open another app</h2>
+          </div>
+          <div class="browser-launcher">
+            <input
+              id="dapp-url"
+              class="url-input"
+              type="url"
+              inputmode="url"
+              spellcheck="false"
+              autocomplete="off"
+              value="https://app.uniswap.org/"
+              aria-label="dApp URL"
+            />
+            <button id="open-custom-dapp" type="button">Open</button>
+          </div>
+          <div class="actions browser-actions">
+            <button id="open-uniswap" type="button">Open Uniswap</button>
+            <button id="open-aave" type="button">Open Aave</button>
+            <button id="open-local-dapp" type="button">Test App</button>
+          </div>
+          <div class="browser-nav">
+            <button id="dapp-nav-back" type="button">Back</button>
+            <button id="dapp-nav-forward" type="button">Forward</button>
+            <button id="dapp-nav-reload" type="button">Reload</button>
+            <button id="dapp-nav-home" type="button">Home</button>
+          </div>
+          <dl class="facts browser-facts">
+            <dt>Target</dt>
+            <dd id="dapp-current-target">No app open</dd>
+            <dt>Origin</dt>
+            <dd id="dapp-current-origin">-</dd>
+            <dt>URL</dt>
+            <dd id="dapp-current-url">-</dd>
+            <dt>Load</dt>
+            <dd id="dapp-load-status">Not loaded</dd>
+            <dt>Updated</dt>
+            <dd id="dapp-updated">-</dd>
+          </dl>
+        </div>
+
+        <div class="panel session-panel workspace-panel" data-workspace="diagnostics">
+          <div class="panel-header">
+            <h2>App session</h2>
+            <span id="session-summary" class="mini-pill">No dApp</span>
+          </div>
+          <div id="readiness-grid" class="readiness-grid"></div>
+          <dl class="facts session-facts">
+            <dt>dApp</dt>
+            <dd id="session-dapp">No app open</dd>
+            <dt>Account Grant</dt>
+            <dd id="session-account-grant">No connected site</dd>
+            <dt>Provider</dt>
+            <dd id="session-provider">No events</dd>
+            <dt>Latest Sign</dt>
+            <dd id="session-sign">No signature request</dd>
+            <dt>Latest Tx</dt>
+            <dd id="session-transaction">No transaction request</dd>
+            <dt>Next Action</dt>
+            <dd id="session-next-action">Connect account</dd>
+          </dl>
+        </div>
+
+        <div class="panel compatibility-panel workspace-panel" data-workspace="diagnostics">
+          <div class="panel-header">
+            <h2>App checks</h2>
+            <span id="compatibility-summary" class="mini-pill">No runs</span>
+          </div>
+          <div id="compatibility-grid" class="compatibility-grid"></div>
+        </div>
+
+        <div class="panel connected-sites-panel workspace-panel" data-workspace="defi diagnostics">
+          <div class="panel-header">
+            <h2>Connected Apps</h2>
+            <button id="refresh-connections" type="button">Refresh</button>
+          </div>
+          <ul id="connected-sites" class="connected-sites"></ul>
+        </div>
+
+        <div class="panel provider-events-panel workspace-panel" data-workspace="diagnostics">
+          <div class="panel-header">
+            <h2>App event log</h2>
+            <div class="panel-actions">
+              <button id="refresh-provider-events" type="button">Refresh</button>
+              <button id="clear-provider-events" type="button">Clear</button>
+            </div>
+          </div>
+          <div class="review-meta">
+            <span id="provider-event-count">0 events</span>
+          </div>
+          <div id="provider-events" class="provider-events"></div>
+        </div>
+
+        <section class="recovery-home-panel workspace-panel task-workspace-panel" data-workspace="recovery">
+          <div class="workspace-command-strip safety-command-strip">
+            <div>
+              <span class="eyebrow">Safety</span>
+              <h2 id="recovery-home-title">Protect this wallet</h2>
+              <p id="recovery-home-subtitle">Create, place, and test the backup files before the wallet carries value.</p>
+            </div>
+            <span id="recovery-home-state" class="product-state-pill">Not created</span>
+          </div>
+          <div class="product-status-grid recovery-product-grid compact-status-grid">
+            <article>
+              <span>Files</span>
+              <strong id="recovery-home-pack">Waiting</strong>
+            </article>
+            <article>
+              <span>Stored safely</span>
+              <strong id="recovery-home-placement">Incomplete</strong>
+            </article>
+            <article>
+              <span>Restore path</span>
+              <strong id="recovery-home-drill">Not run</strong>
+            </article>
+          </div>
+        </section>
+
+        <div class="panel recover-vault-panel workspace-panel" data-workspace="recovery">
+          <div class="panel-header">
+            <h2>Use an existing backup</h2>
+          </div>
+          <input
+            id="vault-backup-path"
+            class="restore-hidden-input"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="Internal backup source"
+          />
+          <ol class="restore-flow" aria-label="Wallet recovery steps">
+            <li id="restore-step-files" class="restore-step" data-state="idle">
+              <span class="restore-step-number">1</span>
+              <div class="restore-step-copy">
+                <strong>Choose backup files</strong>
+                <span id="recovery-set-summary" data-tone="idle">No backup files selected</span>
+              </div>
+              <div class="restore-step-actions">
+                <button id="clear-recovery-files" type="button">Clear</button>
+              </div>
+              <div class="restore-scheme-grid" aria-label="Recovery method">
+                <button
+                  id="restore-scheme-cloud-physical"
+                  class="restore-scheme-card"
+                  type="button"
+                  data-recovery-scheme="cloudPhysical"
+                  aria-pressed="true"
+                >
+                  <span>Cloud + physical</span>
+                  <strong>iCloud + Google + one physical file</strong>
+                  <small>Use this when both cloud backups are available.</small>
+                </button>
+                <button
+                  id="restore-scheme-physical-pair"
+                  class="restore-scheme-card"
+                  type="button"
+                  data-recovery-scheme="physicalPair"
+                  aria-pressed="false"
+                >
+                  <span>Two physical files</span>
+                  <strong>Local + off-site</strong>
+                  <small>Use this when cloud backups are unavailable.</small>
+                </button>
+              </div>
+              <div id="restore-file-slots" class="restore-slot-grid" aria-label="Required backup files"></div>
+              <div id="recovery-set-policy" class="restore-step-note" data-tone="idle">
+                FRAMKey will verify the files during restore.
+              </div>
+              <div id="restore-selected-files" class="restore-file-list" hidden></div>
+            </li>
+            <li id="restore-step-write" class="restore-step restore-step-danger" data-state="locked">
+              <span class="restore-step-number">2</span>
+              <div class="restore-step-copy">
+                <strong>Bind Mac + write GBA</strong>
+                <span id="restore-write-summary">Choose backup files first</span>
+              </div>
+              <label class="check-row restore-confirm-row" for="recover-overwrite">
+                <input id="recover-overwrite" type="checkbox" />
+                <span>I understand this replaces the connected vault device</span>
+              </label>
+              <button id="recover-vault" type="button">Restore wallet</button>
+              <div id="restore-write-detail" class="operation-status" data-tone="idle" aria-live="polite" hidden></div>
+            </li>
+          </ol>
+          <details class="restore-advanced">
+            <summary>Advanced file paths</summary>
+            <label class="field-label" for="recovery-file-paths">
+              <span>Backup files</span>
+              <textarea
+                id="recovery-file-paths"
+                class="path-list-input"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="~/FRAMKey-Recovery/backup-01.dat&#10;~/FRAMKey-Recovery/backup-02.dat&#10;~/FRAMKey-Recovery/backup-03.dat"
+                rows="4"
+              ></textarea>
+            </label>
+          </details>
+        </div>
+
+        <details class="panel create-vault-panel secondary-task-panel workspace-panel" data-workspace="recovery">
+          <summary>
+            <strong>Create a new wallet</strong>
+            <span>Generate backups, bind this Mac, then write the connected GBA.</span>
+          </summary>
+          <ol class="restore-flow create-flow" aria-label="New wallet creation steps">
+            <li class="restore-step" data-state="active">
+              <span class="restore-step-number">1</span>
+              <div class="restore-step-copy">
+                <strong>New wallet</strong>
+                <span>FRAMKey will create a fresh wallet</span>
+              </div>
+              <label class="field-label create-inline-field" for="vault-generation">
+                <span>Backup version</span>
+                <input
+                  id="vault-generation"
+                  class="small-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value="1"
+                />
+              </label>
+            </li>
+            <li class="restore-step" data-state="active">
+              <span class="restore-step-number">2</span>
+              <div class="restore-step-copy">
+                <strong>Backup folder</strong>
+                <span>FRAMKey will create a new backup set here</span>
+              </div>
+              <label class="field-label recovery-dir-field create-folder-field" for="recovery-out-dir">
+                <span>Save recovery pack to</span>
+                <input
+                  id="recovery-out-dir"
+                  class="url-input"
+                  type="text"
+                  spellcheck="false"
+                  autocomplete="off"
+                  value="~/FRAMKey-Recovery"
+                />
+              </label>
+              <button id="choose-recovery-out-dir" type="button">Choose Folder</button>
+            </li>
+            <li class="restore-step restore-step-danger" data-state="warn">
+              <span class="restore-step-number">3</span>
+              <div class="restore-step-copy">
+                <strong>Bind Mac + write GBA</strong>
+                <span id="create-vault-write-note">Confirm replacement before writing</span>
+              </div>
+              <label class="check-row restore-confirm-row" for="confirm-overwrite">
+                <input id="confirm-overwrite" type="checkbox" />
+                <span>Replace the connected vault device with this new wallet</span>
+              </label>
+              <button id="create-vault" type="button" disabled>Create wallet and write GBA</button>
+              <div id="create-vault-status" class="operation-status" data-tone="idle" aria-live="polite" hidden></div>
+            </li>
+          </ol>
+        </details>
+
+        <div class="panel recovery-panel workspace-panel" data-workspace="recovery">
+          <div class="panel-header">
+            <h2>Where to put each file</h2>
+            <button id="clear-recovery-plan" type="button">Forget Plan</button>
+          </div>
+          <div id="recovery-plan" class="recovery-plan">
+            <div class="review-empty">No recovery operation yet</div>
+          </div>
+        </div>
+
+        <div class="panel review-panel workspace-panel" data-workspace="defi activity diagnostics">
+          <div class="panel-header">
+            <h2>Approval requests</h2>
+            <div class="panel-actions">
+              <button id="refresh-review" type="button">Refresh</button>
+              <button id="clear-review" type="button">Clear</button>
+            </div>
+          </div>
+          <div class="review-meta">
+            <span id="review-count">0 requests</span>
+          </div>
+          <div id="review-list" class="review-list"></div>
+        </div>
+
+        <div class="panel capabilities-panel workspace-panel" data-workspace="diagnostics">
+          <div class="panel-header">
+            <h2>System details</h2>
+          </div>
+          <ul class="capabilities" id="capabilities"></ul>
+          <details class="raw-output-panel">
+            <summary>Raw command output</summary>
+            <pre id="output" class="output">{}</pre>
+          </details>
+        </div>
+      </section>
+    </main>
+    <script src="main.js"></script>
+  </body>
+</html>

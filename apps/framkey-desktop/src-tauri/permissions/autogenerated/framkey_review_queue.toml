@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-review-queue"
+description = "Enables the framkey_review_queue command without any pre-configured scope."
+commands.allow = ["framkey_review_queue"]
+
+[[permission]]
+identifier = "deny-framkey-review-queue"
+description = "Denies the framkey_review_queue command without any pre-configured scope."
+commands.deny = ["framkey_review_queue"]

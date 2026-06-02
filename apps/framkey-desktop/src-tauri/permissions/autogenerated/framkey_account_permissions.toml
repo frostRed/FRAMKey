@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-account-permissions"
+description = "Enables the framkey_account_permissions command without any pre-configured scope."
+commands.allow = ["framkey_account_permissions"]
+
+[[permission]]
+identifier = "deny-framkey-account-permissions"
+description = "Denies the framkey_account_permissions command without any pre-configured scope."
+commands.deny = ["framkey_account_permissions"]

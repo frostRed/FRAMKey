@@ -1,0 +1,18 @@
+[package]
+name = "framkey-vault"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+blake3.workspace = true
+framkey-core = { path = "../framkey-core" }
+framkey-crypto = { path = "../framkey-crypto" }
+framkey-evm = { path = "../framkey-evm" }
+framkey-recovery = { path = "../framkey-recovery" }
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true

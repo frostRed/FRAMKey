@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FRAMKey dApp Test</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="topbar">
+        <div>
+          <h1>dApp WebView</h1>
+          <p id="provider-summary">Provider pending</p>
+        </div>
+        <div class="status-pill" id="provider-state">Provider loading</div>
+      </section>
+
+      <section class="layout dapp-layout">
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Provider Requests</h2>
+          </div>
+          <div class="actions">
+            <button id="chain" type="button">eth_chainId</button>
+            <button id="net-version" type="button">net_version</button>
+            <button id="block-number" type="button">eth_blockNumber</button>
+            <button id="accounts" type="button">eth_accounts</button>
+            <button id="request-accounts" type="button">eth_requestAccounts</button>
+            <button id="get-permissions" type="button">wallet_getPermissions</button>
+            <button id="request-permissions" type="button">wallet_requestPermissions</button>
+            <button id="revoke-permissions" type="button">wallet_revokePermissions</button>
+            <button id="add-base-chain" type="button">wallet_addEthereumChain</button>
+            <button id="balance" type="button">eth_getBalance</button>
+            <button id="watch-asset" type="button">wallet_watchAsset</button>
+            <button id="personal-sign" type="button">personal_sign</button>
+            <button id="typed-data" type="button">eth_signTypedData_v4</button>
+            <button id="send-transaction" type="button">eth_sendTransaction</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Result</h2>
+          </div>
+          <pre id="dapp-output" class="output">{}</pre>
+        </div>
+
+        <div class="panel dapp-events-panel">
+          <div class="panel-header">
+            <h2>Provider Events</h2>
+          </div>
+          <ul id="event-log" class="event-log"></ul>
+        </div>
+      </section>
+    </main>
+    <script src="dapp.js"></script>
+  </body>
+</html>

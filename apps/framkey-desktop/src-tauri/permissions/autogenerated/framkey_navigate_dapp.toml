@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-framkey-navigate-dapp"
+description = "Enables the framkey_navigate_dapp command without any pre-configured scope."
+commands.allow = ["framkey_navigate_dapp"]
+
+[[permission]]
+identifier = "deny-framkey-navigate-dapp"
+description = "Denies the framkey_navigate_dapp command without any pre-configured scope."
+commands.deny = ["framkey_navigate_dapp"]

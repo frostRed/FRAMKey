@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-revoke-account-permission"
+description = "Enables the framkey_revoke_account_permission command without any pre-configured scope."
+commands.allow = ["framkey_revoke_account_permission"]
+
+[[permission]]
+identifier = "deny-framkey-revoke-account-permission"
+description = "Denies the framkey_revoke_account_permission command without any pre-configured scope."
+commands.deny = ["framkey_revoke_account_permission"]

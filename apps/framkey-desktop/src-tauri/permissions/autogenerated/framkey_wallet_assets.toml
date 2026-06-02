@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-wallet-assets"
+description = "Enables the framkey_wallet_assets command without any pre-configured scope."
+commands.allow = ["framkey_wallet_assets"]
+
+[[permission]]
+identifier = "deny-framkey-wallet-assets"
+description = "Denies the framkey_wallet_assets command without any pre-configured scope."
+commands.deny = ["framkey_wallet_assets"]

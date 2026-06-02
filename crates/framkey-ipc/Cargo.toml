@@ -1,0 +1,14 @@
+[package]
+name = "framkey-ipc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+framkey-core = { path = "../framkey-core" }
+framkey-recovery = { path = "../framkey-recovery" }
+serde.workspace = true
+serde_json.workspace = true

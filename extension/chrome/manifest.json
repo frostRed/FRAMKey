@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "FRAMKey Dev Wallet",
+  "version": "0.0.1",
+  "description": "Development EIP-1193 provider shell for FRAMKey.",
+  "permissions": ["nativeMessaging", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content-script.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/provider.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

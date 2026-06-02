@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-transaction-activity"
+description = "Enables the framkey_transaction_activity command without any pre-configured scope."
+commands.allow = ["framkey_transaction_activity"]
+
+[[permission]]
+identifier = "deny-framkey-transaction-activity"
+description = "Denies the framkey_transaction_activity command without any pre-configured scope."
+commands.deny = ["framkey_transaction_activity"]

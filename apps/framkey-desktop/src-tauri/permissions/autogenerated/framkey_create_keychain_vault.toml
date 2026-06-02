@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-create-keychain-vault"
+description = "Enables the framkey_create_keychain_vault command without any pre-configured scope."
+commands.allow = ["framkey_create_keychain_vault"]
+
+[[permission]]
+identifier = "deny-framkey-create-keychain-vault"
+description = "Denies the framkey_create_keychain_vault command without any pre-configured scope."
+commands.deny = ["framkey_create_keychain_vault"]

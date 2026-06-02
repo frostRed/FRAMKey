@@ -1,0 +1,20 @@
+[package]
+name = "framkey-signer-helper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+blake3.workspace = true
+framkey-core = { path = "../framkey-core" }
+framkey-crypto = { path = "../framkey-crypto" }
+framkey-evm = { path = "../framkey-evm" }
+framkey-ipc = { path = "../framkey-ipc" }
+framkey-keychain-macos = { path = "../framkey-keychain-macos" }
+framkey-recovery = { path = "../framkey-recovery" }
+framkey-vault = { path = "../framkey-vault" }
+serde_json.workspace = true

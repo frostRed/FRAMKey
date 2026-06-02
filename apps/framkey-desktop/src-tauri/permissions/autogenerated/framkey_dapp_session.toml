@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-framkey-dapp-session"
+description = "Enables the framkey_dapp_session command without any pre-configured scope."
+commands.allow = ["framkey_dapp_session"]
+
+[[permission]]
+identifier = "deny-framkey-dapp-session"
+description = "Denies the framkey_dapp_session command without any pre-configured scope."
+commands.deny = ["framkey_dapp_session"]

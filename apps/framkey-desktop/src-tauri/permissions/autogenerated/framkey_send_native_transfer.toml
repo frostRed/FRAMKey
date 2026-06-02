@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-send-native-transfer"
+description = "Enables the framkey_send_native_transfer command without any pre-configured scope."
+commands.allow = ["framkey_send_native_transfer"]
+
+[[permission]]
+identifier = "deny-framkey-send-native-transfer"
+description = "Denies the framkey_send_native_transfer command without any pre-configured scope."
+commands.deny = ["framkey_send_native_transfer"]
