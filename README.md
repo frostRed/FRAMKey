@@ -5,7 +5,7 @@ FRAMKey is a cartridge-based EOA wallet vault prototype.
 The intended v0 path is:
 
 - GBA save/FRAM area as a removable encrypted vault.
-- macOS Keychain + Touch ID as the daily local unlock gate.
+- macOS Keychain + local device-owner authentication as the daily local unlock gate.
 - Rust CLI and short-lived signer helper before GUI work.
 - Tauri DeFi Browser as the next product surface.
 - Chrome/Chromium extension as a later EIP-1193/EIP-6963 daily-browser entry point.
@@ -75,15 +75,21 @@ cargo run -p framkey-cli -- vault build-keychain-encrypted-image --out framkey-k
 cargo run -p framkey-cli -- vault open-keychain-encrypted-image --path framkey-keychain-vault.sav
 ```
 
-The Keychain command stores a random 32-byte KEK in a local, non-synchronizing macOS login Keychain generic-password item. FRAMKey does not use entitlement-gated `SecAccessControl` or `kSecUseDataProtectionKeychain`, so a personal local build does not need an Apple Developer Program Team ID, provisioning profile, or Keychain access group. Instead, every KEK store/load first asks LocalAuthentication for Touch ID and stores a hash of the evaluated Touch ID domain state in the KEK blob. If the Touch ID enrollment set changes, the local KEK blob is rejected and the vault must be recovered to rebind this Mac. Creating a replacement vault or recovering a vault resets the local KEK instead of reusing an older Keychain item. Legacy local-auth and SecAccessControl KEK blobs are not accepted. The current default Keychain service is `io.framkey.local-kek`, so old development items under `io.framkey.kek` are ignored unless explicitly configured. You can explicitly rebind an existing current-format KEK to the current local-auth policy when needed:
+The Keychain command stores a random 32-byte KEK in a local, non-synchronizing macOS login Keychain generic-password item. The personal local build path does not need an Apple Developer Program Team ID, provisioning profile, or Keychain access group. Every KEK store/load first asks LocalAuthentication for macOS device-owner authentication, letting the system use Touch ID or the account password in one prompt flow. Creating a replacement vault or recovering a vault resets the local KEK instead of reusing an existing Keychain item. Opening or signing an existing vault reads the KEK once and does not write the Keychain item. The default Keychain service is `io.framkey.local-kek`. You can explicitly rebind an existing current-format KEK to the current local-auth policy when needed:
 
 ```bash
 cargo run -p framkey-cli -- vault rebind-keychain-kek
 ```
 
-Rebinding does not decrypt the wallet secret and does not modify the card or save image; it only changes the local Keychain KEK protection policy. For the Keychain vault path, the CLI delegates wallet-secret generation, recovery wrapper generation, decryption, signing, and recovery rewrap to the short-lived `framkey-signer-helper`; the CLI writes encrypted save images and four recovery backup files, then prints public wrapper metadata plus BLAKE3 hashes, never the plaintext KEK, DEK, recovery root key, wallet secret, or recovery share bytes.
+Rebinding does not decrypt the wallet secret and does not modify the card or save image; it only changes the local Keychain KEK protection policy. In local ad-hoc builds, macOS may also ask the owner to authorize the current signer-helper process before it stops showing login Keychain password prompts for the `FRAMKey local KEK` item. Normal Connect and signing flows trigger that macOS authorization when needed. The trusted Diagnostics panel also exposes `Repair Signing Access` as a troubleshooting action; it launches the real signer helper and probes only Keychain KEK access, without reading the card, decrypting a vault image, or touching the wallet secret. The CLI command below remains a diagnostic escape hatch when the local Keychain item needs an explicit partition-list binding after rebuilding or repackaging the helper:
 
-When `--recovery-out-dir` is passed, the CLI build command creates four plain-looking backup files in that directory using create-new semantics: `backup-01.dat`, `backup-02.dat`, `backup-03.dat`, and `backup-04.dat`. Each file is a structured recovery bundle containing encrypted vault data plus one recovery share. The desktop create flow treats the selected recovery folder as a parent and writes each new wallet into a fresh `framkey-backup-g<generation>-<backup-set>` child folder, so older recovery packs are not overwritten and do not block a new create. Store `backup-01.dat` in iCloud Drive, `backup-02.dat` in Google Drive, `backup-03.dat` on local physical storage, and `backup-04.dat` away from the main Mac and GBA card. Cloud files alone are intentionally insufficient for recovery.
+```bash
+cargo run -p framkey-cli -- vault trust-keychain-helper-access
+```
+
+The command does not accept a password argument, does not read the card or vault image, and sets a `cdhash:<helper CDHash>` partition-list for the configured Keychain item instead of using an allow-all-applications ACL. For the Keychain vault path, the CLI delegates wallet-secret generation, recovery wrapper generation, decryption, signing, and recovery rewrap to the short-lived `framkey-signer-helper`; the CLI writes encrypted save images and four recovery backup files, then prints public wrapper metadata plus BLAKE3 hashes, never the plaintext KEK, DEK, recovery root key, wallet secret, or recovery share bytes.
+
+When `--recovery-out-dir` is passed, the CLI build command creates four plain-looking backup files in that directory using create-new semantics: `backup-01.dat`, `backup-02.dat`, `backup-03.dat`, and `backup-04.dat`. Each file is a structured recovery bundle containing encrypted vault data plus one recovery share. The desktop create flow treats the selected recovery folder as a parent and writes each new wallet into a fresh `framkey-backup-g<generation>-<backup-set>` child folder, so existing recovery packs are not overwritten and do not block a new create. Store `backup-01.dat` in iCloud Drive, `backup-02.dat` in Google Drive, `backup-03.dat` on local physical storage, and `backup-04.dat` away from the main Mac and GBA card. Cloud files alone are intentionally insufficient for recovery.
 
 Recovery rewrap binds an existing recovery-enabled vault image to the current Keychain item without decrypting the wallet secret. Pass either both cloud files plus one physical file, or one local physical plus one remote physical file:
 
@@ -104,16 +110,16 @@ cargo run -p framkey-cli -- signer personal-sign --device file --path framkey-ke
 cargo run -p framkey-cli -- signer personal-sign --device gbx-cart --port /dev/cu.usbserial-210 --save-type gba-sram-fram-512kbit --message "FRAMKey signer helper smoke"
 ```
 
-The helper receives an encrypted save image and a message, loads the Keychain KEK after Touch ID authorization, decrypts the wallet secret inside the helper process, returns a `personal_sign` signature, and exits. The CLI verifies the returned signature by recovering the signer address.
+The helper receives an encrypted save image and a message, loads the Keychain KEK after macOS local authorization, decrypts the wallet secret inside the helper process, returns a `personal_sign` signature, and exits. The CLI verifies the returned signature by recovering the signer address.
 
-On macOS, Keychain-vault helper requests run as the helper's own process identity instead of being wrapped by `/usr/bin/sandbox-exec`. This keeps the LocalAuthentication Touch ID prompt and Keychain access tied to the real helper process and avoids brittle ad-hoc sandbox identity behavior. The CLI hashes the helper binary before launch and includes that BLAKE3 value in command output. Pin it for local smoke tests with either:
+On macOS, Keychain-vault helper requests run as the helper's own process identity instead of being wrapped by `/usr/bin/sandbox-exec`. This keeps the LocalAuthentication prompt and Keychain access tied to the real helper process and avoids brittle ad-hoc sandbox identity behavior. The CLI hashes the helper binary before launch and includes that BLAKE3 value in command output. Pin it for local smoke tests with either:
 
 ```bash
 export FRAMKEY_SIGNER_HELPER_BLAKE3=<helper_blake3>
 cargo run -p framkey-cli -- signer personal-sign --device gbx-cart --port /dev/cu.usbserial-210 --save-type gba-sram-fram-512kbit --message "FRAMKey signer helper smoke"
 ```
 
-or pass `--signer-helper-blake3 <helper_blake3>`. The old `sandbox-exec` wrapper is only available as a hidden experimental development mode. Packaged builds still need real code signing, notarization, and hardened runtime before real funds, but the personal local build path does not require Keychain access group entitlements.
+or pass `--signer-helper-blake3 <helper_blake3>`. The `sandbox-exec` wrapper is only available as a hidden experimental development mode. Packaged builds still need real code signing, notarization, and hardened runtime before real funds, but the personal local build path does not require Keychain access group entitlements.
 
 Tauri DeFi Browser foundation:
 
@@ -163,7 +169,7 @@ cargo run -p framkey-desktop
 
 Set `FRAMKEY_DESKTOP_WALLET_SEND_AUTOSMOKE=1` alongside mock mode when you also want the trusted Wallet UI to fill and submit the native-token Send form and then the Portfolio ERC-20 Send form. This heavier smoke still goes through the review queue and mock signing path, and the expected result for the unfunded mock account is a sanitized insufficient-funds broadcast failure recorded in Transaction Activity.
 
-Set `FRAMKEY_DESKTOP_RECOVERY_AUTOSMOKE=1` alongside mock mode to generate a disposable development recovery pack without touching Keychain, Touch ID, GBxCart, or the configured vault device. The trusted UI writes the same four backup bundles used by real vault creation, then runs read-only recovery drills: cloud-only backups must fail, while the recommended cloud-plus-physical set must pass. This smoke prints paths and BLAKE3 hashes only, not recovery share bytes or the recovery root key.
+Set `FRAMKEY_DESKTOP_RECOVERY_AUTOSMOKE=1` alongside mock mode to generate a disposable development recovery pack without touching Keychain, local authentication, GBxCart, or the configured vault device. The trusted UI writes the same four backup bundles used by real vault creation, then runs read-only recovery drills: cloud-only backups must fail, while the recommended cloud-plus-physical set must pass. This smoke prints paths and BLAKE3 hashes only, not recovery share bytes or the recovery root key.
 
 Remote dApp startup smoke workflow:
 

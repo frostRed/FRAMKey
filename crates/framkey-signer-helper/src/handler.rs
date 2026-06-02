@@ -6,8 +6,9 @@ use framkey_evm::{
 };
 use framkey_ipc::{
     SignerBuildKeychainVaultResponse, SignerHelperRequest, SignerHelperResponse,
-    SignerHelperResult, SignerOpenKeychainVaultResponse, SignerPersonalSignResponse,
-    SignerRecoverKeychainVaultResponse, SignerSignTransactionResponse, SignerSignTypedDataResponse,
+    SignerHelperResult, SignerKeychainAccessProbeResponse, SignerOpenKeychainVaultResponse,
+    SignerPersonalSignResponse, SignerRecoverKeychainVaultResponse, SignerSignTransactionResponse,
+    SignerSignTypedDataResponse,
 };
 use framkey_keychain_macos::{KeychainAccessPolicy, MacKeychainItem, SystemKeychain};
 use framkey_vault::{
@@ -27,12 +28,30 @@ use crate::{
 };
 
 const DEFAULT_KEYCHAIN_ACCESS_POLICY: KeychainAccessPolicy =
-    KeychainAccessPolicy::LocalBiometryCurrentSet;
+    KeychainAccessPolicy::LocalDeviceOwnerAuthentication;
 
 pub(crate) fn run() -> Result<()> {
     let input = read_limited_stdin()?;
     let request: SignerHelperRequest = serde_json::from_slice(&input)?;
     let response = match request {
+        SignerHelperRequest::KeychainAccessProbe(request) => {
+            let item = MacKeychainItem::new(request.keychain_service, request.keychain_account);
+            let keychain = SystemKeychain;
+            let loaded = keychain.load_existing_kek(&item)?;
+            SignerHelperResponse::ok(SignerHelperResult::KeychainAccessProbe(
+                SignerKeychainAccessProbeResponse {
+                    keychain_service: loaded.item.service,
+                    keychain_account: loaded.item.account,
+                    keychain_item_id: loaded.keychain_item_id,
+                    keychain_access_policy: loaded.access_policy.as_str().to_owned(),
+                    device_id: encode_hex(&loaded.device_id),
+                    kek_id: encode_hex(&loaded.kek_id),
+                    card_touched: false,
+                    vault_image_touched: false,
+                    wallet_secret_touched: false,
+                },
+            ))
+        }
         SignerHelperRequest::BuildKeychainVault(request) => {
             validate_save_image_size(request.image_size)?;
             let item = MacKeychainItem::new(request.keychain_service, request.keychain_account);

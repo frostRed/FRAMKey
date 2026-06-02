@@ -12,7 +12,8 @@ pub use framing::{read_native_message, write_native_message};
 pub use messages::{
     IpcError, IpcErrorCode, IpcRequest, IpcResponse, SignerBuildKeychainVaultRequest,
     SignerBuildKeychainVaultResponse, SignerEvmTransaction, SignerHelperRequest,
-    SignerHelperResponse, SignerHelperResult, SignerOpenKeychainVaultRequest,
+    SignerHelperResponse, SignerHelperResult, SignerKeychainAccessProbeRequest,
+    SignerKeychainAccessProbeResponse, SignerOpenKeychainVaultRequest,
     SignerOpenKeychainVaultResponse, SignerPersonalSignRequest, SignerPersonalSignResponse,
     SignerRecoverKeychainVaultRequest, SignerRecoverKeychainVaultResponse,
     SignerSignTransactionRequest, SignerSignTransactionResponse, SignerSignTypedDataRequest,

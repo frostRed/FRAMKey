@@ -47,7 +47,7 @@ pub enum IpcErrorCode {
     CardNotFound,
     CardReadFailed,
     VaultCorrupted,
-    TouchIdFailed,
+    LocalAuthenticationFailed,
     KeychainItemNotFound,
     RecoveryRequired,
     UnsupportedChain,
@@ -59,6 +59,7 @@ pub enum IpcErrorCode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "method")]
 pub enum SignerHelperRequest {
+    KeychainAccessProbe(SignerKeychainAccessProbeRequest),
     BuildKeychainVault(SignerBuildKeychainVaultRequest),
     RecoverKeychainVault(SignerRecoverKeychainVaultRequest),
     ValidateRecoveryFiles(SignerValidateRecoveryFilesRequest),
@@ -66,6 +67,12 @@ pub enum SignerHelperRequest {
     PersonalSign(SignerPersonalSignRequest),
     SignTypedData(SignerSignTypedDataRequest),
     SignTransaction(SignerSignTransactionRequest),
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignerKeychainAccessProbeRequest {
+    pub keychain_service: String,
+    pub keychain_account: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +178,7 @@ impl SignerHelperResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SignerHelperResult {
+    KeychainAccessProbe(SignerKeychainAccessProbeResponse),
     BuildKeychainVault(SignerBuildKeychainVaultResponse),
     RecoverKeychainVault(SignerRecoverKeychainVaultResponse),
     ValidateRecoveryFiles(SignerValidateRecoveryFilesResponse),
@@ -178,6 +186,20 @@ pub enum SignerHelperResult {
     PersonalSign(SignerPersonalSignResponse),
     SignTypedData(SignerSignTypedDataResponse),
     SignTransaction(SignerSignTransactionResponse),
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignerKeychainAccessProbeResponse {
+    pub keychain_service: String,
+    pub keychain_account: String,
+    pub keychain_item_id: String,
+    pub keychain_access_policy: String,
+    pub device_id: String,
+    pub kek_id: String,
+    pub card_touched: bool,
+    pub vault_image_touched: bool,
+    pub wallet_secret_touched: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -298,6 +320,16 @@ impl fmt::Debug for SignerValidateRecoveryFilesRequest {
     }
 }
 
+impl fmt::Debug for SignerKeychainAccessProbeRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerKeychainAccessProbeRequest")
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .finish()
+    }
+}
+
 impl fmt::Debug for SignerOpenKeychainVaultRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -361,6 +393,23 @@ impl fmt::Debug for SignerEvmTransaction {
             .field("gas_price", &self.gas_price)
             .field("max_fee_per_gas", &self.max_fee_per_gas)
             .field("max_priority_fee_per_gas", &self.max_priority_fee_per_gas)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerKeychainAccessProbeResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerKeychainAccessProbeResponse")
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("keychain_item_id", &self.keychain_item_id)
+            .field("keychain_access_policy", &self.keychain_access_policy)
+            .field("device_id", &self.device_id)
+            .field("kek_id", &self.kek_id)
+            .field("card_touched", &self.card_touched)
+            .field("vault_image_touched", &self.vault_image_touched)
+            .field("wallet_secret_touched", &self.wallet_secret_touched)
             .finish()
     }
 }

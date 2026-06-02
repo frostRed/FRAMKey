@@ -170,12 +170,15 @@ fn accepts_matching_expected_address() {
 }
 
 #[test]
-fn classifies_local_authentication_errors_as_touch_id_failures() {
+fn classifies_local_authentication_errors_as_local_authentication_failures() {
     let error = anyhow::anyhow!(
         "authorize FRAMKey local KEK access failed: macOS LocalAuthentication failed"
     );
 
-    assert_eq!(classify_error(&error), IpcErrorCode::TouchIdFailed);
+    assert_eq!(
+        classify_error(&error),
+        IpcErrorCode::LocalAuthenticationFailed
+    );
 }
 
 fn valid_signer_transaction() -> SignerEvmTransaction {

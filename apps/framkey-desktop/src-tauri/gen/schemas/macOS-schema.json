@@ -183,6 +183,12 @@
           "markdownDescription": "Enables the framkey_account_permissions command without any pre-configured scope."
         },
         {
+          "description": "Enables the framkey_authorize_keychain_helper command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-framkey-authorize-keychain-helper",
+          "markdownDescription": "Enables the framkey_authorize_keychain_helper command without any pre-configured scope."
+        },
+        {
           "description": "Enables the framkey_clear_provider_events command without any pre-configured scope.",
           "type": "string",
           "const": "allow-framkey-clear-provider-events",
@@ -373,6 +379,12 @@
           "type": "string",
           "const": "deny-framkey-account-permissions",
           "markdownDescription": "Denies the framkey_account_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the framkey_authorize_keychain_helper command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-framkey-authorize-keychain-helper",
+          "markdownDescription": "Denies the framkey_authorize_keychain_helper command without any pre-configured scope."
         },
         {
           "description": "Denies the framkey_clear_provider_events command without any pre-configured scope.",

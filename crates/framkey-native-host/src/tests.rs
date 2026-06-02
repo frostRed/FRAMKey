@@ -154,12 +154,12 @@ fn config_validation_rejects_ambiguous_keychain_names_and_device_hints() {
 }
 
 #[test]
-fn local_authentication_errors_map_to_touch_id_failed() {
+fn local_authentication_errors_map_to_local_authentication_failed() {
     let error = error_to_ipc(anyhow::anyhow!(
         "authorize FRAMKey local KEK access failed: macOS LocalAuthentication failed"
     ));
 
-    assert_eq!(error.code, IpcErrorCode::TouchIdFailed);
+    assert_eq!(error.code, IpcErrorCode::LocalAuthenticationFailed);
 }
 
 #[test]
@@ -200,6 +200,43 @@ fn signer_helper_wait_times_out_and_kills_child() {
     let _ = fs::remove_file(&script_path);
 
     assert!(error.to_string().contains("timed out after 1 ms"));
+    assert!(started_at.elapsed() < Duration::from_secs(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn signer_helper_wait_drains_large_stdout_before_child_exit() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let script_path = std::env::temp_dir().join(format!(
+        "framkey-native-host-large-stdout-{}-{unique}.sh",
+        std::process::id()
+    ));
+    fs::write(
+        &script_path,
+        "#!/bin/sh\ndd if=/dev/zero bs=1024 count=1024 2>/dev/null\nprintf done >&2\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let child = Command::new(&script_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started_at = Instant::now();
+    let output = wait_for_signer_helper_output(child, Duration::from_secs(5)).unwrap();
+    let _ = fs::remove_file(&script_path);
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout.len(), 1024 * 1024);
+    assert_eq!(output.stderr, b"done");
     assert!(started_at.elapsed() < Duration::from_secs(2));
 }
 

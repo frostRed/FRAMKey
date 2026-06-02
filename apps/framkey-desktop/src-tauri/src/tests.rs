@@ -13,9 +13,10 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::Arc,
     thread,
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[test]
@@ -258,6 +259,43 @@ fn signer_helper_stderr_summary_redacts_contents() {
     assert!(!summary.contains("secret"));
     assert!(!summary.contains("recovery"));
     assert_eq!(signer_helper_stderr_summary(b""), "empty");
+}
+
+#[cfg(unix)]
+#[test]
+fn signer_helper_wait_drains_large_stdout_before_child_exit() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let script_path = std::env::temp_dir().join(format!(
+        "framkey-desktop-large-stdout-{}-{unique}.sh",
+        std::process::id()
+    ));
+    fs::write(
+        &script_path,
+        "#!/bin/sh\ndd if=/dev/zero bs=1024 count=1024 2>/dev/null\nprintf done >&2\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script_path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script_path, permissions).unwrap();
+
+    let child = Command::new(&script_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started_at = Instant::now();
+    let output = wait_for_signer_helper_output(child, Duration::from_secs(5)).unwrap();
+    let _ = fs::remove_file(&script_path);
+
+    assert!(output.status.success());
+    assert_eq!(output.stdout.len(), 1024 * 1024);
+    assert_eq!(output.stderr, b"done");
+    assert!(started_at.elapsed() < Duration::from_secs(2));
 }
 
 #[test]
@@ -1454,6 +1492,63 @@ fn repeated_request_accounts_uses_connected_session_without_loading_vault() {
 }
 
 #[test]
+fn repeated_trusted_get_account_uses_connected_session_without_loading_vault() {
+    let state = AppState::new();
+    let mut config = fixture_config();
+    config.wallet = DesktopWalletConfig::KeychainVault;
+    config.device = DeviceConfig::File {
+        path: unique_test_path("trusted-get-account-missing-vault.sav"),
+    };
+    state
+        .remember_connected_account(DesktopAccount {
+            address: "0x0000000000000000000000000000000000000001".to_owned(),
+            wallet: json!({
+                "kind": "keychain_vault",
+                "mock": false,
+            }),
+            metadata: json!({
+                "walletSecretHash": "should-not-remain-in-session",
+                "walletId": "wallet-id-should-not-remain",
+            }),
+            keychain: Some(json!({
+                "service": "service-should-not-remain",
+                "account": "account-should-not-remain",
+                "itemId": "item-id-should-not-remain",
+                "deviceId": "device-id-should-not-remain",
+                "kekId": "kek-id-should-not-remain",
+            })),
+            helper_report: Some(json!({
+                "path": "/private/helper/path/should-not-remain",
+                "blake3": "helper-hash-should-not-remain",
+            })),
+        })
+        .unwrap();
+    let request = ProviderRequest {
+        id: "trusted-get-account-already-connected".to_owned(),
+        method: "framkey_getAccount".to_owned(),
+        params: json!([]),
+        origin: Some(TRUSTED_UI_ORIGIN.to_owned()),
+    };
+
+    let ProviderResponse::Result(account) =
+        handle_provider_request(&state, &config, &request).unwrap()
+    else {
+        panic!("expected trusted framkey_getAccount result");
+    };
+    assert_eq!(
+        account["address"],
+        json!("0x0000000000000000000000000000000000000001")
+    );
+    assert_eq!(account["wallet"]["kind"], json!("connected_session"));
+    assert_eq!(account["wallet"]["scope"], json!("address_only"));
+    assert_eq!(account["metadata"], json!({}));
+    assert_eq!(account["keychain"], Value::Null);
+    assert_eq!(account["signerHelper"], Value::Null);
+    let serialized = serde_json::to_string(&account).unwrap();
+    assert!(!serialized.contains("should-not-remain"));
+}
+
+#[test]
 fn transaction_review_uses_connected_session_address_without_loading_vault() {
     let state = Arc::new(AppState::new());
     let mut config = fixture_config();
@@ -1532,7 +1627,7 @@ fn disconnect_supersedes_in_flight_connect_result() {
     assert_eq!(result["accountCleared"], json!(false));
     let error = state
         .remember_connected_account_for_intent(
-            fixture_connected_account("0x0000000000000000000000000000000000000001"),
+            &fixture_connected_account("0x0000000000000000000000000000000000000001"),
             connect_sequence,
         )
         .unwrap_err();
@@ -1548,7 +1643,7 @@ fn newer_connect_supersedes_older_connect_result() {
 
     let error = state
         .remember_connected_account_for_intent(
-            fixture_connected_account("0x0000000000000000000000000000000000000001"),
+            &fixture_connected_account("0x0000000000000000000000000000000000000001"),
             older_sequence,
         )
         .unwrap_err();
@@ -1557,7 +1652,7 @@ fn newer_connect_supersedes_older_connect_result() {
 
     state
         .remember_connected_account_for_intent(
-            fixture_connected_account("0x0000000000000000000000000000000000000002"),
+            &fixture_connected_account("0x0000000000000000000000000000000000000002"),
             newer_sequence,
         )
         .unwrap();
@@ -2927,6 +3022,26 @@ fn signer_helper_status_reports_missing_without_hashing() {
     assert_eq!(status["hashMatches"], json!(false));
     assert!(status.get("blake3").unwrap().is_null());
     assert_eq!(status["path"], json!(path.display().to_string()));
+}
+
+#[test]
+fn signer_helper_cdhash_parser_accepts_only_codesign_hashes() {
+    let output = "\
+Executable=/tmp/framkey-signer-helper
+Identifier=framkey-signer-helper
+CDHash=2316c52c2b96f94fb72411610396b7b6ef715944
+Signature=adhoc
+";
+
+    assert_eq!(
+        parse_codesign_cdhash(output),
+        Some("2316c52c2b96f94fb72411610396b7b6ef715944")
+    );
+    assert_eq!(parse_codesign_cdhash("CDHash=not-a-cdhash"), None);
+    assert_eq!(
+        parse_codesign_cdhash("CDHash=2316c52c2b96f94fb72411610396b7b6ef71594400"),
+        None
+    );
 }
 
 #[test]

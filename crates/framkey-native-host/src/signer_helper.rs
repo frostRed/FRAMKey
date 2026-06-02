@@ -70,22 +70,60 @@ pub(crate) fn run_signer_helper(
 }
 
 pub(crate) fn wait_for_signer_helper_output(mut child: Child, timeout: Duration) -> Result<Output> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("signer helper stdout was not available"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("signer helper stderr was not available"))?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut stdout = stdout;
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut stderr = stderr;
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).map(|_| bytes)
+    });
+
     let started_at = Instant::now();
     loop {
-        if child.try_wait()?.is_some() {
-            return Ok(child.wait_with_output()?);
+        if let Some(status) = child.try_wait()? {
+            let stdout = join_output_reader(stdout_reader, "stdout")?;
+            let stderr = join_output_reader(stderr_reader, "stderr")?;
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
+            });
         }
         if started_at.elapsed() >= timeout {
             let _ = child.kill();
-            let output = child.wait_with_output()?;
+            let _status = child.wait()?;
+            let stdout = join_output_reader(stdout_reader, "stdout")?;
+            let stderr = join_output_reader(stderr_reader, "stderr")?;
             anyhow::bail!(
-                "signer helper timed out after {} ms waiting for macOS LocalAuthentication; stderr: {}",
+                "signer helper timed out after {} ms; stdout: {} bytes; stderr: {}",
                 timeout.as_millis(),
-                signer_helper_stderr_summary(&output.stderr)
+                stdout.len(),
+                signer_helper_stderr_summary(&stderr)
             );
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn join_output_reader(
+    handle: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    stream: &str,
+) -> Result<Vec<u8>> {
+    handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("signer helper {stream} reader panicked"))?
+        .map_err(|error| anyhow::anyhow!("failed to read signer helper {stream}: {error}"))
 }
 
 pub(crate) fn signer_helper_stderr_summary(stderr: &[u8]) -> String {

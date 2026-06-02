@@ -40,7 +40,7 @@ pub(crate) fn handle_provider_request(
         }
         "framkey_getAccount" => {
             ensure_trusted_provider_origin(request)?;
-            let account = state.load_and_connect_account(config)?;
+            let account = state.connected_or_load_account(config)?;
             Ok(ProviderResponse::Result(account_result(config, account)))
         }
         "wallet_addEthereumChain" => handle_add_chain_request(state, config, request),

@@ -15,7 +15,7 @@ Short term:
     -> simulation
     -> local confirmation
     -> signer helper
-    -> GBA vault + Touch ID
+    -> GBA vault + macOS local authentication
 
 Long term:
   FRAMKey browser extension
@@ -24,7 +24,7 @@ Long term:
     -> same signer / vault / recovery stack
 ```
 
-Tauri is the preferred next product surface because it lets the GBA card state, Touch ID unlock, recovery status, simulation output, and trusted signing confirmation live in one app first. The browser extension remains important for daily DeFi compatibility, but it carries extra lifecycle, native-host registration, extension-store, and multi-tab complexity.
+Tauri is the preferred next product surface because it lets the GBA card state, local unlock, recovery status, simulation output, and trusted signing confirmation live in one app first. The browser extension remains important for daily DeFi compatibility, but it carries extra lifecycle, native-host registration, extension-store, and multi-tab complexity.
 
 ## Route Comparison
 
@@ -47,7 +47,7 @@ Status: mostly complete.
 
 - GBxCart read/write.
 - 64 KiB vault save image.
-- Keychain + Touch ID KEK wrapper.
+- Keychain + macOS local-authentication KEK wrapper.
 - Short-lived signer helper.
 - EVM `personal_sign` smoke.
 - Read-only Chrome native bridge smoke.

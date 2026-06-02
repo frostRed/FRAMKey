@@ -38,8 +38,8 @@ mod tests {
             "invalid data: bad vault"
         );
         assert_eq!(
-            FramkeyError::unsupported("old format").to_string(),
-            "unsupported operation: old format"
+            FramkeyError::unsupported("unsupported format").to_string(),
+            "unsupported operation: unsupported format"
         );
     }
 }

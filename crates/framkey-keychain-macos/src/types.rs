@@ -64,14 +64,12 @@ impl MacKeychainItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeychainAccessPolicy {
     LocalDeviceOwnerAuthentication,
-    LocalBiometryCurrentSet,
 }
 
 impl KeychainAccessPolicy {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::LocalDeviceOwnerAuthentication => "local_device_owner_authentication",
-            Self::LocalBiometryCurrentSet => "local_biometry_current_set",
         }
     }
 }

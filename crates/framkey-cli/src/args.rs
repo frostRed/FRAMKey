@@ -58,6 +58,7 @@ pub(crate) enum VaultCommand {
     BuildTestImage(BuildTestImageArgs),
     InitKeychainKek(KeychainKekArgs),
     RebindKeychainKek(KeychainKekArgs),
+    TrustKeychainHelperAccess(TrustKeychainHelperAccessArgs),
     BuildKeychainEncryptedImage(BuildKeychainEncryptedImageArgs),
     RecoverKeychainEncryptedImage(RecoverKeychainEncryptedImageArgs),
     OpenKeychainEncryptedImage(OpenKeychainEncryptedImageArgs),
@@ -104,6 +105,15 @@ pub(crate) struct BuildDevEncryptedImageArgs {
 pub(crate) struct KeychainKekArgs {
     #[command(flatten)]
     pub(crate) keychain: KeychainItemArgs,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct TrustKeychainHelperAccessArgs {
+    #[command(flatten)]
+    pub(crate) keychain: KeychainItemArgs,
+
+    #[command(flatten)]
+    pub(crate) helper: SignerHelperArgs,
 }
 
 #[derive(Debug, Args)]

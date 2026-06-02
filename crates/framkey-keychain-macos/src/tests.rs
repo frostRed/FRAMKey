@@ -2,11 +2,11 @@ use super::*;
 
 #[test]
 fn item_binding_ids_are_stable_and_distinct() {
-    let item = MacKeychainItem::new("io.framkey.kek", "default");
-    let same = MacKeychainItem::new("io.framkey.kek", "default");
-    let other = MacKeychainItem::new("io.framkey.kek", "other");
+    let item = MacKeychainItem::new("io.framkey.local-kek", "default");
+    let same = MacKeychainItem::new("io.framkey.local-kek", "default");
+    let other = MacKeychainItem::new("io.framkey.local-kek", "other");
 
-    assert_eq!(item.keychain_item_id(), "io.framkey.kek:default");
+    assert_eq!(item.keychain_item_id(), "io.framkey.local-kek:default");
     assert_eq!(item.device_binding_id(), same.device_binding_id());
     assert_ne!(item.device_binding_id(), other.device_binding_id());
 }
@@ -16,32 +16,32 @@ fn item_validation_rejects_ambiguous_or_control_values() {
     assert!(MacKeychainItem::new("", "default").validate().is_err());
     assert!(MacKeychainItem::new(" \t", "default").validate().is_err());
     assert!(
-        MacKeychainItem::new(" io.framkey.kek", "default")
+        MacKeychainItem::new(" io.framkey.local-kek", "default")
             .validate()
             .is_err()
     );
     assert!(
-        MacKeychainItem::new("io.framkey.kek ", "default")
+        MacKeychainItem::new("io.framkey.local-kek ", "default")
             .validate()
             .is_err()
     );
     assert!(
-        MacKeychainItem::new("io.framkey.kek", "")
+        MacKeychainItem::new("io.framkey.local-kek", "")
             .validate()
             .is_err()
     );
     assert!(
-        MacKeychainItem::new("io.framkey.kek", "\n")
+        MacKeychainItem::new("io.framkey.local-kek", "\n")
             .validate()
             .is_err()
     );
     assert!(
-        MacKeychainItem::new("io.framkey.kek", "bad\0account")
+        MacKeychainItem::new("io.framkey.local-kek", "bad\0account")
             .validate()
             .is_err()
     );
     assert!(
-        MacKeychainItem::new("io.framkey.kek", "bad\naccount")
+        MacKeychainItem::new("io.framkey.local-kek", "bad\naccount")
             .validate()
             .is_err()
     );

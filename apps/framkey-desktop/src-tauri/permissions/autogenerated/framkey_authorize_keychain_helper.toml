@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-framkey-authorize-keychain-helper"
+description = "Enables the framkey_authorize_keychain_helper command without any pre-configured scope."
+commands.allow = ["framkey_authorize_keychain_helper"]
+
+[[permission]]
+identifier = "deny-framkey-authorize-keychain-helper"
+description = "Denies the framkey_authorize_keychain_helper command without any pre-configured scope."
+commands.deny = ["framkey_authorize_keychain_helper"]

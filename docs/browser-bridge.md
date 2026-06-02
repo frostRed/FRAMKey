@@ -148,6 +148,6 @@ Example methods to smoke:
 - `eth_chainId`: does not touch the card.
 - `framkey_getStatus`: does not touch the card.
 - `personal_sign`: must be rejected.
-- `framkey_getAccount`: reads the configured save image and triggers Touch ID through the helper.
+- `framkey_getAccount`: reads the configured save image and triggers macOS local authentication through the helper.
 
 `eth_requestAccounts` in the extension calls native-host `framkey_getAccount`, stores the origin grant in `chrome.storage.local`, then returns `[address]` to the dApp.

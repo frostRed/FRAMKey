@@ -64,7 +64,7 @@ fn dev_encrypted_save_image_opens_with_matching_kek() {
 fn keychain_encrypted_save_image_opens_with_matching_binding() {
     let kek = SecretBytes::new([0xC3; 32]);
     let device_id = [0x11; 16];
-    let item_id = "io.framkey.kek:fixture";
+    let item_id = "io.framkey.local-kek:fixture";
     let built = build_keychain_encrypted_save_image(
         DEFAULT_FRAM_SAVE_IMAGE_SIZE,
         Generation(4),
@@ -105,7 +105,7 @@ fn keychain_encrypted_save_image_opens_with_matching_binding() {
 fn encrypted_vault_image_debug_redacts_save_image_and_recovery_material() {
     let kek = SecretBytes::new([0xC3; 32]);
     let device_id = [0x11; 16];
-    let item_id = "io.framkey.kek:debug-fixture";
+    let item_id = "io.framkey.local-kek:debug-fixture";
     let built = build_keychain_encrypted_save_image_with_recovery(
         DEFAULT_FRAM_SAVE_IMAGE_SIZE,
         Generation(4),
@@ -128,7 +128,7 @@ fn encrypted_vault_image_debug_redacts_save_image_and_recovery_material() {
 fn keychain_vault_with_recovery_pack_wraps_same_dek() {
     let kek = SecretBytes::new([0xC3; 32]);
     let device_id = [0x33; 16];
-    let item_id = "io.framkey.kek:recovery-fixture";
+    let item_id = "io.framkey.local-kek:recovery-fixture";
     let built = build_keychain_encrypted_save_image_with_recovery(
         DEFAULT_FRAM_SAVE_IMAGE_SIZE,
         Generation(6),
@@ -191,7 +191,7 @@ fn keychain_vault_with_recovery_pack_wraps_same_dek() {
 fn vault_validation_rejects_ambiguous_keychain_wrapper_binding() {
     let kek = SecretBytes::new([0xC3; 32]);
     let device_id = [0x33; 16];
-    let item_id = "io.framkey.kek:blank-wrapper-fixture";
+    let item_id = "io.framkey.local-kek:blank-wrapper-fixture";
     let built = build_keychain_encrypted_save_image(
         DEFAULT_FRAM_SAVE_IMAGE_SIZE,
         Generation(6),
@@ -205,15 +205,15 @@ fn vault_validation_rejects_ambiguous_keychain_wrapper_binding() {
     for invalid in [
         (" \t", "must not be blank"),
         (
-            " io.framkey.kek:blank-wrapper-fixture",
+            " io.framkey.local-kek:blank-wrapper-fixture",
             "leading or trailing whitespace",
         ),
         (
-            "io.framkey.kek:blank-wrapper-fixture\n",
+            "io.framkey.local-kek:blank-wrapper-fixture\n",
             "leading or trailing whitespace",
         ),
         (
-            "io.framkey.kek:blank-wrapper\u{7f}-fixture",
+            "io.framkey.local-kek:blank-wrapper\u{7f}-fixture",
             "control characters",
         ),
     ] {
@@ -235,7 +235,7 @@ fn vault_validation_rejects_ambiguous_keychain_wrapper_binding() {
 fn vault_validation_rejects_inconsistent_recovery_policy() {
     let kek = SecretBytes::new([0xC3; 32]);
     let device_id = [0x33; 16];
-    let item_id = "io.framkey.kek:policy-fixture";
+    let item_id = "io.framkey.local-kek:policy-fixture";
     let built = build_keychain_encrypted_save_image_with_recovery(
         DEFAULT_FRAM_SAVE_IMAGE_SIZE,
         Generation(6),
@@ -254,15 +254,15 @@ fn vault_validation_rejects_inconsistent_recovery_policy() {
 
 #[test]
 fn recovery_rewrap_binds_vault_to_new_keychain_without_wallet_secret() {
-    let old_kek = SecretBytes::new([0xC3; 32]);
-    let old_device_id = [0x33; 16];
-    let old_item_id = "io.framkey.kek:old-recovery-fixture";
+    let source_kek = SecretBytes::new([0xC3; 32]);
+    let source_device_id = [0x33; 16];
+    let source_item_id = "io.framkey.local-kek:source-recovery-fixture";
     let built = build_keychain_encrypted_save_image_with_recovery(
         DEFAULT_FRAM_SAVE_IMAGE_SIZE,
         Generation(7),
-        old_item_id,
-        old_device_id,
-        &old_kek,
+        source_item_id,
+        source_device_id,
+        &source_kek,
     )
     .unwrap();
     let backup_pack = built.recovery_backup_pack.as_ref().unwrap();
@@ -271,32 +271,32 @@ fn recovery_rewrap_binds_vault_to_new_keychain_without_wallet_secret() {
         backup_pack.files[1].clone(),
         backup_pack.files[2].clone(),
     ];
-    let new_kek = SecretBytes::new([0xA5; 32]);
-    let new_device_id = [0x44; 16];
-    let new_item_id = "io.framkey.kek:new-recovery-fixture";
+    let target_kek = SecretBytes::new([0xA5; 32]);
+    let target_device_id = [0x44; 16];
+    let target_item_id = "io.framkey.local-kek:target-recovery-fixture";
 
     let recovered = rewrap_keychain_vault_with_recovery(
         &built.save_image,
         &recovery_files,
-        new_item_id,
-        new_device_id,
-        &new_kek,
+        target_item_id,
+        target_device_id,
+        &target_kek,
     )
     .unwrap();
 
     assert_eq!(recovered.metadata.image_size, DEFAULT_FRAM_SAVE_IMAGE_SIZE);
     assert_eq!(recovered.metadata.generation, 7);
     assert_eq!(recovered.metadata.wallet_id, built.metadata.wallet_id);
-    assert_eq!(recovered.metadata.keychain_item_id, new_item_id);
-    assert_eq!(recovered.metadata.device_id, encode_hex(&new_device_id));
+    assert_eq!(recovered.metadata.keychain_item_id, target_item_id);
+    assert_eq!(recovered.metadata.device_id, encode_hex(&target_device_id));
     assert!(recovered.metadata.active_slot_hash_valid);
     assert!(recovered.metadata.active_slot_payload_hash_valid);
 
     let opened = open_keychain_encrypted_save_image(
         &recovered.save_image,
-        new_item_id,
-        new_device_id,
-        &new_kek,
+        target_item_id,
+        target_device_id,
+        &target_kek,
     )
     .unwrap();
     assert_eq!(opened.wallet_secret_hash, built.metadata.wallet_secret_hash);
@@ -305,9 +305,9 @@ fn recovery_rewrap_binds_vault_to_new_keychain_without_wallet_secret() {
         rewrap_keychain_vault_with_recovery(
             &built.save_image,
             &backup_pack.files[0..2],
-            new_item_id,
-            new_device_id,
-            &new_kek,
+            target_item_id,
+            target_device_id,
+            &target_kek,
         )
         .is_err()
     );
@@ -315,15 +315,15 @@ fn recovery_rewrap_binds_vault_to_new_keychain_without_wallet_secret() {
 
 #[test]
 fn recovery_rewrap_tries_valid_group_pair_when_another_group_is_corrupted() {
-    let old_kek = SecretBytes::new([0xC3; 32]);
-    let old_device_id = [0x33; 16];
-    let old_item_id = "io.framkey.kek:old-corrupt-recovery-fixture";
+    let source_kek = SecretBytes::new([0xC3; 32]);
+    let source_device_id = [0x33; 16];
+    let source_item_id = "io.framkey.local-kek:source-corrupt-recovery-fixture";
     let built = build_keychain_encrypted_save_image_with_recovery(
         DEFAULT_FRAM_SAVE_IMAGE_SIZE,
         Generation(8),
-        old_item_id,
-        old_device_id,
-        &old_kek,
+        source_item_id,
+        source_device_id,
+        &source_kek,
     )
     .unwrap();
     let backup_pack = built.recovery_backup_pack.as_ref().unwrap();
@@ -335,23 +335,23 @@ fn recovery_rewrap_tries_valid_group_pair_when_another_group_is_corrupted() {
         corrupted_local,
         backup_pack.files[3].clone(),
     ];
-    let new_kek = SecretBytes::new([0xA5; 32]);
-    let new_device_id = [0x44; 16];
-    let new_item_id = "io.framkey.kek:new-corrupt-recovery-fixture";
+    let target_kek = SecretBytes::new([0xA5; 32]);
+    let target_device_id = [0x44; 16];
+    let target_item_id = "io.framkey.local-kek:target-corrupt-recovery-fixture";
 
     let recovered = rewrap_keychain_vault_with_recovery(
         &built.save_image,
         &recovery_files,
-        new_item_id,
-        new_device_id,
-        &new_kek,
+        target_item_id,
+        target_device_id,
+        &target_kek,
     )
     .unwrap();
     let opened = open_keychain_encrypted_save_image(
         &recovered.save_image,
-        new_item_id,
-        new_device_id,
-        &new_kek,
+        target_item_id,
+        target_device_id,
+        &target_kek,
     )
     .unwrap();
 
@@ -364,7 +364,7 @@ fn keychain_wallet_secret_can_sign_and_recover_personal_message() {
 
     let kek = SecretBytes::new([0xC3; 32]);
     let device_id = [0x22; 16];
-    let item_id = "io.framkey.kek:signer-fixture";
+    let item_id = "io.framkey.local-kek:signer-fixture";
     let built = build_keychain_encrypted_save_image(
         DEFAULT_FRAM_SAVE_IMAGE_SIZE,
         Generation(5),

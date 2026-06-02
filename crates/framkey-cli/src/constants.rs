@@ -9,4 +9,4 @@ pub(crate) const MACOS_NO_NETWORK_SANDBOX_PROFILE: &str =
     "(version 1) (allow default) (deny network*)";
 pub(crate) const SIGNER_HELPER_TIMEOUT: Duration = Duration::from_secs(45);
 pub(crate) const DEFAULT_KEYCHAIN_ACCESS_POLICY: KeychainAccessPolicy =
-    KeychainAccessPolicy::LocalBiometryCurrentSet;
+    KeychainAccessPolicy::LocalDeviceOwnerAuthentication;

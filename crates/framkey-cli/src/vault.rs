@@ -20,7 +20,7 @@ use crate::{
     },
     signer_helper::{
         helper_build_keychain_vault, helper_open_keychain_vault, helper_recover_keychain_vault,
-        signer_helper_report,
+        signer_helper_report, trust_signer_helper_keychain_access,
     },
 };
 
@@ -75,6 +75,24 @@ pub(crate) fn run_vault(command: VaultCommand) -> Result<()> {
                     "device_id": encode_hex(&loaded.device_id),
                     "kek_id": encode_hex(&loaded.kek_id),
                     "access_policy": loaded.access_policy.as_str(),
+                    "wallet_secret_touched": false,
+                    "vault_image_touched": false,
+                }))?
+            );
+        }
+        VaultCommand::TrustKeychainHelperAccess(args) => {
+            let report = trust_signer_helper_keychain_access(&args.helper, &args.keychain)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "operation": "trust_keychain_helper_access",
+                    "keychain_service": args.keychain.service,
+                    "keychain_account": args.keychain.account,
+                    "helper_path": report.helper_path.display().to_string(),
+                    "helper_blake3": report.helper_blake3,
+                    "helper_cdhash": report.helper_cdhash,
+                    "partition_list": report.partition_list,
+                    "password_captured_by_framkey": false,
                     "wallet_secret_touched": false,
                     "vault_image_touched": false,
                 }))?

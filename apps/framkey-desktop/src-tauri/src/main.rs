@@ -56,6 +56,7 @@ fn main() {
             framkey_smoke_event,
             framkey_status,
             framkey_rpc_health,
+            framkey_authorize_keychain_helper,
             framkey_wallet_assets,
             framkey_send_native_transfer,
             framkey_send_token_transfer,

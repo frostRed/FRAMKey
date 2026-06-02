@@ -23,6 +23,7 @@
     "allow-framkey-smoke-event",
     "allow-framkey-status",
     "allow-framkey-rpc-health",
+    "allow-framkey-authorize-keychain-helper",
     "allow-framkey-wallet-assets",
     "allow-framkey-send-native-transfer",
     "allow-framkey-send-token-transfer",

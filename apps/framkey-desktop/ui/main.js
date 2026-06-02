@@ -139,6 +139,7 @@ let recoveringVault = false;
 let walletConnectionPending = null;
 let walletConnectionOperationId = 0;
 let walletConnectionError = null;
+let keychainHelperAccessPending = false;
 
 const COMPATIBILITY_TARGETS = [
   {
@@ -255,6 +256,7 @@ const refreshPortfolioButton = document.querySelector("#refresh-portfolio");
 const refreshActivityButton = document.querySelector("#refresh-activity");
 const refreshReceiptsButton = document.querySelector("#refresh-receipts");
 const connectCardButton = document.querySelector("#connect-card");
+const authorizeKeychainHelperButton = document.querySelector("#authorize-keychain-helper");
 const openDappButton = document.querySelector("#open-dapp");
 const openCustomDappButton = document.querySelector("#open-custom-dapp");
 const openUniswapButton = document.querySelector("#open-uniswap");
@@ -392,6 +394,7 @@ function renderWalletProductOverview() {
   const helperReady = Boolean(latestStatus?.wallet?.mock || latestStatus?.signerHelper?.ready);
   const connecting = walletConnectionPending === "connecting";
   const disconnecting = walletConnectionPending === "disconnecting";
+  const authorizingKeychain = keychainHelperAccessPending;
   const connectionPending = connecting || disconnecting;
   const connectionError = address ? null : walletConnectionError;
 
@@ -401,7 +404,7 @@ function renderWalletProductOverview() {
       : accountBalance.textContent || "0 ETH"
     : "0 ETH";
   walletHomeAddress.textContent = connecting
-    ? "Waiting for local unlock"
+    ? "Reading vault from card; macOS unlock follows"
     : connectionError
       ? walletConnectionErrorText(connectionError)
     : address
@@ -423,18 +426,20 @@ function renderWalletProductOverview() {
   walletHomeSecurity.textContent = latestStatus?.wallet?.mock
     ? "Test mode"
     : helperReady
-      ? "Signer ready"
-      : "Signer unavailable";
+      ? "Signing ready"
+      : "Signing unavailable";
 
   let readiness = connecting
     ? "Connecting"
     : disconnecting
       ? "Disconnecting"
+      : authorizingKeychain
+        ? "Preparing signing"
       : address
         ? "Connected"
         : "Disconnected";
   let tone = "good";
-  if (connectionPending) {
+  if (connectionPending || authorizingKeychain) {
     tone = "warn";
   } else if (connectionError) {
     readiness = walletConnectionErrorReadiness(connectionError);
@@ -462,7 +467,13 @@ function renderWalletProductOverview() {
         : "Connect";
   walletActionConnectButton.dataset.mode = address ? "disconnect" : "connect";
   walletActionConnectButton.disabled = connectionPending;
-  connectCardButton.disabled = connectionPending;
+  connectCardButton.textContent = address ? "Vault Connected" : "Connect Vault";
+  connectCardButton.disabled = connectionPending || Boolean(address);
+  authorizeKeychainHelperButton.textContent = authorizingKeychain
+    ? "Repairing..."
+    : "Repair Signing Access";
+  authorizeKeychainHelperButton.disabled =
+    authorizingKeychain || connectionPending || Boolean(latestStatus?.wallet?.mock) || !helperReady;
   walletActionSendButton.disabled = !address || connectionPending;
 }
 
@@ -604,28 +615,28 @@ function isCurrentWalletConnectionOperation(operationId) {
 
 function walletConnectionErrorReadiness(error) {
   const message = walletConnectionErrorMessage(error);
-  if (isLocalAuthenticationTimeout(message)) {
-    return "Auth timeout";
+  if (isSignerHelperTimeout(message)) {
+    return "Signing timeout";
   }
   if (isBiometryLockedOut(message)) {
-    return "Touch ID rejected";
+    return "macOS auth locked";
   }
   if (message.includes("GBxCart") || message.includes("serial") || message.includes("card")) {
     return "Card issue";
   }
   if (message.includes("signer helper")) {
-    return "Signer issue";
+    return "Signing issue";
   }
   return "Connect failed";
 }
 
 function walletConnectionErrorText(error) {
   const message = walletConnectionErrorMessage(error);
-  if (isLocalAuthenticationTimeout(message)) {
-    return "macOS authentication did not return within 45s. Bring the Touch ID dialog to front, then retry.";
+  if (isSignerHelperTimeout(message)) {
+    return "macOS is waiting for a Keychain or local authentication dialog. Complete the system prompt, then retry.";
   }
   if (isBiometryLockedOut(message)) {
-    return "macOS rejected FRAMKey Touch ID with code -8. Other apps may use a different policy.";
+    return "macOS local authentication is locked. Use the password prompt or wait before retrying.";
   }
   return truncateWalletConnectionText(message || "Connect failed", 120);
 }
@@ -638,8 +649,8 @@ function isBiometryLockedOut(message) {
   return message.includes("Biometry is locked out") || message.includes("code -8");
 }
 
-function isLocalAuthenticationTimeout(message) {
-  return message.includes("timed out after 45000 ms waiting for macOS LocalAuthentication");
+function isSignerHelperTimeout(message) {
+  return message.includes("signer helper timed out after 45000 ms");
 }
 
 function truncateWalletConnectionText(value, maxLength) {
@@ -653,9 +664,14 @@ async function connectCard() {
   if (walletConnectionPending) {
     return null;
   }
+  const existingAddress = latestPortfolio?.address ?? latestAccount?.address ?? null;
+  if (existingAddress) {
+    renderWalletProductOverview();
+    return latestAccount ?? { address: existingAddress };
+  }
   const operationId = nextWalletConnectionOperation("connecting");
   walletConnectionError = null;
-  accountAddress.textContent = "Waiting for local unlock";
+  accountAddress.textContent = "Reading vault from card; macOS unlock follows";
   accountBalance.textContent = "-";
   setBusy("framkey_getAccount");
   try {
@@ -682,6 +698,32 @@ async function connectCard() {
     if (isCurrentWalletConnectionOperation(operationId)) {
       setWalletConnectionPending(null);
     }
+  }
+}
+
+async function authorizeKeychainHelper() {
+  if (keychainHelperAccessPending || walletConnectionPending) {
+    return null;
+  }
+  keychainHelperAccessPending = true;
+  walletConnectionError = null;
+  renderWalletProductOverview();
+  signerHelper.textContent = "Repairing signing access";
+  try {
+    const response = await invokeCommand("framkey_authorize_keychain_helper");
+    if (response?.result) {
+      signerHelper.textContent = formatKeychainHelperAccessResult(response.result);
+      walletConnectionError = null;
+    } else if (response?.error) {
+      setWalletConnectionError(response.error);
+    }
+    return response;
+  } catch (error) {
+    setWalletConnectionError(error);
+    throw error;
+  } finally {
+    keychainHelperAccessPending = false;
+    renderWalletProductOverview();
   }
 }
 
@@ -1146,7 +1188,7 @@ function operationErrorMessage(error) {
     return "macOS blocked this Keychain operation. The wallet was not written. Restart FRAMKey after rebuilding the current app, then try again.";
   }
   if (message.includes("exited with signal: 9") || message.includes("before returning JSON")) {
-    return "The signer helper could not start under macOS code-signing rules. Rebuild and restart FRAMKey, then try again.";
+    return "The signing service could not start under macOS code-signing rules. Rebuild and restart FRAMKey, then try again.";
   }
   return message;
 }
@@ -1876,6 +1918,7 @@ function renderStatus(status) {
   renderNetworkOptions(status);
   renderCapabilities(status.capabilities ?? {});
   renderSessionReadiness();
+  renderProductOverview();
 }
 
 function renderDappSession(session) {
@@ -6012,10 +6055,10 @@ function formatReviewReason(request) {
       return `Token add approved. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
     }
     if (request.kind === "personal_sign") {
-      return `Approved locally; waiting for signer helper. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+      return `Approved locally; waiting for signing service. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
     }
     if (request.kind === "typed_data") {
-      return `Permit typed-data approved; waiting for signer helper. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+      return `Permit typed-data approved; waiting for signing service. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
     }
     if (request.kind === "transaction") {
       const highRisk = request.decision?.decision === "approve_with_risk";
@@ -6396,6 +6439,16 @@ function formatSignerHelper(value) {
   return `${readiness}${location}${sandbox}${pin}${hash}`;
 }
 
+function formatKeychainHelperAccessResult(value) {
+  if (!value) {
+    return "Signing access unknown";
+  }
+  const status = value.status ? labelize(String(value.status)) : "Authorized";
+  const cdhash = value.helperCdhash ? ` · cdhash ${String(value.helperCdhash).slice(0, 12)}` : "";
+  const signingService = value.helper ? ` · ${formatSignerHelper(value.helper)}` : "";
+  return `Signing access ${status}${cdhash}${signingService}`;
+}
+
 function labelize(value) {
   return value
     .replace(/([A-Z])/g, " $1")
@@ -6480,6 +6533,9 @@ refreshReceiptsButton.addEventListener("click", () => {
 });
 connectCardButton.addEventListener("click", () => {
   connectCard().catch(() => {});
+});
+authorizeKeychainHelperButton.addEventListener("click", () => {
+  authorizeKeychainHelper().catch(() => {});
 });
 openDappButton.addEventListener("click", () => {
   openDapp("local", "Local Test").catch(() => {});

@@ -345,12 +345,8 @@ button:active {
 
 .product-actions {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.defi-home-panel .product-actions {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .product-actions button {
@@ -1365,7 +1361,7 @@ button:active {
 
 .compatibility-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
   gap: 12px;
   padding: 16px;
 }
@@ -1501,18 +1497,19 @@ button:active {
 
 .compatibility-steps {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
 }
 
 .compatibility-step {
-  display: grid;
-  gap: 3px;
-  min-height: 48px;
-  align-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 7px;
+  padding: 8px 10px;
   background: var(--surface);
 }
 
@@ -1532,13 +1529,20 @@ button:active {
 }
 
 .compatibility-step span {
+  flex: 0 0 auto;
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .compatibility-step strong {
-  overflow-wrap: anywhere;
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
   line-height: 1.2;
 }
@@ -2957,7 +2961,6 @@ button:active {
   }
 
   .product-actions,
-  .defi-home-panel .product-actions,
   .product-status-grid,
   .journey-steps {
     grid-template-columns: 1fr;

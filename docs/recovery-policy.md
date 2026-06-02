@@ -34,7 +34,7 @@ iCloud + local physical                 no
 Google + local physical                 no
 single physical backup                  no
 main GBA card alone                     no
-main GBA card + current Mac Touch ID     daily use, not recovery
+main GBA card + current Mac local auth   daily use, not recovery
 main GBA card + new Mac                  no, unless recovery pack is present
 ```
 

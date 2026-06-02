@@ -19,7 +19,7 @@ cd apps/framkey-desktop/src-tauri
 cargo tauri build --debug --bundles app --no-sign
 ```
 
-The desktop build copies the already-built helper into `src-tauri/binaries/framkey-signer-helper-<target-triple>` so Tauri can package it as a sidecar. Runtime helper discovery checks the desktop executable directory and the bundled app resources before falling back to explicit config or `FRAMKEY_SIGNER_HELPER`. `framkey_status` reports sanitized helper readiness, location, sandbox mode, BLAKE3, and hash-pin state so the trusted UI can show whether Keychain-vault signing has a helper available.
+The desktop build copies the already-built helper into `src-tauri/binaries/framkey-signer-helper-<target-triple>` so Tauri can package it as a sidecar. Runtime helper discovery checks the desktop executable directory and the bundled app resources before falling back to explicit config or `FRAMKEY_SIGNER_HELPER`. `framkey_status` reports sanitized helper readiness, location, sandbox mode, BLAKE3, and hash-pin state so the trusted UI can show whether Keychain-vault signing is available. The trusted Diagnostics panel also exposes `Repair Signing Access`, which launches the real helper for a Keychain-only access probe without reading the card or passing vault image bytes.
 
 Normal startup opens:
 
@@ -27,7 +27,7 @@ Normal startup opens:
 
 The untrusted `dapp` WebView is created only when the user opens the local test app, Uniswap, Aave, or a user-entered `http`/`https` URL from the trusted UI, or when explicit startup/smoke configuration asks for it. Once opened, it receives injected `window.framkey` and remains a separate untrusted window.
 
-Home is only the current wallet status and daily action surface. It shows the loaded account, network/RPC state, asset snapshot, and signer readiness. Backup creation, backup placement, and restore are owned by the Safety workspace. Home Connect loads the local vault account into the trusted in-memory account session and refreshes portfolio state; it does not grant dApp account access. Home Disconnect clears that account session, the portfolio snapshot, token-send selection, pending review queue, and current in-memory dApp account grants without deleting Keychain items, GBA data, backup files, watched-token preferences, or transaction activity history.
+Home is only the current wallet status and daily action surface. It shows the loaded account, network/RPC state, asset snapshot, and signing readiness. Backup creation, backup placement, and restore are owned by the Safety workspace. Home Connect loads the local vault account into the trusted in-memory account session and refreshes portfolio state; it does not grant dApp account access. macOS local authorization is part of Connect and signing when needed, while the Diagnostics `Repair Signing Access` action remains available for troubleshooting without a separate CLI step. Home Disconnect clears that account session, the portfolio snapshot, token-send selection, pending review queue, and current in-memory dApp account grants without deleting Keychain items, GBA data, backup files, watched-token preferences, or transaction activity history.
 
 The trusted DeFi Browser panel keeps a process-local dApp navigation snapshot: target label, sanitized current URL, origin, load status, last event, and update time. The URL snapshot strips query strings and fragments before rendering. The panel also exposes reload, back, forward, and home controls that only navigate the untrusted WebView. They do not grant account permission, approve requests, switch networks, sign, submit transactions, expose the Alchemy endpoint/token, or give the dApp direct Tauri command access.
 
@@ -291,7 +291,7 @@ Transaction review uses the same trusted metadata path only as display context. 
 
 Typed-data review is structured and signable only for recognized Permit shapes. The trusted UI recognizes common ERC-20 Permit and Uniswap Permit2 shapes and shows owner, spender, token, amount, nonce, and deadline context before an approval can sign. Unknown EIP-712 payloads keep the bounded raw preview and remain blocked before signer-helper access.
 
-For UI/dApp development without card or Touch ID prompts:
+For UI/dApp development without card or local authentication prompts:
 
 ```bash
 FRAMKEY_WALLET_MODE=mock_in_memory cargo run -p framkey-desktop
@@ -301,7 +301,7 @@ The mock wallet is a process-lifetime EOA. It is visibly reported as mock in sta
 
 A normal mainnet mock account is usually unfunded, so the final broadcast may return an Alchemy/provider error such as insufficient funds after the app has successfully reviewed and signed the transaction. If gas estimation fails for that reason, mock mode uses a visible development fallback gas limit before signing: `0x5208` for plain native transfers and `0x7a120` for contract calldata. Real Keychain-vault mode does not use that fallback; gas estimation must succeed or be supplied by the dApp.
 
-For repeatable runtime UI smoke without Touch ID or external GUI automation:
+For repeatable runtime UI smoke without local authentication or external GUI automation:
 
 ```bash
 FRAMKEY_WALLET_MODE=mock_in_memory \
@@ -310,7 +310,7 @@ FRAMKEY_DESKTOP_AUTOSMOKE=1 \
 cargo run -p framkey-desktop
 ```
 
-This development-only mode explicitly opens the local dApp WebView, logs `framkey_window_smoke` and `framkey_runtime_smoke` lines, and lets the local dApp send provider requests while the trusted UI WebView auto-approves mock-mode account connection, message signing, and overrideable transaction review requests. It proves the real WebViews, provider injection, Tauri commands, approval broker, and mock signing path are wired together; it should not be enabled for real-vault use. Add `FRAMKEY_DESKTOP_RECOVERY_AUTOSMOKE=1` to generate a disposable recovery smoke pack without touching Keychain, Touch ID, GBxCart, or the configured vault device. That smoke writes the same four backup bundle files as real vault creation, then verifies through the read-only recovery drill that cloud-only backups fail and the recommended cloud-plus-physical set passes.
+This development-only mode explicitly opens the local dApp WebView, logs `framkey_window_smoke` and `framkey_runtime_smoke` lines, and lets the local dApp send provider requests while the trusted UI WebView auto-approves mock-mode account connection, message signing, and overrideable transaction review requests. It proves the real WebViews, provider injection, Tauri commands, approval broker, and mock signing path are wired together; it should not be enabled for real-vault use. Add `FRAMKEY_DESKTOP_RECOVERY_AUTOSMOKE=1` to generate a disposable recovery smoke pack without touching Keychain, local authentication, GBxCart, or the configured vault device. That smoke writes the same four backup bundle files as real vault creation, then verifies through the read-only recovery drill that cloud-only backups fail and the recommended cloud-plus-physical set passes.
 
 Add `FRAMKEY_DESKTOP_WALLET_SEND_AUTOSMOKE=1` only when you also want runtime smoke to submit the trusted Wallet send forms. In mock wallet mode, the trusted UI fills the native send form with a one-wei transfer, waits for a watched ERC-20 token to appear in Portfolio, selects it, and submits the token send form. Both actions still create normal review requests and rely on the autosmoke approval loop. On an unfunded mock account, sanitized insufficient-funds broadcast failures are expected and are recorded in Transaction Activity.
 
@@ -350,7 +350,7 @@ Current-build remote smoke evidence: Uniswap and Aave interactive smoke both rea
 
 The dApp WebView is untrusted even though it is local in this foundation slice. It receives only the injected provider as the supported wallet API, and the Tauri global API is not exposed with `withGlobalTauri`. It does not receive direct filesystem, Keychain, GBxCart, or signer-helper access.
 
-The signer helper remains the only process that may touch decrypted EOA wallet material. The desktop app reads the save image and asks the helper to open the Keychain vault for public account metadata. For approved `personal_sign` requests, the desktop app passes only the save image, message bytes, and requested account to the helper. For approved real-vault `eth_sendTransaction` requests, the desktop app passes only the prepared transaction, save image, and requested account to the helper; the helper signs offline with network access denied. The helper derives the vault address before signing and refuses an account mismatch.
+The signer helper remains the only process that may touch decrypted EOA wallet material. The desktop app can ask the helper to probe Keychain KEK access by service/account only; that probe returns public Keychain wrapper metadata and explicitly reports that it did not touch the card, a vault image, or the wallet secret. The desktop app reads the save image and asks the helper to open the Keychain vault for public account metadata only during explicit account loading. For approved `personal_sign` requests, the desktop app passes only the save image, message bytes, and requested account to the helper. For approved real-vault `eth_sendTransaction` requests, the desktop app passes only the prepared transaction, save image, and requested account to the helper; the helper signs offline with network access denied. The helper derives the vault address before signing and refuses an account mismatch.
 
 ## Approval Broker
 

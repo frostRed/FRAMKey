@@ -3,7 +3,7 @@ use std::{
     fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Output, Stdio},
     time::{Duration, Instant},
 };
 
@@ -18,12 +18,13 @@ use framkey_evm::EvmTransaction;
 use framkey_ipc::{
     MAX_SIGNER_HELPER_SAVE_IMAGE_BYTES, MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES,
     SignerBuildKeychainVaultRequest, SignerBuildKeychainVaultResponse, SignerEvmTransaction,
-    SignerHelperRequest, SignerHelperResponse, SignerHelperResult, SignerOpenKeychainVaultRequest,
-    SignerOpenKeychainVaultResponse, SignerPersonalSignRequest, SignerPersonalSignResponse,
-    SignerRecoverKeychainVaultRequest, SignerRecoverKeychainVaultResponse,
-    SignerSignTransactionRequest, SignerSignTransactionResponse, SignerSignTypedDataRequest,
-    SignerSignTypedDataResponse, SignerValidateRecoveryFilesRequest,
-    SignerValidateRecoveryFilesResponse,
+    SignerHelperRequest, SignerHelperResponse, SignerHelperResult,
+    SignerKeychainAccessProbeRequest, SignerKeychainAccessProbeResponse,
+    SignerOpenKeychainVaultRequest, SignerOpenKeychainVaultResponse, SignerPersonalSignRequest,
+    SignerPersonalSignResponse, SignerRecoverKeychainVaultRequest,
+    SignerRecoverKeychainVaultResponse, SignerSignTransactionRequest,
+    SignerSignTransactionResponse, SignerSignTypedDataRequest, SignerSignTypedDataResponse,
+    SignerValidateRecoveryFilesRequest, SignerValidateRecoveryFilesResponse,
 };
 use framkey_recovery::{
     RecoveryBackupBundle, RecoveryBackupFile, RecoveryBackupPack, parse_recovery_backup_bundle,
@@ -32,13 +33,30 @@ use framkey_recovery::{
 use serde_json::{Value, json};
 
 pub(crate) fn load_keychain_account(config: &DesktopConfig) -> Result<DesktopAccount> {
+    let started_at = Instant::now();
+    eprintln!("framkey_account_connect stage=read_vault_start");
     let save_image = read_configured_save_image(config)?;
+    let read_elapsed = started_at.elapsed();
+    eprintln!(
+        "framkey_account_connect stage=read_vault_done duration_ms={}",
+        read_elapsed.as_millis()
+    );
+    let unlock_started_at = Instant::now();
+    eprintln!("framkey_account_connect stage=local_unlock_start");
     let opened = open_keychain_vault_with_helper(config, save_image)?;
+    eprintln!(
+        "framkey_account_connect stage=local_unlock_done duration_ms={}",
+        unlock_started_at.elapsed().as_millis()
+    );
     let address = opened
         .address
         .clone()
         .ok_or_else(|| anyhow::anyhow!("Keychain vault did not expose an EVM address"))?;
     let helper_report = helper_report(&config.helper)?;
+    eprintln!(
+        "framkey_account_connect stage=complete duration_ms={}",
+        started_at.elapsed().as_millis()
+    );
 
     Ok(DesktopAccount {
         address,
@@ -68,6 +86,58 @@ pub(crate) fn write_configured_save_image(config: &DesktopConfig, image: &SaveIm
     let mut device = config.device.open_device();
     device.write_save_image(image)?;
     Ok(())
+}
+
+pub(crate) fn authorize_keychain_helper_access(config: &DesktopConfig) -> Result<Value> {
+    let started = Instant::now();
+    let helper = helper_report(&config.helper)?;
+    let helper_cdhash = signer_helper_cdhash(&config.helper.path).ok();
+    let partition_list = helper_cdhash
+        .as_ref()
+        .map(|cdhash| format!("cdhash:{cdhash}"));
+    let probe = keychain_access_probe_with_helper(config)?;
+    Ok(json!({
+        "operation": "keychain_helper_access_probe",
+        "status": "authorized",
+        "durationMs": duration_ms(started.elapsed()),
+        "helper": helper,
+        "helperCdhash": helper_cdhash,
+        "partitionList": partition_list,
+        "keychain": {
+            "service": probe.keychain_service,
+            "account": probe.keychain_account,
+            "accessPolicy": probe.keychain_access_policy,
+            "itemId": probe.keychain_item_id,
+            "deviceId": probe.device_id,
+            "kekId": probe.kek_id,
+        },
+        "cardTouched": probe.card_touched,
+        "vaultImageTouched": probe.vault_image_touched,
+        "walletSecretTouched": probe.wallet_secret_touched,
+        "passwordCapturedByFramkey": false,
+    }))
+}
+
+pub(crate) fn keychain_access_probe_with_helper(
+    config: &DesktopConfig,
+) -> Result<SignerKeychainAccessProbeResponse> {
+    let response = run_signer_helper(
+        &config.helper,
+        &SignerHelperRequest::KeychainAccessProbe(SignerKeychainAccessProbeRequest {
+            keychain_service: config.keychain_service.clone(),
+            keychain_account: config.keychain_account.clone(),
+        }),
+    )?;
+
+    match response.into_result() {
+        Ok(SignerHelperResult::KeychainAccessProbe(result)) => Ok(result),
+        Ok(result) => {
+            anyhow::bail!("unexpected signer helper result: {result:?}")
+        }
+        Err(error) => {
+            anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
+        }
+    }
 }
 
 pub(crate) fn build_keychain_vault_with_helper(
@@ -290,22 +360,7 @@ pub(crate) fn run_signer_helper(
         stdin.write_all(b"\n")?;
     }
 
-    let started_at = Instant::now();
-    let output = loop {
-        if child.try_wait()?.is_some() {
-            break child.wait_with_output()?;
-        }
-        if started_at.elapsed() >= SIGNER_HELPER_TIMEOUT {
-            let _ = child.kill();
-            let output = child.wait_with_output()?;
-            anyhow::bail!(
-                "signer helper timed out after {} ms waiting for macOS LocalAuthentication; stderr: {}",
-                SIGNER_HELPER_TIMEOUT.as_millis(),
-                signer_helper_stderr_summary(&output.stderr)
-            );
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    let output = wait_for_signer_helper_output(child, SIGNER_HELPER_TIMEOUT)?;
     if output.stdout.is_empty() && !output.status.success() {
         anyhow::bail!(
             "signer helper exited with {} before returning JSON; stderr: {}",
@@ -333,6 +388,63 @@ pub(crate) fn run_signer_helper(
     }
 
     Ok(response)
+}
+
+pub(crate) fn wait_for_signer_helper_output(mut child: Child, timeout: Duration) -> Result<Output> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("signer helper stdout was not available"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("signer helper stderr was not available"))?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut stdout = stdout;
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut stderr = stderr;
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).map(|_| bytes)
+    });
+
+    let started_at = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let stdout = join_output_reader(stdout_reader, "stdout")?;
+            let stderr = join_output_reader(stderr_reader, "stderr")?;
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
+            });
+        }
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let _status = child.wait()?;
+            let stdout = join_output_reader(stdout_reader, "stdout")?;
+            let stderr = join_output_reader(stderr_reader, "stderr")?;
+            anyhow::bail!(
+                "signer helper timed out after {} ms; stdout: {} bytes; stderr: {}",
+                timeout.as_millis(),
+                stdout.len(),
+                signer_helper_stderr_summary(&stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn join_output_reader(
+    handle: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    stream: &str,
+) -> Result<Vec<u8>> {
+    handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("signer helper {stream} reader panicked"))?
+        .map_err(|error| anyhow::anyhow!("failed to read signer helper {stream}: {error}"))
 }
 
 pub(crate) fn signer_helper_stderr_summary(stderr: &[u8]) -> String {
@@ -439,6 +551,56 @@ pub(crate) fn hash_file_blake3(path: &Path) -> Result<String> {
         hasher.update(&buffer[..read]);
     }
     Ok(encode_hex(hasher.finalize().as_bytes()))
+}
+
+pub(crate) fn signer_helper_cdhash(path: &Path) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/bin/codesign")
+            .arg("-dv")
+            .arg("--verbose=4")
+            .arg(path)
+            .output()
+            .map_err(|error| anyhow::anyhow!("failed to run /usr/bin/codesign: {error}"))?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "codesign failed for {} with {}; stderr: {}",
+                path.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let cdhash = parse_codesign_cdhash(&stderr).ok_or_else(|| {
+            anyhow::anyhow!(
+                "codesign output for {} did not contain CDHash",
+                path.display()
+            )
+        })?;
+        Ok(cdhash.to_owned())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        anyhow::bail!("signer-helper CDHash is only available on macOS");
+    }
+}
+
+pub(crate) fn parse_codesign_cdhash(output: &str) -> Option<&str> {
+    output.lines().find_map(|line| {
+        let cdhash = line.trim().strip_prefix("CDHash=")?.trim();
+        if cdhash.len() == 40
+            && cdhash
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            Some(cdhash)
+        } else {
+            None
+        }
+    })
 }
 
 pub(crate) fn recovery_smoke_encrypted_vault_backup(

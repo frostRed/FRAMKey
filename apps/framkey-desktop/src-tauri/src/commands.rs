@@ -80,6 +80,34 @@ pub(crate) async fn framkey_switch_session_chain(
 }
 
 #[tauri::command]
+pub(crate) async fn framkey_authorize_keychain_helper(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<ProviderEnvelope, String> {
+    let config = match ensure_trusted_window(&window).and_then(|()| {
+        let state = app.state::<AppState>();
+        state.config_snapshot()
+    }) {
+        Ok(config) => config,
+        Err(error) => {
+            return Ok(ProviderEnvelope::error(
+                "authorize_keychain_helper",
+                error_to_provider_error(error),
+            ));
+        }
+    };
+
+    tauri::async_runtime::spawn_blocking(move || match authorize_keychain_helper_access(&config) {
+        Ok(result) => ProviderEnvelope::result("authorize_keychain_helper", result),
+        Err(error) => {
+            ProviderEnvelope::error("authorize_keychain_helper", error_to_provider_error(error))
+        }
+    })
+    .await
+    .map_err(|error| format!("authorize keychain helper task failed: {error}"))
+}
+
+#[tauri::command]
 pub(crate) fn framkey_recovery_state(
     window: WebviewWindow,
     state: tauri::State<'_, AppState>,

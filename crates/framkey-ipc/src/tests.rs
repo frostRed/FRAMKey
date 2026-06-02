@@ -69,7 +69,7 @@ fn signer_helper_ok_response_wire_format_is_stable() {
 fn serializes_sign_transaction_request_kind() {
     let request = SignerHelperRequest::SignTransaction(SignerSignTransactionRequest {
         save_image: vec![0_u8; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],
-        keychain_service: "io.framkey.kek".to_owned(),
+        keychain_service: "io.framkey.local-kek".to_owned(),
         keychain_account: "default".to_owned(),
         expected_address: Some("0x0000000000000000000000000000000000000001".to_owned()),
         transaction: SignerEvmTransaction {
@@ -94,7 +94,7 @@ fn serializes_sign_transaction_request_kind() {
 fn serializes_sign_typed_data_request_kind() {
     let request = SignerHelperRequest::SignTypedData(SignerSignTypedDataRequest {
         save_image: vec![0_u8; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],
-        keychain_service: "io.framkey.kek".to_owned(),
+        keychain_service: "io.framkey.local-kek".to_owned(),
         keychain_account: "default".to_owned(),
         expected_address: Some("0x0000000000000000000000000000000000000001".to_owned()),
         typed_data: serde_json::json!({
@@ -114,7 +114,7 @@ fn serializes_sign_typed_data_request_kind() {
 fn serializes_recover_keychain_vault_request_kind() {
     let request = SignerHelperRequest::RecoverKeychainVault(SignerRecoverKeychainVaultRequest {
         save_image: vec![0_u8; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],
-        keychain_service: "io.framkey.kek".to_owned(),
+        keychain_service: "io.framkey.local-kek".to_owned(),
         keychain_account: "default".to_owned(),
         recovery_files: Vec::new(),
     });
@@ -136,24 +136,42 @@ fn serializes_validate_recovery_files_request_kind() {
 }
 
 #[test]
+fn serializes_keychain_access_probe_without_vault_material() {
+    let request = SignerHelperRequest::KeychainAccessProbe(SignerKeychainAccessProbeRequest {
+        keychain_service: "io.framkey.local-kek".to_owned(),
+        keychain_account: "default".to_owned(),
+    });
+
+    let encoded = serde_json::to_value(&request).unwrap();
+    assert_eq!(encoded["method"], "keychain_access_probe");
+    assert_eq!(encoded["keychain_service"], "io.framkey.local-kek");
+    assert_eq!(encoded["keychain_account"], "default");
+    assert!(encoded.get("save_image").is_none());
+    assert!(encoded.get("message").is_none());
+    assert!(encoded.get("typed_data").is_none());
+    assert!(encoded.get("transaction").is_none());
+    assert!(encoded.get("recovery_files").is_none());
+}
+
+#[test]
 fn signer_helper_debug_redacts_sensitive_wire_material() {
     let personal_request = SignerHelperRequest::PersonalSign(SignerPersonalSignRequest {
         save_image: vec![0xAA; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],
-        keychain_service: "io.framkey.kek".to_owned(),
+        keychain_service: "io.framkey.local-kek".to_owned(),
         keychain_account: "default".to_owned(),
         message: b"secret debug message".to_vec(),
         expected_address: None,
     });
     let typed_data_request = SignerHelperRequest::SignTypedData(SignerSignTypedDataRequest {
         save_image: vec![0xBB; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],
-        keychain_service: "io.framkey.kek".to_owned(),
+        keychain_service: "io.framkey.local-kek".to_owned(),
         keychain_account: "default".to_owned(),
         typed_data: serde_json::json!({"secretField": "do-not-log"}),
         expected_address: None,
     });
     let transaction_request = SignerHelperRequest::SignTransaction(SignerSignTransactionRequest {
         save_image: vec![0xCC; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],
-        keychain_service: "io.framkey.kek".to_owned(),
+        keychain_service: "io.framkey.local-kek".to_owned(),
         keychain_account: "default".to_owned(),
         expected_address: None,
         transaction: SignerEvmTransaction {
@@ -170,9 +188,9 @@ fn signer_helper_debug_redacts_sensitive_wire_material() {
     });
     let response = SignerHelperResponse::ok(SignerHelperResult::SignTransaction(
         SignerSignTransactionResponse {
-            keychain_service: "io.framkey.kek".to_owned(),
+            keychain_service: "io.framkey.local-kek".to_owned(),
             keychain_account: "default".to_owned(),
-            keychain_item_id: "io.framkey.kek:default".to_owned(),
+            keychain_item_id: "io.framkey.local-kek:default".to_owned(),
             keychain_access_policy: "local_auth".to_owned(),
             device_id: "device".to_owned(),
             kek_id: "kek".to_owned(),

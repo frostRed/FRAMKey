@@ -25,7 +25,7 @@ pub(crate) struct AppState {
     pub(crate) mock_wallet: Mutex<Option<MockWallet>>,
     pub(crate) account_connect_lock: Mutex<()>,
     pub(crate) account_session_sequence: Mutex<u64>,
-    pub(crate) connected_account: Mutex<Option<DesktopAccount>>,
+    pub(crate) connected_account: Mutex<Option<ConnectedAccountSession>>,
     pub(crate) account_permissions: Mutex<AccountPermissionStore>,
     pub(crate) provider_events: Mutex<ProviderEventLog>,
     pub(crate) dapp_session: Mutex<DappSessionState>,
@@ -38,6 +38,37 @@ pub(crate) struct AppState {
     pub(crate) recovery_ui_state: Mutex<RecoveryUiState>,
     pub(crate) recovery_ui_state_path: Option<PathBuf>,
     pub(crate) recovery_ui_state_persistence: Mutex<RecoveryUiStatePersistenceStatus>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectedAccountSession {
+    pub(crate) address: String,
+}
+
+impl ConnectedAccountSession {
+    pub(crate) fn new(address: String) -> Result<Self> {
+        let _address = address
+            .parse::<EvmAddress>()
+            .map_err(|_| anyhow::anyhow!("connected account address is not a valid EVM address"))?;
+        Ok(Self { address })
+    }
+
+    pub(crate) fn from_account(account: &DesktopAccount) -> Result<Self> {
+        Self::new(account.address.clone())
+    }
+
+    pub(crate) fn to_minimal_account(&self) -> DesktopAccount {
+        DesktopAccount {
+            address: self.address.clone(),
+            wallet: json!({
+                "kind": "connected_session",
+                "scope": "address_only",
+            }),
+            metadata: json!({}),
+            keychain: None,
+            helper_report: None,
+        }
+    }
 }
 
 impl AppState {
@@ -275,7 +306,7 @@ impl AppState {
             .map_err(|_| anyhow::anyhow!("FRAMKey account connect lock poisoned"))?;
         self.ensure_account_connect_intent_current(connect_sequence)?;
         let account = self.load_account(config)?;
-        self.remember_connected_account_for_intent(account.clone(), connect_sequence)?;
+        self.remember_connected_account_for_intent(&account, connect_sequence)?;
         Ok(account)
     }
 
@@ -291,15 +322,12 @@ impl AppState {
 
     #[cfg(test)]
     pub(crate) fn remember_connected_account(&self, account: DesktopAccount) -> Result<()> {
-        let _address = account
-            .address
-            .parse::<EvmAddress>()
-            .map_err(|_| anyhow::anyhow!("connected account address is not a valid EVM address"))?;
+        let session = ConnectedAccountSession::from_account(&account)?;
         let mut guard = self
             .connected_account
             .lock()
             .map_err(|_| anyhow::anyhow!("FRAMKey connected account lock poisoned"))?;
-        *guard = Some(account);
+        *guard = Some(session);
         Ok(())
     }
 
@@ -330,13 +358,10 @@ impl AppState {
 
     pub(crate) fn remember_connected_account_for_intent(
         &self,
-        account: DesktopAccount,
+        account: &DesktopAccount,
         connect_sequence: u64,
     ) -> Result<()> {
-        let _address = account
-            .address
-            .parse::<EvmAddress>()
-            .map_err(|_| anyhow::anyhow!("connected account address is not a valid EVM address"))?;
+        let session = ConnectedAccountSession::from_account(account)?;
         let sequence_guard = self
             .account_session_sequence
             .lock()
@@ -348,7 +373,7 @@ impl AppState {
             .connected_account
             .lock()
             .map_err(|_| anyhow::anyhow!("FRAMKey connected account lock poisoned"))?;
-        *account_guard = Some(account);
+        *account_guard = Some(session);
         Ok(())
     }
 
@@ -357,11 +382,17 @@ impl AppState {
             .connected_account
             .lock()
             .map_err(|_| anyhow::anyhow!("FRAMKey connected account lock poisoned"))?;
-        Ok(guard.clone())
+        Ok(guard
+            .as_ref()
+            .map(ConnectedAccountSession::to_minimal_account))
     }
 
     pub(crate) fn connected_account_address(&self) -> Result<Option<String>> {
-        Ok(self.connected_account()?.map(|account| account.address))
+        let guard = self
+            .connected_account
+            .lock()
+            .map_err(|_| anyhow::anyhow!("FRAMKey connected account lock poisoned"))?;
+        Ok(guard.as_ref().map(|session| session.address.clone()))
     }
 
     pub(crate) fn require_connected_account_address(&self) -> Result<String> {

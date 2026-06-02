@@ -1611,7 +1611,7 @@ pub(crate) fn error_to_provider_error(error: anyhow::Error) -> ProviderError {
 
 pub(crate) fn _ipc_error_to_provider_error(error: IpcError) -> ProviderError {
     let code = match error.code {
-        IpcErrorCode::UserRejected | IpcErrorCode::TouchIdFailed => 4001,
+        IpcErrorCode::UserRejected | IpcErrorCode::LocalAuthenticationFailed => 4001,
         IpcErrorCode::UnsupportedMethod | IpcErrorCode::DangerousSignatureBlocked => 4200,
         IpcErrorCode::UnsupportedChain => 4901,
         _ => 4900,

@@ -151,6 +151,58 @@ pub(crate) fn helper_personal_sign(
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct KeychainHelperTrustReport {
+    pub(crate) helper_path: PathBuf,
+    pub(crate) helper_blake3: String,
+    pub(crate) helper_cdhash: String,
+    pub(crate) partition_list: String,
+}
+
+pub(crate) fn trust_signer_helper_keychain_access(
+    helper: &SignerHelperArgs,
+    keychain: &KeychainItemArgs,
+) -> Result<KeychainHelperTrustReport> {
+    #[cfg(target_os = "macos")]
+    {
+        let item = keychain.item();
+        item.validate()?;
+        let execution = inspect_signer_helper(helper)?;
+        let cdhash = signer_helper_cdhash(&execution.path)?;
+        let partition_list = format!("cdhash:{cdhash}");
+        let status = Command::new("/usr/bin/security")
+            .arg("set-generic-password-partition-list")
+            .arg("-s")
+            .arg(&item.service)
+            .arg("-a")
+            .arg(&item.account)
+            .arg("-S")
+            .arg(&partition_list)
+            .arg("login.keychain-db")
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(|error| anyhow::anyhow!("failed to run /usr/bin/security: {error}"))?;
+        if !status.success() {
+            anyhow::bail!("security set-generic-password-partition-list exited with {status}");
+        }
+
+        Ok(KeychainHelperTrustReport {
+            helper_path: execution.path,
+            helper_blake3: execution.blake3,
+            helper_cdhash: cdhash,
+            partition_list,
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (helper, keychain);
+        anyhow::bail!("macOS Keychain helper trust is only available on macOS");
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct SignerHelperInvocation {
     response: SignerHelperResponse,
     execution: SignerHelperExecution,
@@ -245,22 +297,60 @@ fn run_signer_helper(
 }
 
 fn wait_for_signer_helper_output(mut child: Child, timeout: Duration) -> Result<Output> {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("signer helper stdout was not available"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("signer helper stderr was not available"))?;
+    let stdout_reader = std::thread::spawn(move || {
+        let mut stdout = stdout;
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut stderr = stderr;
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).map(|_| bytes)
+    });
+
     let started_at = Instant::now();
     loop {
-        if child.try_wait()?.is_some() {
-            return Ok(child.wait_with_output()?);
+        if let Some(status) = child.try_wait()? {
+            let stdout = join_output_reader(stdout_reader, "stdout")?;
+            let stderr = join_output_reader(stderr_reader, "stderr")?;
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
+            });
         }
         if started_at.elapsed() >= timeout {
             let _ = child.kill();
-            let output = child.wait_with_output()?;
+            let _status = child.wait()?;
+            let stdout = join_output_reader(stdout_reader, "stdout")?;
+            let stderr = join_output_reader(stderr_reader, "stderr")?;
             anyhow::bail!(
-                "signer helper timed out after {} ms waiting for macOS LocalAuthentication; stderr: {}",
+                "signer helper timed out after {} ms; stdout: {} bytes; stderr: {}",
                 timeout.as_millis(),
-                String::from_utf8_lossy(&output.stderr)
+                stdout.len(),
+                String::from_utf8_lossy(&stderr)
             );
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+fn join_output_reader(
+    handle: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    stream: &str,
+) -> Result<Vec<u8>> {
+    handle
+        .join()
+        .map_err(|_| anyhow::anyhow!("signer helper {stream} reader panicked"))?
+        .map_err(|error| anyhow::anyhow!("failed to read signer helper {stream}: {error}"))
 }
 
 fn inspect_signer_helper(helper: &SignerHelperArgs) -> Result<SignerHelperExecution> {
@@ -386,10 +476,79 @@ fn hash_file_blake3(path: &Path) -> Result<String> {
     Ok(encode_hex(hasher.finalize().as_bytes()))
 }
 
+fn signer_helper_cdhash(path: &Path) -> Result<String> {
+    let output = Command::new("/usr/bin/codesign")
+        .arg("-dv")
+        .arg("--verbose=4")
+        .arg(path)
+        .output()
+        .map_err(|error| anyhow::anyhow!("failed to run /usr/bin/codesign: {error}"))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "codesign failed for {} with {}; stderr: {}",
+            path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let cdhash = parse_codesign_cdhash(&stderr).ok_or_else(|| {
+        anyhow::anyhow!(
+            "codesign output for {} did not contain CDHash",
+            path.display()
+        )
+    })?;
+    Ok(cdhash.to_owned())
+}
+
+fn parse_codesign_cdhash(output: &str) -> Option<&str> {
+    output.lines().find_map(|line| {
+        let cdhash = line.trim().strip_prefix("CDHash=")?.trim();
+        if cdhash.len() == 40
+            && cdhash
+                .chars()
+                .all(|character| character.is_ascii_hexdigit())
+        {
+            Some(cdhash)
+        } else {
+            None
+        }
+    })
+}
+
 pub(crate) fn signer_helper_report(execution: &SignerHelperExecution) -> serde_json::Value {
     json!({
         "path": execution.path.display().to_string(),
         "blake3": execution.blake3,
         "sandbox": execution.sandbox.as_str(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_codesign_cdhash() {
+        let output = r#"
+Executable=/tmp/framkey-signer-helper
+CDHash=2316c52c2b96f94fb72411610396b7b6ef715944
+# designated => cdhash H"2316c52c2b96f94fb72411610396b7b6ef715944"
+"#;
+
+        assert_eq!(
+            parse_codesign_cdhash(output),
+            Some("2316c52c2b96f94fb72411610396b7b6ef715944")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_codesign_cdhash() {
+        assert_eq!(parse_codesign_cdhash("CDHash=not-a-cdhash"), None);
+        assert_eq!(
+            parse_codesign_cdhash("CDHash=2316c52c2b96f94fb72411610396b7b6ef71594400"),
+            None
+        );
+    }
 }
