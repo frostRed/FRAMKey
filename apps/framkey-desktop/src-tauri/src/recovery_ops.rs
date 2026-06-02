@@ -367,7 +367,7 @@ pub(crate) fn pick_recovery_files() -> Result<Value> {
             "end repeat",
             "return output",
         ])?;
-        return recovery_file_picker_result("pick_recovery_files", output, true);
+        recovery_file_picker_result("pick_recovery_files", output, true)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -383,7 +383,7 @@ pub(crate) fn pick_vault_backup_file() -> Result<Value> {
             "set chosenFile to choose file with prompt \"Select backup file\"",
             "return POSIX path of chosenFile",
         ])?;
-        return recovery_file_picker_result("pick_vault_backup_file", output, false);
+        recovery_file_picker_result("pick_vault_backup_file", output, false)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -399,7 +399,7 @@ pub(crate) fn pick_recovery_out_dir() -> Result<Value> {
             "set chosenFolder to choose folder with prompt \"Select FRAMKey recovery output directory\"",
             "return POSIX path of chosenFolder",
         ])?;
-        return recovery_file_picker_result("pick_recovery_out_dir", output, false);
+        recovery_file_picker_result("pick_recovery_out_dir", output, false)
     }
 
     #[cfg(not(target_os = "macos"))]

@@ -2,7 +2,8 @@ use std::{
     fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Output, Stdio},
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -19,7 +20,9 @@ use serde_json::json;
 
 use crate::{
     args::{KeychainItemArgs, SignerHelperArgs},
-    constants::{FRAMKEY_SIGNER_HELPER_BLAKE3_ENV, MACOS_NO_NETWORK_SANDBOX_PROFILE},
+    constants::{
+        FRAMKEY_SIGNER_HELPER_BLAKE3_ENV, MACOS_NO_NETWORK_SANDBOX_PROFILE, SIGNER_HELPER_TIMEOUT,
+    },
 };
 
 pub(crate) fn helper_build_keychain_vault(
@@ -44,14 +47,12 @@ pub(crate) fn helper_build_keychain_vault(
         execution,
     } = invocation;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::BuildKeychainVault(result),
-        } => Ok((result, execution)),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::BuildKeychainVault(result)) => Ok((result, execution)),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -75,14 +76,12 @@ pub(crate) fn helper_open_keychain_vault(
         execution,
     } = invocation;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::OpenKeychainVault(result),
-        } => Ok((result, execution)),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::OpenKeychainVault(result)) => Ok((result, execution)),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -108,14 +107,12 @@ pub(crate) fn helper_recover_keychain_vault(
         execution,
     } = invocation;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::RecoverKeychainVault(result),
-        } => Ok((result, execution)),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::RecoverKeychainVault(result)) => Ok((result, execution)),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -142,14 +139,12 @@ pub(crate) fn helper_personal_sign(
         execution,
     } = invocation;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::PersonalSign(result),
-        } => Ok((result, execution)),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::PersonalSign(result)) => Ok((result, execution)),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -216,10 +211,10 @@ fn run_signer_helper(
         stdin.write_all(b"\n")?;
     }
 
-    let output = child.wait_with_output()?;
-    if output.stdout.is_empty() && !output.status.success() {
+    let output = wait_for_signer_helper_output(child, SIGNER_HELPER_TIMEOUT)?;
+    if output.stdout.is_empty() {
         anyhow::bail!(
-            "signer helper exited with {} before returning JSON; stderr: {}",
+            "signer helper returned empty stdout with {}; stderr: {}",
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
@@ -249,18 +244,37 @@ fn run_signer_helper(
     })
 }
 
+fn wait_for_signer_helper_output(mut child: Child, timeout: Duration) -> Result<Output> {
+    let started_at = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let output = child.wait_with_output()?;
+            anyhow::bail!(
+                "signer helper timed out after {} ms waiting for macOS LocalAuthentication; stderr: {}",
+                timeout.as_millis(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn inspect_signer_helper(helper: &SignerHelperArgs) -> Result<SignerHelperExecution> {
     let path = signer_helper_path(helper)?;
     let blake3 = hash_file_blake3(&path)?;
-    if let Some(expected) = expected_signer_helper_blake3(helper)? {
-        if expected != blake3 {
-            anyhow::bail!(
-                "signer helper BLAKE3 mismatch: expected {}, got {} for {}",
-                expected,
-                blake3,
-                path.display()
-            );
-        }
+    if let Some(expected) = expected_signer_helper_blake3(helper)?
+        && expected != blake3
+    {
+        anyhow::bail!(
+            "signer helper BLAKE3 mismatch: expected {}, got {} for {}",
+            expected,
+            blake3,
+            path.display()
+        );
     }
 
     Ok(SignerHelperExecution {

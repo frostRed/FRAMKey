@@ -1,7 +1,7 @@
 use super::*;
 use crate::save_image::SaveImageLayout;
 use crate::util::{keychain_dek_wrapper_aad, recovery_dek_wrapper_aad};
-use framkey_core::{Generation, WalletType};
+use framkey_core::{Generation, PolicyId, WalletType};
 use framkey_crypto::{SecretBytes, encode_hex};
 
 #[test]
@@ -17,7 +17,8 @@ fn test_save_image_builds_and_inspects() {
     assert!(inspection.active_slot_hash_valid);
     assert_eq!(inspection.slots[0].generation, 7);
     assert!(inspection.slots[0].payload_hash_valid);
-    assert!(inspection.slots[0].payload_preview.contains("fixture"));
+    assert!(inspection.slots[0].payload_preview.contains("redacted"));
+    assert!(!inspection.slots[0].payload_preview.contains("fixture"));
 }
 
 #[test]
@@ -101,6 +102,26 @@ fn keychain_encrypted_save_image_opens_with_matching_binding() {
 }
 
 #[test]
+fn encrypted_vault_image_debug_redacts_save_image_bytes() {
+    let kek = SecretBytes::new([0xC3; 32]);
+    let device_id = [0x11; 16];
+    let item_id = "io.framkey.kek:debug-fixture";
+    let built = build_keychain_encrypted_save_image(
+        DEFAULT_FRAM_SAVE_IMAGE_SIZE,
+        Generation(4),
+        item_id,
+        device_id,
+        &kek,
+    )
+    .unwrap();
+
+    let debug = format!("{built:?}");
+    assert!(debug.contains("save_image_len"));
+    assert!(!debug.contains("save_image: ["));
+    assert!(!debug.contains(&format!("{:?}", built.save_image)));
+}
+
+#[test]
 fn keychain_vault_with_recovery_pack_wraps_same_dek() {
     let kek = SecretBytes::new([0xC3; 32]);
     let device_id = [0x33; 16];
@@ -161,6 +182,55 @@ fn keychain_vault_with_recovery_pack_wraps_same_dek() {
         .decrypt(&recovery_root_key, &recovery_aad)
         .unwrap();
     assert_eq!(keychain_dek, recovery_dek);
+}
+
+#[test]
+fn vault_validation_rejects_blank_keychain_wrapper_binding() {
+    let kek = SecretBytes::new([0xC3; 32]);
+    let device_id = [0x33; 16];
+    let item_id = "io.framkey.kek:blank-wrapper-fixture";
+    let built = build_keychain_encrypted_save_image(
+        DEFAULT_FRAM_SAVE_IMAGE_SIZE,
+        Generation(6),
+        item_id,
+        device_id,
+        &kek,
+    )
+    .unwrap();
+    let payload = active_slot_payload(&built.save_image).unwrap();
+    let mut vault: VaultFile = serde_json::from_slice(payload).unwrap();
+    for wrapper in &mut vault.dek_wrappers {
+        if let DekWrapper::MacKeychain {
+            keychain_item_id, ..
+        } = wrapper
+        {
+            *keychain_item_id = " \t".to_owned();
+        }
+    }
+
+    let error = vault.validate().unwrap_err();
+    assert!(error.to_string().contains("must not be blank"));
+}
+
+#[test]
+fn vault_validation_rejects_inconsistent_recovery_policy() {
+    let kek = SecretBytes::new([0xC3; 32]);
+    let device_id = [0x33; 16];
+    let item_id = "io.framkey.kek:policy-fixture";
+    let built = build_keychain_encrypted_save_image_with_recovery(
+        DEFAULT_FRAM_SAVE_IMAGE_SIZE,
+        Generation(6),
+        item_id,
+        device_id,
+        &kek,
+    )
+    .unwrap();
+    let payload = active_slot_payload(&built.save_image).unwrap();
+    let mut vault: VaultFile = serde_json::from_slice(payload).unwrap();
+    vault.recovery_policy.policy_id = PolicyId::ZERO;
+
+    let error = vault.validate().unwrap_err();
+    assert!(error.to_string().contains("recovery wrapper"));
 }
 
 #[test]

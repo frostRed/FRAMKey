@@ -20,14 +20,14 @@ impl MacKeychainItem {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.service.is_empty() {
+        if self.service.trim().is_empty() {
             return Err(FramkeyError::invalid_data(
-                "macOS Keychain service must not be empty",
+                "macOS Keychain service must not be blank",
             ));
         }
-        if self.account.is_empty() {
+        if self.account.trim().is_empty() {
             return Err(FramkeyError::invalid_data(
-                "macOS Keychain account must not be empty",
+                "macOS Keychain account must not be blank",
             ));
         }
         if self.service.contains('\0') || self.account.contains('\0') {

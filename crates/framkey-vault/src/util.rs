@@ -133,9 +133,9 @@ pub(crate) fn hex_16(value: &str, label: &str) -> Result<[u8; 16]> {
 }
 
 pub(crate) fn validate_keychain_wrapper_binding(keychain_item_id: &str) -> Result<()> {
-    if keychain_item_id.is_empty() {
+    if keychain_item_id.trim().is_empty() {
         return Err(FramkeyError::invalid_data(
-            "macOS Keychain item id must not be empty",
+            "macOS Keychain item id must not be blank",
         ));
     }
     if keychain_item_id.contains('\0') {

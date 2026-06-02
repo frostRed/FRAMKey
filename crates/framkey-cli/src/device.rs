@@ -5,7 +5,10 @@ use framkey_device::{FileImageDevice, SaveImage, SaveImageHash, VaultDevice};
 use framkey_gbxcart::{GbxCartConfig, GbxCartDevice};
 use serde_json::json;
 
-use crate::args::{DeviceCommand, DeviceTargetArgs, DeviceTargetKind};
+use crate::{
+    args::{DeviceCommand, DeviceTargetArgs, DeviceTargetKind},
+    files::write_new_file,
+};
 
 pub(crate) fn run_device(command: DeviceCommand) -> Result<()> {
     match command {
@@ -24,7 +27,7 @@ pub(crate) fn run_device(command: DeviceCommand) -> Result<()> {
         DeviceCommand::ReadSave(args) => {
             let device = open_device(&args.target)?;
             let image = device.read_save_image()?;
-            std::fs::write(&args.out, image.as_bytes())?;
+            write_new_file(&args.out, image.as_bytes())?;
             print_save_image_report("read_save", image, Some(args.out))?;
         }
         DeviceCommand::WriteSave(args) => {

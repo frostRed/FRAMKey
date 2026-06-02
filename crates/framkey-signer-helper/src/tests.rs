@@ -1,4 +1,5 @@
 use crate::{
+    io::classify_error,
     recovery::validate_recovery_files_drill,
     validation::{
         validate_expected_address, validate_personal_sign_message, validate_recovery_files,
@@ -7,9 +8,9 @@ use crate::{
 };
 use framkey_evm::EvmAddress;
 use framkey_ipc::{
-    MAX_SIGNER_HELPER_PERSONAL_SIGN_MESSAGE_BYTES, MAX_SIGNER_HELPER_SAVE_IMAGE_BYTES,
-    MAX_SIGNER_HELPER_TRANSACTION_DATA_BYTES, MAX_SIGNER_HELPER_TYPED_DATA_BYTES,
-    MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES,
+    IpcErrorCode, MAX_SIGNER_HELPER_PERSONAL_SIGN_MESSAGE_BYTES,
+    MAX_SIGNER_HELPER_SAVE_IMAGE_BYTES, MAX_SIGNER_HELPER_TRANSACTION_DATA_BYTES,
+    MAX_SIGNER_HELPER_TYPED_DATA_BYTES, MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES, SignerEvmTransaction,
 };
 
 #[test]
@@ -44,6 +45,21 @@ fn rejects_overlong_typed_data_payloads() {
         }
     });
     assert!(validate_typed_data_request(&typed_data).is_err());
+}
+
+#[test]
+fn rejects_malformed_typed_data_before_signing() {
+    let typed_data = serde_json::json!({
+        "types": {
+            "EIP712Domain": []
+        },
+        "primaryType": "Permit",
+        "domain": {},
+        "message": {}
+    });
+
+    let error = validate_typed_data_request(&typed_data).unwrap_err();
+    assert!(error.to_string().contains("primaryType Permit"));
 }
 
 #[test]
@@ -100,21 +116,28 @@ fn recovery_file_drill_reports_policy_without_returning_secrets() {
 
 #[test]
 fn rejects_overlong_transaction_data() {
-    let transaction = framkey_ipc::SignerEvmTransaction {
-        chain_id: 1,
-        nonce: "0x0".to_owned(),
-        gas_limit: "0x5208".to_owned(),
-        to: Some("0x0000000000000000000000000000000000000001".to_owned()),
-        value: "0x0".to_owned(),
+    let transaction = SignerEvmTransaction {
         data: format!(
             "0x{}",
             "00".repeat(MAX_SIGNER_HELPER_TRANSACTION_DATA_BYTES + 1)
         ),
-        gas_price: Some("0x1".to_owned()),
-        max_fee_per_gas: None,
-        max_priority_fee_per_gas: None,
+        ..valid_signer_transaction()
     };
     assert!(validate_sign_transaction_request(&transaction).is_err());
+}
+
+#[test]
+fn rejects_malformed_transactions_before_signing() {
+    let mut mixed_fees = valid_signer_transaction();
+    mixed_fees.max_fee_per_gas = Some("0x2".to_owned());
+    mixed_fees.max_priority_fee_per_gas = Some("0x1".to_owned());
+    let error = validate_sign_transaction_request(&mixed_fees).unwrap_err();
+    assert!(error.to_string().contains("cannot mix gasPrice"));
+
+    let mut bad_to = valid_signer_transaction();
+    bad_to.to = Some("0x1234".to_owned());
+    let error = validate_sign_transaction_request(&bad_to).unwrap_err();
+    assert!(error.to_string().contains("transaction to"));
 }
 
 #[test]
@@ -134,4 +157,27 @@ fn accepts_matching_expected_address() {
         .parse()
         .unwrap();
     validate_expected_address(actual, Some("0x0000000000000000000000000000000000000001")).unwrap();
+}
+
+#[test]
+fn classifies_local_authentication_errors_as_touch_id_failures() {
+    let error = anyhow::anyhow!(
+        "authorize FRAMKey local KEK access failed: macOS LocalAuthentication failed"
+    );
+
+    assert_eq!(classify_error(&error), IpcErrorCode::TouchIdFailed);
+}
+
+fn valid_signer_transaction() -> SignerEvmTransaction {
+    SignerEvmTransaction {
+        chain_id: 1,
+        nonce: "0x0".to_owned(),
+        gas_limit: "0x5208".to_owned(),
+        to: Some("0x0000000000000000000000000000000000000001".to_owned()),
+        value: "0x0".to_owned(),
+        data: "0x".to_owned(),
+        gas_price: Some("0x1".to_owned()),
+        max_fee_per_gas: None,
+        max_priority_fee_per_gas: None,
+    }
 }

@@ -171,9 +171,13 @@ fn decode_known_call(
     let selector = &bytes[..4];
     match selector {
         [0xa9, 0x05, 0x9c, 0xbb] => {
-            let Some((recipient, amount)) =
-                decode_address_amount_args(bytes, warnings, "erc20_transfer_calldata_short")
-            else {
+            let Some((recipient, amount)) = decode_address_amount_args(
+                bytes,
+                warnings,
+                "erc20_transfer_calldata_short",
+                "erc20_transfer_calldata_malformed",
+                "to",
+            ) else {
                 return;
             };
             *decoded_call = Some(decoded_call_value(
@@ -196,9 +200,13 @@ fn decode_known_call(
             });
         }
         [0x09, 0x5e, 0xa7, 0xb3] => {
-            let Some((spender, amount)) =
-                decode_address_amount_args(bytes, warnings, "erc20_approve_calldata_short")
-            else {
+            let Some((spender, amount)) = decode_address_amount_args(
+                bytes,
+                warnings,
+                "erc20_approve_calldata_short",
+                "erc20_approve_calldata_malformed",
+                "spender",
+            ) else {
                 return;
             };
             *decoded_call = Some(decoded_call_value(
@@ -511,18 +519,20 @@ fn decode_known_call(
 fn decode_address_amount_args(
     bytes: &[u8],
     warnings: &mut Vec<SimulationWarning>,
-    code: &str,
+    short_code: &str,
+    malformed_code: &str,
+    address_label: &str,
 ) -> Option<(String, TokenAmount)> {
     if bytes.len() < 4 + (32 * 2) {
         warnings.push(warning(
             WarningSeverity::Error,
-            code,
+            short_code,
             "calldata is too short for address,uint256 arguments",
         ));
         return None;
     }
     Some((
-        decode_address_word(&bytes[4..36]),
+        decode_address_word(&bytes[4..36], warnings, malformed_code, address_label)?,
         decode_u256_word(&bytes[36..68]),
     ))
 }
@@ -540,8 +550,18 @@ fn decode_transfer_from_args(
         return None;
     }
     Some((
-        decode_address_word(&bytes[4..36]),
-        decode_address_word(&bytes[36..68]),
+        decode_address_word(
+            &bytes[4..36],
+            warnings,
+            "erc20_transfer_from_calldata_malformed",
+            "from",
+        )?,
+        decode_address_word(
+            &bytes[36..68],
+            warnings,
+            "erc20_transfer_from_calldata_malformed",
+            "to",
+        )?,
         decode_u256_word(&bytes[68..100]),
     ))
 }
@@ -559,8 +579,18 @@ fn decode_operator_approval_args(
         return None;
     }
     Some((
-        decode_address_word(&bytes[4..36]),
-        decode_bool_word(&bytes[36..68]),
+        decode_address_word(
+            &bytes[4..36],
+            warnings,
+            "operator_approval_calldata_malformed",
+            "operator",
+        )?,
+        decode_bool_word(
+            &bytes[36..68],
+            warnings,
+            "operator_approval_calldata_malformed",
+            "approved",
+        )?,
     ))
 }
 
@@ -577,8 +607,18 @@ fn decode_nft_transfer_args(
         return None;
     }
     Some((
-        decode_address_word(&bytes[4..36]),
-        decode_address_word(&bytes[36..68]),
+        decode_address_word(
+            &bytes[4..36],
+            warnings,
+            "nft_transfer_calldata_malformed",
+            "from",
+        )?,
+        decode_address_word(
+            &bytes[36..68],
+            warnings,
+            "nft_transfer_calldata_malformed",
+            "to",
+        )?,
         decode_u256_word(&bytes[68..100]),
     ))
 }
@@ -596,7 +636,12 @@ fn decode_uniswap_v2_swap_exact_tokens_for_tokens_args(
     )?;
     let amount_in = decode_u256_word(argument_word(bytes, 0)?);
     let amount_out_min = decode_u256_word(argument_word(bytes, 1)?);
-    let to = decode_address_word(argument_word(bytes, 3)?);
+    let to = decode_address_word(
+        argument_word(bytes, 3)?,
+        warnings,
+        "uniswap_v2_swap_calldata_malformed",
+        "to",
+    )?;
     let deadline = decode_u256_word(argument_word(bytes, 4)?);
     let mut arguments = vec![
         arg("amountIn", "uint256", amount_in.decimal),
@@ -626,7 +671,12 @@ fn decode_uniswap_v2_swap_exact_eth_for_tokens_args(
         "calldata is too short for swapExactETHForTokens arguments",
     )?;
     let amount_out_min = decode_u256_word(argument_word(bytes, 0)?);
-    let to = decode_address_word(argument_word(bytes, 2)?);
+    let to = decode_address_word(
+        argument_word(bytes, 2)?,
+        warnings,
+        "uniswap_v2_swap_calldata_malformed",
+        "to",
+    )?;
     let deadline = decode_u256_word(argument_word(bytes, 3)?);
     let mut arguments = vec![
         arg("amountOutMin", "uint256", amount_out_min.decimal),
@@ -656,7 +706,12 @@ fn decode_uniswap_v2_swap_exact_tokens_for_eth_args(
     )?;
     let amount_in = decode_u256_word(argument_word(bytes, 0)?);
     let amount_out_min = decode_u256_word(argument_word(bytes, 1)?);
-    let to = decode_address_word(argument_word(bytes, 3)?);
+    let to = decode_address_word(
+        argument_word(bytes, 3)?,
+        warnings,
+        "uniswap_v2_swap_calldata_malformed",
+        "to",
+    )?;
     let deadline = decode_u256_word(argument_word(bytes, 4)?);
     let mut arguments = vec![
         arg("amountIn", "uint256", amount_in.decimal),
@@ -685,10 +740,25 @@ fn decode_uniswap_v3_exact_input_single_args(
         "uniswap_v3_exact_input_single_calldata_short",
         "calldata is too short for exactInputSingle arguments",
     )?;
-    let token_in = decode_address_word(argument_word(bytes, 0)?);
-    let token_out = decode_address_word(argument_word(bytes, 1)?);
+    let token_in = decode_address_word(
+        argument_word(bytes, 0)?,
+        warnings,
+        "uniswap_v3_exact_input_single_calldata_malformed",
+        "tokenIn",
+    )?;
+    let token_out = decode_address_word(
+        argument_word(bytes, 1)?,
+        warnings,
+        "uniswap_v3_exact_input_single_calldata_malformed",
+        "tokenOut",
+    )?;
     let fee = decode_u256_word(argument_word(bytes, 2)?);
-    let recipient = decode_address_word(argument_word(bytes, 3)?);
+    let recipient = decode_address_word(
+        argument_word(bytes, 3)?,
+        warnings,
+        "uniswap_v3_exact_input_single_calldata_malformed",
+        "recipient",
+    )?;
     let deadline = decode_u256_word(argument_word(bytes, 4)?);
     let amount_in = decode_u256_word(argument_word(bytes, 5)?);
     let amount_out_minimum = decode_u256_word(argument_word(bytes, 6)?);
@@ -723,7 +793,12 @@ fn decode_uniswap_v3_exact_input_args(
         "uniswap_v3_path_malformed",
         "path",
     )?;
-    let recipient = decode_address_word(argument_word(bytes, 1)?);
+    let recipient = decode_address_word(
+        argument_word(bytes, 1)?,
+        warnings,
+        "uniswap_v3_exact_input_calldata_malformed",
+        "recipient",
+    )?;
     let deadline = decode_u256_word(argument_word(bytes, 2)?);
     let amount_in = decode_u256_word(argument_word(bytes, 3)?);
     let amount_out_minimum = decode_u256_word(argument_word(bytes, 4)?);
@@ -824,13 +899,23 @@ fn decode_aave_supply_args(
         arg(
             "asset",
             "address",
-            decode_address_word(argument_word(bytes, 0)?),
+            decode_address_word(
+                argument_word(bytes, 0)?,
+                warnings,
+                "aave_supply_calldata_malformed",
+                "asset",
+            )?,
         ),
         arg("amount", "uint256", amount.decimal),
         arg(
             "onBehalfOf",
             "address",
-            decode_address_word(argument_word(bytes, 2)?),
+            decode_address_word(
+                argument_word(bytes, 2)?,
+                warnings,
+                "aave_supply_calldata_malformed",
+                "onBehalfOf",
+            )?,
         ),
         arg("referralCode", "uint16", referral_code.decimal),
     ])
@@ -852,13 +937,23 @@ fn decode_aave_withdraw_args(
         arg(
             "asset",
             "address",
-            decode_address_word(argument_word(bytes, 0)?),
+            decode_address_word(
+                argument_word(bytes, 0)?,
+                warnings,
+                "aave_withdraw_calldata_malformed",
+                "asset",
+            )?,
         ),
         arg("amount", "uint256", amount.decimal),
         arg(
             "to",
             "address",
-            decode_address_word(argument_word(bytes, 2)?),
+            decode_address_word(
+                argument_word(bytes, 2)?,
+                warnings,
+                "aave_withdraw_calldata_malformed",
+                "to",
+            )?,
         ),
     ])
 }
@@ -881,7 +976,12 @@ fn decode_aave_borrow_args(
         arg(
             "asset",
             "address",
-            decode_address_word(argument_word(bytes, 0)?),
+            decode_address_word(
+                argument_word(bytes, 0)?,
+                warnings,
+                "aave_borrow_calldata_malformed",
+                "asset",
+            )?,
         ),
         arg("amount", "uint256", amount.decimal),
         arg("interestRateMode", "uint256", rate_mode.decimal),
@@ -889,7 +989,12 @@ fn decode_aave_borrow_args(
         arg(
             "onBehalfOf",
             "address",
-            decode_address_word(argument_word(bytes, 4)?),
+            decode_address_word(
+                argument_word(bytes, 4)?,
+                warnings,
+                "aave_borrow_calldata_malformed",
+                "onBehalfOf",
+            )?,
         ),
     ])
 }
@@ -911,14 +1016,24 @@ fn decode_aave_repay_args(
         arg(
             "asset",
             "address",
-            decode_address_word(argument_word(bytes, 0)?),
+            decode_address_word(
+                argument_word(bytes, 0)?,
+                warnings,
+                "aave_repay_calldata_malformed",
+                "asset",
+            )?,
         ),
         arg("amount", "uint256", amount.decimal),
         arg("interestRateMode", "uint256", rate_mode.decimal),
         arg(
             "onBehalfOf",
             "address",
-            decode_address_word(argument_word(bytes, 3)?),
+            decode_address_word(
+                argument_word(bytes, 3)?,
+                warnings,
+                "aave_repay_calldata_malformed",
+                "onBehalfOf",
+            )?,
         ),
     ])
 }
@@ -938,12 +1053,23 @@ fn decode_aave_collateral_args(
         arg(
             "asset",
             "address",
-            decode_address_word(argument_word(bytes, 0)?),
+            decode_address_word(
+                argument_word(bytes, 0)?,
+                warnings,
+                "aave_collateral_calldata_malformed",
+                "asset",
+            )?,
         ),
         arg(
             "useAsCollateral",
             "bool",
-            decode_bool_word(argument_word(bytes, 1)?).to_string(),
+            decode_bool_word(
+                argument_word(bytes, 1)?,
+                warnings,
+                "aave_collateral_calldata_malformed",
+                "useAsCollateral",
+            )?
+            .to_string(),
         ),
     ])
 }
@@ -1052,7 +1178,12 @@ fn decode_address_array_summary(
         arguments.push(arg(
             "pathFirst",
             "address",
-            decode_address_word(&bytes[values_start..values_start + 32]),
+            decode_address_word(
+                &bytes[values_start..values_start + 32],
+                warnings,
+                code,
+                "path first address",
+            )?,
         ));
     }
     if count > 1 {
@@ -1060,7 +1191,12 @@ fn decode_address_array_summary(
         arguments.push(arg(
             "pathLast",
             "address",
-            decode_address_word(&bytes[last_start..last_start + 32]),
+            decode_address_word(
+                &bytes[last_start..last_start + 32],
+                warnings,
+                code,
+                "path last address",
+            )?,
         ));
     }
     Some(arguments)
@@ -1177,12 +1313,65 @@ fn decode_usize_word(word: &[u8]) -> Option<usize> {
     Some(value)
 }
 
-fn decode_address_word(word: &[u8]) -> String {
-    format!("0x{}", hex_lower(&word[12..32]))
+fn decode_address_word(
+    word: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    code: &str,
+    label: &str,
+) -> Option<String> {
+    if word.len() != 32 {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("ABI address field {label} is not 32 bytes"),
+        ));
+        return None;
+    }
+    if word[..12].iter().any(|byte| *byte != 0) {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("ABI address field {label} has non-zero left padding"),
+        ));
+        return None;
+    }
+    Some(format!("0x{}", hex_lower(&word[12..32])))
 }
 
-fn decode_bool_word(word: &[u8]) -> bool {
-    word[31] != 0
+fn decode_bool_word(
+    word: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    code: &str,
+    label: &str,
+) -> Option<bool> {
+    if word.len() != 32 {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("ABI bool field {label} is not 32 bytes"),
+        ));
+        return None;
+    }
+    if word[..31].iter().any(|byte| *byte != 0) {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("ABI bool field {label} has non-zero left padding"),
+        ));
+        return None;
+    }
+    match word[31] {
+        0 => Some(false),
+        1 => Some(true),
+        _ => {
+            warnings.push(warning(
+                WarningSeverity::Error,
+                code,
+                format!("ABI bool field {label} is not encoded as 0 or 1"),
+            ));
+            None
+        }
+    }
 }
 
 fn decode_u256_word(word: &[u8]) -> TokenAmount {
@@ -1225,14 +1414,14 @@ fn warn_if_malformed_address(
     field: &str,
     value: Option<&str>,
 ) {
-    if let Some(value) = value {
-        if !looks_like_eth_address(value) {
-            warnings.push(warning(
-                WarningSeverity::Error,
-                format!("malformed_{field}_address"),
-                format!("transaction {field} is not a 0x-prefixed 20-byte address"),
-            ));
-        }
+    if let Some(value) = value
+        && !looks_like_eth_address(value)
+    {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            format!("malformed_{field}_address"),
+            format!("transaction {field} is not a 0x-prefixed 20-byte address"),
+        ));
     }
 }
 

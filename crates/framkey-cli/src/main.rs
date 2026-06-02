@@ -1,6 +1,7 @@
 mod args;
 mod constants;
 mod device;
+mod files;
 mod recovery;
 mod signer;
 mod signer_helper;

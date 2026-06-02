@@ -26,6 +26,9 @@ impl FromStr for EvmAddress {
     type Err = FramkeyError;
 
     fn from_str(input: &str) -> Result<Self> {
+        let input = input
+            .strip_prefix("0x")
+            .ok_or_else(|| FramkeyError::invalid_data("EVM address must be 0x-prefixed"))?;
         let bytes = decode_hex_array::<20>(input)?;
         Ok(Self(bytes))
     }
@@ -40,7 +43,7 @@ pub enum EvmSigningKind {
     SendTransaction,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct EvmPersonalSignature {
     pub address: EvmAddress,
     pub message_hash: [u8; 32],
@@ -57,7 +60,18 @@ impl EvmPersonalSignature {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for EvmPersonalSignature {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EvmPersonalSignature")
+            .field("address", &self.address)
+            .field("message_hash", &self.message_hash_hex())
+            .field("signature_len", &self.signature.len())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct EvmTypedDataSignature {
     pub address: EvmAddress,
     pub typed_data_hash: [u8; 32],
@@ -71,6 +85,17 @@ impl EvmTypedDataSignature {
 
     pub fn typed_data_hash_hex(&self) -> String {
         encode_prefixed_hex(&self.typed_data_hash)
+    }
+}
+
+impl fmt::Debug for EvmTypedDataSignature {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EvmTypedDataSignature")
+            .field("address", &self.address)
+            .field("typed_data_hash", &self.typed_data_hash_hex())
+            .field("signature_len", &self.signature.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -94,7 +119,7 @@ pub enum EvmTransactionKind {
     Eip1559,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct EvmSignedTransaction {
     pub address: EvmAddress,
     pub kind: EvmTransactionKind,
@@ -109,5 +134,17 @@ impl EvmSignedTransaction {
 
     pub fn transaction_hash_hex(&self) -> String {
         encode_prefixed_hex(&self.transaction_hash)
+    }
+}
+
+impl fmt::Debug for EvmSignedTransaction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EvmSignedTransaction")
+            .field("address", &self.address)
+            .field("kind", &self.kind)
+            .field("transaction_hash", &self.transaction_hash_hex())
+            .field("raw_transaction_len", &self.raw_transaction.len())
+            .finish_non_exhaustive()
     }
 }

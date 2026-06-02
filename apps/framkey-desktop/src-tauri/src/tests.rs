@@ -2884,6 +2884,17 @@ fn mock_gas_fallback_distinguishes_native_and_contract_calls() {
     );
 }
 
+#[test]
+fn desktop_config_rejects_blank_keychain_names() {
+    let mut config = fixture_config();
+    config.keychain_service = " \t".to_owned();
+    assert!(config.validate().is_err());
+
+    let mut config = fixture_config();
+    config.keychain_account = "\n".to_owned();
+    assert!(config.validate().is_err());
+}
+
 fn fixture_config() -> DesktopConfig {
     DesktopConfig {
         chain_id: "0x1".to_owned(),

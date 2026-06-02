@@ -406,3 +406,96 @@ Turn the current mostly single-file Rust workspace into a modular, reviewable Ru
 - `cargo fmt --all -- --check`: passed.
 - `cargo check --workspace --tests`: passed.
 - `cargo nextest run --workspace`: passed, 177 tests.
+
+# Crate-by-Crate Quality and Security Audit
+
+Status: completed
+
+## Goal
+
+Review and harden the Rust workspace one crate at a time, in local dependency order, until the codebase has no known quality or security issues worth fixing in this pass.
+
+## Scope
+
+- Audit each crate's public API, error handling, parsing boundaries, filesystem/network/device interactions, secret handling, logging/output, and tests.
+- Prefer narrow fixes that remove real hazards or make an invariant enforceable.
+- Keep existing product flow and recovery/security model intact unless the audit finds a concrete bug.
+- Use dependency order so lower-level contracts are clean before higher-level crates build on them.
+
+Initial crate order:
+
+- `framkey-core`
+- `framkey-simulation`
+- `framkey-crypto`
+- `framkey-device`
+- `framkey-recovery`
+- `framkey-testkit`
+- `framkey-evm`
+- `framkey-gbxcart`
+- `framkey-ipc`
+- `framkey-keychain-macos`
+- `framkey-vault`
+- `framkey-native-host`
+- `framkey-signer-helper`
+- `framkey-cli`
+- `framkey-desktop`
+
+## Invariants
+
+- Do not log or persist wallet secrets, KEKs, DEKs, RRKs, recovery-root keys, recovery share bytes, private keys, raw signatures, Alchemy tokens, RPC URLs, or other sensitive material beyond existing sanitized public metadata.
+- Do not weaken Keychain, Touch ID, signer-helper, GBxCart, dApp permission, transaction policy, recovery validation, or owner-only local file behavior.
+- Keep encrypted vault backup durability separate from recovery authorization shares.
+- Preserve the documented backup policy: cloud-only is insufficient; recovery requires the grouped policy validated by signer-helper/library code.
+- Avoid broad refactors, dependency churn, or style-only edits.
+
+## Likely Files
+
+- `crates/*/Cargo.toml`
+- `crates/*/src/*.rs`
+- `apps/framkey-desktop/src-tauri/Cargo.toml`
+- `apps/framkey-desktop/src-tauri/src/*.rs`
+- `PLANS.md`
+
+## Verification
+
+- Check `RUSTC_WRAPPER` and `sccache --show-stats` before expensive Rust checks.
+- For each crate: run `cargo check -p <crate>` first, then `cargo nextest run -p <crate>` where tests exist.
+- Use focused tests for changed behavior before broader package checks.
+- Run `cargo fmt --all -- --check` after edits.
+- Run `cargo check --workspace --tests` and `cargo nextest run --workspace` before marking this audit complete.
+
+## Main Risks
+
+- Security-relevant code can look cleaner while changing trust boundaries; behavior changes must be backed by tests.
+- Higher-level crates may rely on permissive lower-level parsing; tightening must be compatible or explicitly migrated.
+- Desktop and helper flows involve hardware/Keychain/runtime state, so local automated checks may not cover every real-device path.
+
+## Progress
+
+- `framkey-core`: completed. Runtime code reviewed without behavioral changes; added focused tests for core serde wire format and error display. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-core`, `cargo nextest run -p framkey-core`, `cargo clippy -p framkey-core --all-targets -- -D warnings`.
+- `framkey-simulation`: completed. Tightened local calldata review by rejecting non-canonical ABI address padding and bool encodings instead of displaying potentially misleading decoded approvals/transfers; changed Alchemy evidence stored in simulation reports from full provider JSON to sanitized provider evidence. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-simulation`, `cargo nextest run -p framkey-simulation`, `cargo clippy -p framkey-simulation --all-targets -- -D warnings`.
+- `framkey-crypto`: completed. Removed unused invalid `AeadBox::placeholder` constructor, redacted `AeadBox` debug output, and added focused tests for AEAD tamper rejection, strict hex parsing, and non-leaking secret/sealed-material debug output. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-crypto`, `cargo nextest run -p framkey-crypto`, `cargo clippy -p framkey-crypto --all-targets -- -D warnings`.
+- `framkey-device`: completed. Hardened file-image creation to use owner-only `0600` permissions on Unix/macOS and added tests for file permissions plus malformed save-image hashes. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-device`, `cargo nextest run -p framkey-device`, `cargo clippy -p framkey-device --all-targets -- -D warnings`.
+- `framkey-recovery`: completed. Replaced secret-bearing derived Debug output with redacted Debug for recovery files, vault-backup bytes, and recovery entropy; added regression coverage and fixed a clippy-reported hex parser style issue. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-recovery`, `cargo nextest run -p framkey-recovery`, `cargo clippy -p framkey-recovery --all-targets -- -D warnings`.
+- `framkey-testkit`: completed. Reviewed in-memory device semantics and added a regression test for probe/read/write behavior. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-testkit`, `cargo nextest run -p framkey-testkit`, `cargo clippy -p framkey-testkit --all-targets -- -D warnings`.
+- `framkey-evm`: completed. Required `0x`-prefixed EVM addresses, rejected transactions that mix legacy `gasPrice` with EIP-1559 fee fields, exposed a no-secret transaction validation API for signer-helper preflight, and redacted reusable signatures/raw transactions from Debug output. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-evm`, `cargo nextest run -p framkey-evm`, `cargo clippy -p framkey-evm --all-targets -- -D warnings`.
+- `framkey-gbxcart`: completed. Rejected empty explicit port hints before serial open and fixed the clippy-reported selected-save-type branch. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-gbxcart`, `cargo nextest run -p framkey-gbxcart`, `cargo clippy -p framkey-gbxcart --all-targets -- -D warnings`.
+- `framkey-ipc`: completed. Boxed the large successful signer-helper response variant behind constructor/decoder helpers without changing JSON wire format, migrated direct callers, and added native-message framing boundary tests. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-ipc`, `cargo nextest run -p framkey-ipc`, `cargo clippy -p framkey-ipc --all-targets -- -D warnings`, plus `cargo check -p framkey-signer-helper`, `cargo check -p framkey-native-host`, `cargo check -p framkey-cli`, and `cargo check -p framkey-desktop`.
+- `framkey-keychain-macos`: completed. Removed module-inception structure, rejected blank Keychain service/account values, and made LocalAuthentication error wording policy-neutral. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-keychain-macos`, `cargo nextest run -p framkey-keychain-macos`, `cargo clippy -p framkey-keychain-macos --all-targets -- -D warnings`.
+- `framkey-vault`: completed. Strengthened vault validation for wrapper bindings and recovery policy consistency, redacted save-image payload previews and vault image debug output, and fixed the clippy-reported layout divisibility check. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-vault`, `cargo nextest run -p framkey-vault`, `cargo clippy -p framkey-vault --all-targets -- -D warnings`.
+- `framkey-native-host`: completed. Added a bounded signer-helper wait matching desktop's LocalAuthentication timeout, rejected blank Keychain config names, preserved LocalAuthentication-to-TouchIdFailed IPC classification after error wording cleanup, and fixed clippy-reported config style issues. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-native-host`, `cargo nextest run -p framkey-native-host`, `cargo clippy -p framkey-native-host --all-targets -- -D warnings`.
+- `framkey-signer-helper`: completed. Moved typed-data and transaction structure validation ahead of Keychain/Touch ID unlock by reusing EVM parsers, preserved LocalAuthentication error classification, and added focused validation tests. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-signer-helper`, `cargo nextest run -p framkey-signer-helper`, `cargo clippy -p framkey-signer-helper --all-targets -- -D warnings`.
+- `framkey-cli`: completed. Centralized output-file creation as create-new owner-only writes for save images and recovery bundles, added a bounded signer-helper wait, improved empty-helper-output errors, and fixed clippy-reported helper hash checking. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-cli`, `cargo nextest run -p framkey-cli`, `cargo clippy -p framkey-cli --all-targets -- -D warnings`.
+- `framkey-desktop`: completed. Cleared desktop clippy findings, rejected blank Keychain service/account config at the app boundary, preserved LocalAuthentication cancellation mapping, and kept existing trusted-review/recovery/UI behavior intact. Verification passed: `cargo fmt --all -- --check`, `cargo check -p framkey-desktop`, `cargo nextest run -p framkey-desktop`, `cargo clippy -p framkey-desktop --all-targets -- -D warnings`, `node --check apps/framkey-desktop/ui/main.js`, `node --check apps/framkey-desktop/ui/dapp.js`, and `node --test apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`.
+
+## Completed Verification
+
+- `cargo build -p framkey-signer-helper`: passed.
+- `cargo fmt --all -- --check`: passed.
+- `cargo check --workspace --tests`: passed.
+- `cargo nextest run --workspace`: passed, 210 tests.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `node --check apps/framkey-desktop/ui/main.js`: passed.
+- `node --check apps/framkey-desktop/ui/dapp.js`: passed.
+- `node --test apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`: passed.
+- `git diff --check`: passed.

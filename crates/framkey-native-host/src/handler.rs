@@ -2,8 +2,8 @@ use anyhow::Result;
 use framkey_device::{FileImageDevice, VaultDevice};
 use framkey_gbxcart::{GbxCartConfig, GbxCartDevice};
 use framkey_ipc::{
-    IpcError, IpcErrorCode, IpcRequest, IpcResponse, SignerHelperRequest, SignerHelperResponse,
-    SignerHelperResult, SignerOpenKeychainVaultRequest, SignerOpenKeychainVaultResponse,
+    IpcError, IpcErrorCode, IpcRequest, IpcResponse, SignerHelperRequest, SignerHelperResult,
+    SignerOpenKeychainVaultRequest, SignerOpenKeychainVaultResponse,
 };
 use serde_json::{Value, json};
 
@@ -152,14 +152,12 @@ fn open_keychain_vault_with_helper(
         }),
     )?;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::OpenKeychainVault(result),
-        } => Ok(result),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::OpenKeychainVault(result)) => Ok(result),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }

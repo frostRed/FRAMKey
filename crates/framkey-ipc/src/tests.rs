@@ -10,6 +10,62 @@ fn round_trips_native_message_payload() {
 }
 
 #[test]
+fn rejects_truncated_native_message_header() {
+    let mut wire = [1_u8, 0, 0].as_slice();
+
+    let error = read_native_message(&mut wire).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("truncated native messaging header")
+    );
+}
+
+#[test]
+fn rejects_oversized_native_message_from_header() {
+    let header = ((MAX_NATIVE_MESSAGE_BYTES + 1) as u32).to_le_bytes();
+    let mut wire = header.as_slice();
+
+    let error = read_native_message(&mut wire).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("native message exceeds 1048576 bytes")
+    );
+}
+
+#[test]
+fn signer_helper_ok_response_wire_format_is_stable() {
+    let response = SignerHelperResponse::ok(SignerHelperResult::ValidateRecoveryFiles(
+        SignerValidateRecoveryFilesResponse {
+            backup_set_id: "backup".to_owned(),
+            wallet_id: "wallet".to_owned(),
+            generation: 7,
+            policy_id: "two-cloud-one-local".to_owned(),
+            recovery_share_file_count: 3,
+            satisfied_groups: vec!["local".to_owned(), "cloud".to_owned()],
+            can_recover: true,
+            failure_reason: None,
+        },
+    ));
+
+    let encoded = serde_json::to_value(&response).unwrap();
+    assert_eq!(encoded["status"], "ok");
+    assert_eq!(encoded["result"]["kind"], "validate_recovery_files");
+    assert_eq!(encoded["result"]["canRecover"], true);
+
+    let decoded: SignerHelperResponse = serde_json::from_value(encoded).unwrap();
+    assert!(matches!(
+        decoded.into_result().unwrap(),
+        SignerHelperResult::ValidateRecoveryFiles(SignerValidateRecoveryFilesResponse {
+            can_recover: true,
+            recovery_share_file_count: 3,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn serializes_sign_transaction_request_kind() {
     let request = SignerHelperRequest::SignTransaction(SignerSignTransactionRequest {
         save_image: vec![0_u8; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],

@@ -134,13 +134,12 @@ impl DesktopConfig {
                 expected_save_size: env_usize("FRAMKEY_EXPECTED_SAVE_SIZE")?,
             };
         }
-        if let Ok(save_type) = std::env::var("FRAMKEY_GBA_SAVE_TYPE") {
-            if let DeviceConfig::GbxCart {
+        if let Ok(save_type) = std::env::var("FRAMKEY_GBA_SAVE_TYPE")
+            && let DeviceConfig::GbxCart {
                 save_type: current, ..
             } = &mut self.device
-            {
-                *current = parse_save_type(&save_type)?;
-            }
+        {
+            *current = parse_save_type(&save_type)?;
         }
         if let Ok(service) = std::env::var("FRAMKEY_KEYCHAIN_SERVICE") {
             self.keychain_service = service;
@@ -175,8 +174,8 @@ impl DesktopConfig {
 
     pub(crate) fn validate(&self) -> Result<()> {
         validate_chain_id(&self.chain_id)?;
-        if self.keychain_service.is_empty() || self.keychain_account.is_empty() {
-            anyhow::bail!("desktop Keychain service/account must not be empty");
+        if self.keychain_service.trim().is_empty() || self.keychain_account.trim().is_empty() {
+            anyhow::bail!("desktop Keychain service/account must not be blank");
         }
         self.simulation.validate()?;
         if let Some(rpc) = &self.rpc {
@@ -258,6 +257,7 @@ impl DesktopConfig {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn simulation_config_from_env(
     current: &DesktopSimulationConfig,
     provider: Option<&str>,
@@ -530,15 +530,15 @@ impl DeviceConfig {
                 ..
             } => {
                 let size = save_type.save_size();
-                if let Some(expected) = expected_save_size {
-                    if *expected != size {
-                        anyhow::bail!(
-                            "expected save size {} does not match {} ({})",
-                            expected,
-                            save_type.label(),
-                            size
-                        );
-                    }
+                if let Some(expected) = expected_save_size
+                    && *expected != size
+                {
+                    anyhow::bail!(
+                        "expected save size {} does not match {} ({})",
+                        expected,
+                        save_type.label(),
+                        size
+                    );
                 }
                 size
             }
@@ -910,10 +910,10 @@ impl RecoverySmokePackRequest {
                 anyhow::bail!("recovery smoke generation is unexpectedly large");
             }
         }
-        if let Some(out_dir) = &self.out_dir {
-            if out_dir.trim().is_empty() || out_dir.chars().any(char::is_control) {
-                anyhow::bail!("recovery smoke output directory is malformed");
-            }
+        if let Some(out_dir) = &self.out_dir
+            && (out_dir.trim().is_empty() || out_dir.chars().any(char::is_control))
+        {
+            anyhow::bail!("recovery smoke output directory is malformed");
         }
         Ok(())
     }
@@ -1594,11 +1594,9 @@ pub(crate) fn error_to_provider_error(error: anyhow::Error) -> ProviderError {
         || message.contains("expired before approval")
         || message.contains("superseded by a newer connect or disconnect request")
         || message.contains("Touch ID")
+        || message.contains("LocalAuthentication")
     {
         4001
-    } else if message.contains("card") || message.contains("GBxCart") || message.contains("serial")
-    {
-        4900
     } else {
         4900
     };

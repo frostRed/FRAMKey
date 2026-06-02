@@ -1,3 +1,5 @@
+use std::fmt;
+
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit, Payload},
@@ -14,7 +16,7 @@ pub enum AeadAlg {
     XChaCha20Poly1305,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AeadBox {
     pub alg: AeadAlg,
     pub nonce: [u8; 24],
@@ -22,16 +24,17 @@ pub struct AeadBox {
     pub ciphertext: Vec<u8>,
 }
 
-impl AeadBox {
-    pub fn placeholder(ciphertext: Vec<u8>) -> Self {
-        Self {
-            alg: AeadAlg::XChaCha20Poly1305,
-            nonce: [0; 24],
-            aad_hash: [0; 32],
-            ciphertext,
-        }
+impl fmt::Debug for AeadBox {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AeadBox")
+            .field("alg", &self.alg)
+            .field("ciphertext_len", &self.ciphertext.len())
+            .finish_non_exhaustive()
     }
+}
 
+impl AeadBox {
     pub fn encrypt(key: &SecretBytes<32>, aad: &[u8], plaintext: &[u8]) -> Result<Self> {
         let nonce = random_array::<24>()?;
         Self::encrypt_with_nonce(key, nonce, aad, plaintext)

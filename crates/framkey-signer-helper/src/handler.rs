@@ -55,8 +55,8 @@ pub(crate) fn run() -> Result<()> {
                     &loaded.kek,
                 )?
             };
-            SignerHelperResponse::Ok {
-                result: SignerHelperResult::BuildKeychainVault(SignerBuildKeychainVaultResponse {
+            SignerHelperResponse::ok(SignerHelperResult::BuildKeychainVault(
+                SignerBuildKeychainVaultResponse {
                     save_image: built.save_image,
                     keychain_service: loaded.item.service,
                     keychain_account: loaded.item.account,
@@ -67,8 +67,8 @@ pub(crate) fn run() -> Result<()> {
                     created_keychain_kek: loaded.created,
                     metadata: encrypted_metadata_to_ipc(built.metadata),
                     recovery_backup_pack: built.recovery_backup_pack,
-                }),
-            }
+                },
+            ))
         }
         SignerHelperRequest::RecoverKeychainVault(request) => {
             validate_save_image_size(request.save_image.len())?;
@@ -83,30 +83,26 @@ pub(crate) fn run() -> Result<()> {
                 loaded.device_id,
                 &loaded.kek,
             )?;
-            SignerHelperResponse::Ok {
-                result: SignerHelperResult::RecoverKeychainVault(
-                    SignerRecoverKeychainVaultResponse {
-                        save_image: recovered.save_image,
-                        keychain_service: loaded.item.service,
-                        keychain_account: loaded.item.account,
-                        keychain_item_id: loaded.keychain_item_id,
-                        keychain_access_policy: loaded.access_policy.as_str().to_owned(),
-                        device_id: encode_hex(&loaded.device_id),
-                        kek_id: encode_hex(&loaded.kek_id),
-                        created_keychain_kek: loaded.created,
-                        metadata: metadata_to_ipc(recovered.metadata, None),
-                        recovery_share_file_count: request.recovery_files.len(),
-                    },
-                ),
-            }
+            SignerHelperResponse::ok(SignerHelperResult::RecoverKeychainVault(
+                SignerRecoverKeychainVaultResponse {
+                    save_image: recovered.save_image,
+                    keychain_service: loaded.item.service,
+                    keychain_account: loaded.item.account,
+                    keychain_item_id: loaded.keychain_item_id,
+                    keychain_access_policy: loaded.access_policy.as_str().to_owned(),
+                    device_id: encode_hex(&loaded.device_id),
+                    kek_id: encode_hex(&loaded.kek_id),
+                    created_keychain_kek: loaded.created,
+                    metadata: metadata_to_ipc(recovered.metadata, None),
+                    recovery_share_file_count: request.recovery_files.len(),
+                },
+            ))
         }
         SignerHelperRequest::ValidateRecoveryFiles(request) => {
             validate_recovery_files(request.recovery_files.len())?;
-            SignerHelperResponse::Ok {
-                result: SignerHelperResult::ValidateRecoveryFiles(validate_recovery_files_drill(
-                    &request.recovery_files,
-                )?),
-            }
+            SignerHelperResponse::ok(SignerHelperResult::ValidateRecoveryFiles(
+                validate_recovery_files_drill(&request.recovery_files)?,
+            ))
         }
         SignerHelperRequest::OpenKeychainVault(request) => {
             validate_save_image_size(request.save_image.len())?;
@@ -128,8 +124,8 @@ pub(crate) fn run() -> Result<()> {
                     Ok((wallet_secret_hash, address))
                 },
             )?;
-            SignerHelperResponse::Ok {
-                result: SignerHelperResult::OpenKeychainVault(SignerOpenKeychainVaultResponse {
+            SignerHelperResponse::ok(SignerHelperResult::OpenKeychainVault(
+                SignerOpenKeychainVaultResponse {
                     keychain_service: loaded.item.service,
                     keychain_account: loaded.item.account,
                     keychain_item_id: loaded.keychain_item_id,
@@ -138,8 +134,8 @@ pub(crate) fn run() -> Result<()> {
                     kek_id: encode_hex(&loaded.kek_id),
                     metadata: metadata_to_ipc(metadata, Some(wallet_secret_hash)),
                     address: address.map(|address| address.to_string()),
-                }),
-            }
+                },
+            ))
         }
         SignerHelperRequest::PersonalSign(request) => {
             validate_save_image_size(request.save_image.len())?;
@@ -164,8 +160,8 @@ pub(crate) fn run() -> Result<()> {
                 },
             )?;
 
-            SignerHelperResponse::Ok {
-                result: SignerHelperResult::PersonalSign(SignerPersonalSignResponse {
+            SignerHelperResponse::ok(SignerHelperResult::PersonalSign(
+                SignerPersonalSignResponse {
                     keychain_service: loaded.item.service,
                     keychain_account: loaded.item.account,
                     keychain_item_id: loaded.keychain_item_id,
@@ -176,8 +172,8 @@ pub(crate) fn run() -> Result<()> {
                     address: signed.address.to_string(),
                     message_hash: signed.message_hash_hex(),
                     signature: signed.signature_hex(),
-                }),
-            }
+                },
+            ))
         }
         SignerHelperRequest::SignTypedData(request) => {
             validate_save_image_size(request.save_image.len())?;
@@ -202,8 +198,8 @@ pub(crate) fn run() -> Result<()> {
                 },
             )?;
 
-            SignerHelperResponse::Ok {
-                result: SignerHelperResult::SignTypedData(SignerSignTypedDataResponse {
+            SignerHelperResponse::ok(SignerHelperResult::SignTypedData(
+                SignerSignTypedDataResponse {
                     keychain_service: loaded.item.service,
                     keychain_account: loaded.item.account,
                     keychain_item_id: loaded.keychain_item_id,
@@ -214,8 +210,8 @@ pub(crate) fn run() -> Result<()> {
                     address: signed.address.to_string(),
                     typed_data_hash: signed.typed_data_hash_hex(),
                     signature: signed.signature_hex(),
-                }),
-            }
+                },
+            ))
         }
         SignerHelperRequest::SignTransaction(request) => {
             validate_save_image_size(request.save_image.len())?;
@@ -251,8 +247,8 @@ pub(crate) fn run() -> Result<()> {
                 },
             )?;
 
-            SignerHelperResponse::Ok {
-                result: SignerHelperResult::SignTransaction(SignerSignTransactionResponse {
+            SignerHelperResponse::ok(SignerHelperResult::SignTransaction(
+                SignerSignTransactionResponse {
                     keychain_service: loaded.item.service,
                     keychain_account: loaded.item.account,
                     keychain_item_id: loaded.keychain_item_id,
@@ -264,8 +260,8 @@ pub(crate) fn run() -> Result<()> {
                     transaction_kind: transaction_kind_name(signed.kind).to_owned(),
                     transaction_hash: signed.transaction_hash_hex(),
                     raw_transaction: signed.raw_transaction_hex(),
-                }),
-            }
+                },
+            ))
         }
     };
 

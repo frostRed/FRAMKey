@@ -43,6 +43,7 @@ impl ReviewQueue {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn capture_with_asset_context(
         &mut self,
         provider_request_id: String,

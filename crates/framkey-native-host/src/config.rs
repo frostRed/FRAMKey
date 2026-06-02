@@ -103,13 +103,12 @@ impl NativeHostConfig {
                 expected_save_size: env_usize("FRAMKEY_EXPECTED_SAVE_SIZE")?,
             };
         }
-        if let Ok(save_type) = std::env::var("FRAMKEY_GBA_SAVE_TYPE") {
-            if let NativeDeviceConfig::GbxCart {
+        if let Ok(save_type) = std::env::var("FRAMKEY_GBA_SAVE_TYPE")
+            && let NativeDeviceConfig::GbxCart {
                 save_type: current, ..
             } = &mut self.device
-            {
-                *current = parse_save_type(&save_type)?;
-            }
+        {
+            *current = parse_save_type(&save_type)?;
         }
         if let Ok(service) = std::env::var("FRAMKEY_KEYCHAIN_SERVICE") {
             self.keychain_service = service;
@@ -132,10 +131,10 @@ impl NativeHostConfig {
         Ok(())
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         validate_chain_id(&self.chain_id)?;
-        if self.keychain_service.is_empty() || self.keychain_account.is_empty() {
-            anyhow::bail!("native host Keychain service/account must not be empty");
+        if self.keychain_service.trim().is_empty() || self.keychain_account.trim().is_empty() {
+            anyhow::bail!("native host Keychain service/account must not be blank");
         }
         Ok(())
     }
@@ -290,10 +289,9 @@ pub(crate) fn default_signer_helper_path() -> Result<PathBuf> {
     let dir = current_exe
         .parent()
         .ok_or_else(|| anyhow::anyhow!("current executable has no parent directory"))?;
-    Ok(dir
-        .join("framkey-signer-helper")
+    dir.join("framkey-signer-helper")
         .canonicalize()
-        .context("failed to resolve default signer helper next to native host")?)
+        .context("failed to resolve default signer helper next to native host")
 }
 
 pub(crate) fn default_helper_sandbox(allow_unsandboxed: bool) -> Result<SignerHelperSandbox> {

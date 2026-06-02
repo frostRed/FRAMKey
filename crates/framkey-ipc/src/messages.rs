@@ -143,8 +143,27 @@ pub struct SignerEvmTransaction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum SignerHelperResponse {
-    Ok { result: SignerHelperResult },
+    Ok { result: Box<SignerHelperResult> },
     Error { error: IpcError },
+}
+
+impl SignerHelperResponse {
+    pub fn ok(result: SignerHelperResult) -> Self {
+        Self::Ok {
+            result: Box::new(result),
+        }
+    }
+
+    pub fn error(error: IpcError) -> Self {
+        Self::Error { error }
+    }
+
+    pub fn into_result(self) -> std::result::Result<SignerHelperResult, IpcError> {
+        match self {
+            Self::Ok { result } => Ok(*result),
+            Self::Error { error } => Err(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

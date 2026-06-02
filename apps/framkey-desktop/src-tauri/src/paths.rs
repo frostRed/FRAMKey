@@ -159,11 +159,11 @@ pub(crate) fn signer_helper_path_candidates(current_exe: &Path) -> Result<Vec<Pa
         .parent()
         .ok_or_else(|| anyhow::anyhow!("current executable has no parent directory"))?;
     let mut roots = vec![dir.to_path_buf()];
-    if dir.file_name().and_then(|name| name.to_str()) == Some("MacOS") {
-        if let Some(contents) = dir.parent() {
-            roots.push(contents.join("Resources"));
-            roots.push(contents.join("Resources/binaries"));
-        }
+    if dir.file_name().and_then(|name| name.to_str()) == Some("MacOS")
+        && let Some(contents) = dir.parent()
+    {
+        roots.push(contents.join("Resources"));
+        roots.push(contents.join("Resources/binaries"));
     }
 
     let names = signer_helper_file_names();

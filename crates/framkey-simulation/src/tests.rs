@@ -778,6 +778,69 @@ fn warns_on_unknown_selector() {
 }
 
 #[test]
+fn malformed_abi_address_padding_fails_closed() {
+    let review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "to": "0x000000000000000000000000000000000000000b",
+                "data": concat!(
+                    "0x095ea7b3",
+                    "010000000000000000000000000000000000000000000000000000000000000c",
+                    "0000000000000000000000000000000000000000000000000000000000000001"
+                )
+            }
+        ]),
+        "0x1",
+    );
+
+    assert_eq!(review.simulation.status, SimulationStatus::InvalidRequest);
+    assert!(review.simulation.decoded_call.is_none());
+    assert!(review.simulation.approvals.is_empty());
+    assert!(
+        review
+            .simulation
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "erc20_approve_calldata_malformed")
+    );
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
+    assert!(!review.policy.override_allowed);
+}
+
+#[test]
+fn malformed_abi_bool_fails_closed() {
+    let review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "from": "0x000000000000000000000000000000000000000a",
+                "to": "0x000000000000000000000000000000000000000b",
+                "data": concat!(
+                    "0xa22cb465",
+                    "000000000000000000000000000000000000000000000000000000000000000c",
+                    "0000000000000000000000000000000000000000000000000000000000000002"
+                )
+            }
+        ]),
+        "0x1",
+    );
+
+    assert_eq!(review.simulation.status, SimulationStatus::InvalidRequest);
+    assert!(review.simulation.decoded_call.is_none());
+    assert!(review.simulation.approvals.is_empty());
+    assert!(
+        review
+            .simulation
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "operator_approval_calldata_malformed")
+    );
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
+    assert!(!review.policy.override_allowed);
+}
+
+#[test]
 fn invalid_params_stay_reportable() {
     let review = local_transaction_review("eth_sendTransaction", &json!([]), "0x1");
     let report = &review.simulation;
@@ -969,6 +1032,21 @@ fn alchemy_rpc_adapter_posts_json_rpc_payload() {
         review.simulation.status,
         SimulationStatus::ProviderSimulated
     );
+    assert_eq!(
+        review.simulation.raw_provider_response,
+        Some(json!({
+            "provider": "alchemy_simulateAssetChanges",
+            "httpStatus": 200,
+            "jsonRpcError": false,
+            "jsonRpcErrorCode": null,
+            "resultError": false,
+            "changeCount": 1,
+        }))
+    );
+    let provider_evidence =
+        serde_json::to_string(&review.simulation.raw_provider_response).unwrap();
+    assert!(!provider_evidence.contains("USDC"));
+    assert!(!provider_evidence.contains("USD Coin"));
     assert_eq!(review.simulation.asset_transfers.len(), 1);
     assert_eq!(
         review.simulation.asset_transfers[0],
@@ -1042,6 +1120,20 @@ fn alchemy_rpc_adapter_fails_closed_on_rpc_error() {
     );
 
     assert_eq!(review.simulation.status, SimulationStatus::ProviderFailed);
+    assert_eq!(
+        review.simulation.raw_provider_response,
+        Some(json!({
+            "provider": "alchemy_simulateAssetChanges",
+            "httpStatus": 200,
+            "jsonRpcError": true,
+            "jsonRpcErrorCode": -32000,
+            "resultError": false,
+            "changeCount": null,
+        }))
+    );
+    let provider_evidence =
+        serde_json::to_string(&review.simulation.raw_provider_response).unwrap();
+    assert!(!provider_evidence.contains("simulation failed"));
     assert!(
         review
             .policy

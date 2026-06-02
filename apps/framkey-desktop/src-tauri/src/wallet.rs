@@ -149,6 +149,7 @@ pub(crate) fn rpc_health_snapshot(config: &DesktopConfig) -> Result<Value> {
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn rpc_health_result(
     config: &DesktopConfig,
     status: &str,
@@ -259,6 +260,7 @@ pub(crate) fn wallet_assets_snapshot(state: &AppState, config: &DesktopConfig) -
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wallet_assets_result(
     config: &DesktopConfig,
     address: &str,
@@ -623,10 +625,12 @@ pub(crate) fn token_metadata_decimals(value: Option<&Value>) -> Value {
     if let Some(decimals) = value.as_u64() {
         return json!(decimals.min(255));
     }
-    if let Some(decimals) = value.as_f64() {
-        if decimals.is_finite() && decimals.fract() == 0.0 && decimals >= 0.0 {
-            return json!((decimals as u64).min(255));
-        }
+    if let Some(decimals) = value.as_f64()
+        && decimals.is_finite()
+        && decimals.fract() == 0.0
+        && decimals >= 0.0
+    {
+        return json!((decimals as u64).min(255));
     }
     Value::Null
 }

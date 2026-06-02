@@ -1,5 +1,5 @@
 #[cfg(target_os = "macos")]
-mod platform {
+mod imp {
     use framkey_core::{FramkeyError, Result};
     use framkey_crypto::{SecretBytes, random_array};
     use localauthentication::{LAContext, LAError, LAPolicy};
@@ -388,6 +388,19 @@ mod platform {
         }
     }
 
+    fn map_security_error(operation: &str, error: SecurityError) -> FramkeyError {
+        FramkeyError::unsupported(format!(
+            "{operation} failed with Security.framework status {}",
+            error.code()
+        ))
+    }
+
+    fn map_local_auth_error(operation: &str, error: LAError) -> FramkeyError {
+        FramkeyError::unsupported(format!(
+            "{operation} failed: macOS LocalAuthentication failed ({error})"
+        ))
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -459,23 +472,10 @@ mod platform {
             );
         }
     }
-
-    fn map_security_error(operation: &str, error: SecurityError) -> FramkeyError {
-        FramkeyError::unsupported(format!(
-            "{operation} failed with Security.framework status {}",
-            error.code()
-        ))
-    }
-
-    fn map_local_auth_error(operation: &str, error: LAError) -> FramkeyError {
-        FramkeyError::unsupported(format!(
-            "{operation} failed: Touch ID authorization failed ({error})"
-        ))
-    }
 }
 
 #[cfg(not(target_os = "macos"))]
-mod platform {
+mod imp {
     use framkey_core::{FramkeyError, Result};
     use framkey_crypto::{SecretBytes, random_array};
 
@@ -528,7 +528,7 @@ mod platform {
 }
 
 #[cfg(target_os = "macos")]
-pub use self::platform::*;
+pub use self::imp::*;
 
 #[cfg(not(target_os = "macos"))]
-pub use self::platform::*;
+pub use self::imp::*;

@@ -4,10 +4,10 @@ use serde_json::{Value, json};
 
 use crate::{
     alchemy::{
-        alchemy_result_error, alchemy_rpc_payload, alchemy_transport_error_message,
-        apply_alchemy_asset_changes, mark_provider_failed,
+        alchemy_response_evidence, alchemy_result_error, alchemy_rpc_payload,
+        alchemy_transport_error_message, apply_alchemy_asset_changes, mark_provider_failed,
     },
-    decoder::{local_transaction_report, preview_string, warning},
+    decoder::{local_transaction_report, warning},
     model::{
         SimulationMode, SimulationStatus, TransactionSimulationReport,
         TransactionSimulationRequest, WarningSeverity,
@@ -89,7 +89,10 @@ impl TransactionSimulationClient for AlchemyRpcSimulationClient {
                 mark_provider_failed(
                     &mut report,
                     "simulation_client_error",
-                    format!("failed to create Alchemy RPC client: {error}"),
+                    format!(
+                        "failed to create Alchemy RPC client: {}",
+                        error.without_url()
+                    ),
                     None,
                 );
                 return report;
@@ -117,11 +120,11 @@ impl TransactionSimulationClient for AlchemyRpcSimulationClient {
         let status = response.status();
         let text = match response.text() {
             Ok(text) => text,
-            Err(error) => {
+            Err(_) => {
                 mark_provider_failed(
                     &mut report,
                     "simulation_provider_response_unreadable",
-                    format!("failed to read Alchemy RPC response: {error}"),
+                    "failed to read Alchemy RPC response",
                     None,
                 );
                 return report;
@@ -136,21 +139,21 @@ impl TransactionSimulationClient for AlchemyRpcSimulationClient {
                     "simulation_provider_response_malformed",
                     format!("Alchemy RPC response was not JSON: {error}"),
                     Some(json!({
+                        "provider": "alchemy_simulateAssetChanges",
                         "httpStatus": status.as_u16(),
-                        "bodyPreview": preview_string(&text, 512),
+                        "bodyBytes": text.len(),
                     })),
                 );
                 return report;
             }
         };
 
-        report.raw_provider_response = Some(response_body.clone());
         if !status.is_success() {
             mark_provider_failed(
                 &mut report,
                 "simulation_provider_http_error",
                 format!("Alchemy RPC returned HTTP {}", status.as_u16()),
-                Some(response_body),
+                Some(alchemy_response_evidence(&response_body, status.as_u16())),
             );
             return report;
         }
@@ -160,16 +163,16 @@ impl TransactionSimulationClient for AlchemyRpcSimulationClient {
                 &mut report,
                 "simulation_provider_error",
                 "Alchemy RPC returned a JSON-RPC error",
-                Some(response_body),
+                Some(alchemy_response_evidence(&response_body, status.as_u16())),
             );
             return report;
         }
-        if let Some(error) = alchemy_result_error(&response_body) {
+        if alchemy_result_error(&response_body).is_some() {
             mark_provider_failed(
                 &mut report,
                 "simulation_provider_result_error",
-                format!("Alchemy simulation result error: {error}"),
-                Some(response_body),
+                "Alchemy simulation result contained an error",
+                Some(alchemy_response_evidence(&response_body, status.as_u16())),
             );
             return report;
         }
@@ -178,11 +181,13 @@ impl TransactionSimulationClient for AlchemyRpcSimulationClient {
                 &mut report,
                 "simulation_provider_response_malformed",
                 error,
-                Some(response_body),
+                Some(alchemy_response_evidence(&response_body, status.as_u16())),
             );
             return report;
         }
 
+        report.raw_provider_response =
+            Some(alchemy_response_evidence(&response_body, status.as_u16()));
         report.status = SimulationStatus::ProviderSimulated;
         report
     }

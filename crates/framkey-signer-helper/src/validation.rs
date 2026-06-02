@@ -1,6 +1,8 @@
 use anyhow::Result;
 use framkey_core::FramkeyError;
-use framkey_evm::{EvmAddress, EvmTransactionKind};
+use framkey_evm::{
+    EvmAddress, EvmTransaction, EvmTransactionKind, typed_data_v4_hash, validate_transaction,
+};
 use framkey_ipc::{
     MAX_SIGNER_HELPER_PERSONAL_SIGN_MESSAGE_BYTES, MAX_SIGNER_HELPER_SAVE_IMAGE_BYTES,
     MAX_SIGNER_HELPER_TRANSACTION_DATA_BYTES, MAX_SIGNER_HELPER_TYPED_DATA_BYTES,
@@ -38,6 +40,7 @@ pub(crate) fn validate_typed_data_request(typed_data: &serde_json::Value) -> Res
         ))
         .into());
     }
+    typed_data_v4_hash(typed_data)?;
     Ok(())
 }
 
@@ -69,6 +72,17 @@ pub(crate) fn validate_sign_transaction_request(
     if transaction.chain_id == 0 {
         return Err(FramkeyError::invalid_data("transaction chain id must be nonzero").into());
     }
+    validate_transaction(&EvmTransaction {
+        chain_id: transaction.chain_id,
+        nonce: transaction.nonce.clone(),
+        gas_limit: transaction.gas_limit.clone(),
+        to: transaction.to.clone(),
+        value: transaction.value.clone(),
+        data: transaction.data.clone(),
+        gas_price: transaction.gas_price.clone(),
+        max_fee_per_gas: transaction.max_fee_per_gas.clone(),
+        max_priority_fee_per_gas: transaction.max_priority_fee_per_gas.clone(),
+    })?;
     Ok(())
 }
 

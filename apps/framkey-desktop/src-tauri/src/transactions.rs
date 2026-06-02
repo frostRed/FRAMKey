@@ -52,14 +52,14 @@ pub(crate) fn prepare_transaction(
     validate_address_matches(&from, wallet_address, "transaction from")?;
 
     let configured_chain_id = chain_id_u64(&config.chain_id)?;
-    if let Some(chain_id) = optional_string_field(tx, "chainId")? {
-        if !chain_id.eq_ignore_ascii_case(&config.chain_id) {
-            anyhow::bail!(
-                "transaction chainId {} does not match configured {}",
-                chain_id,
-                config.chain_id
-            );
-        }
+    if let Some(chain_id) = optional_string_field(tx, "chainId")?
+        && !chain_id.eq_ignore_ascii_case(&config.chain_id)
+    {
+        anyhow::bail!(
+            "transaction chainId {} does not match configured {}",
+            chain_id,
+            config.chain_id
+        );
     }
     reject_access_list(tx)?;
 

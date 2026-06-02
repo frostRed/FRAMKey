@@ -1,7 +1,4 @@
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use framkey_crypto::encode_hex;
@@ -11,7 +8,7 @@ use framkey_recovery::{
 };
 use serde_json::json;
 
-use crate::args::RecoveryCommand;
+use crate::{args::RecoveryCommand, files::write_new_file};
 
 pub(crate) fn run_recovery(command: RecoveryCommand) -> Result<()> {
     match command {
@@ -102,15 +99,4 @@ pub(crate) fn read_encrypted_vault_backup_from_bundle(path: &Path) -> Result<Vec
             path.display()
         )
     })
-}
-
-pub(crate) fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| anyhow::anyhow!("failed to create {}: {error}", path.display()))?;
-    file.write_all(bytes)?;
-    file.flush()?;
-    Ok(())
 }

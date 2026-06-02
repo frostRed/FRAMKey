@@ -12,6 +12,10 @@ use crate::{
     keys::{address_from_verifying_key, signing_key_from_secret},
 };
 
+pub fn validate_transaction(transaction: &EvmTransaction) -> Result<()> {
+    ParsedTransaction::parse(transaction).map(|_| ())
+}
+
 pub fn sign_transaction(
     secret: &SecretBytes<32>,
     transaction: &EvmTransaction,
@@ -47,6 +51,14 @@ impl ParsedTransaction {
         if transaction.chain_id == 0 {
             return Err(FramkeyError::invalid_data(
                 "transaction chain id must be nonzero",
+            ));
+        }
+        if transaction.gas_price.is_some()
+            && (transaction.max_fee_per_gas.is_some()
+                || transaction.max_priority_fee_per_gas.is_some())
+        {
+            return Err(FramkeyError::invalid_data(
+                "transaction cannot mix gasPrice with EIP-1559 fee fields",
             ));
         }
 

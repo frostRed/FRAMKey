@@ -742,10 +742,10 @@ pub(crate) fn blocked_review_error(review: ReviewRequest) -> ProviderError {
 }
 
 pub(crate) fn validate_provider_request_context(request: &ProviderRequest) -> Result<()> {
-    if let Some(origin) = &request.origin {
-        if origin.len() > 2048 || origin.chars().any(char::is_control) {
-            anyhow::bail!("invalid provider request origin");
-        }
+    if let Some(origin) = &request.origin
+        && (origin.len() > 2048 || origin.chars().any(char::is_control))
+    {
+        anyhow::bail!("invalid provider request origin");
     }
 
     let params_len = serde_json::to_vec(&request.params)

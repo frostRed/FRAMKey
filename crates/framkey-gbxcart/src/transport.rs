@@ -52,14 +52,14 @@ impl GbxCartDevice {
             )
         })?;
 
-        if let Some(expected) = self.config.expected_save_size {
-            if expected != save_type.save_size() {
-                return Err(FramkeyError::invalid_data(format!(
-                    "expected save size {expected} does not match {} ({})",
-                    save_type.label(),
-                    save_type.save_size()
-                )));
-            }
+        if let Some(expected) = self.config.expected_save_size
+            && expected != save_type.save_size()
+        {
+            return Err(FramkeyError::invalid_data(format!(
+                "expected save size {expected} does not match {} ({})",
+                save_type.label(),
+                save_type.save_size()
+            )));
         }
 
         Ok(save_type)
@@ -583,6 +583,11 @@ fn eeprom_address(byte_offset: usize) -> Result<u32> {
 
 pub(crate) fn candidate_ports(port_hint: Option<&str>) -> Result<Vec<String>> {
     if let Some(port_hint) = port_hint {
+        if port_hint.trim().is_empty() {
+            return Err(FramkeyError::invalid_data(
+                "GBxCart port hint must not be empty",
+            ));
+        }
         return Ok(vec![port_hint.to_owned()]);
     }
 

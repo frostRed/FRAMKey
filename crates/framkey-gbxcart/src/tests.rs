@@ -67,3 +67,9 @@ fn explicit_port_hint_skips_port_enumeration() {
         vec!["/dev/cu.usbserial-test".to_owned()]
     );
 }
+
+#[test]
+fn empty_explicit_port_hint_is_rejected() {
+    let error = candidate_ports(Some("  ")).unwrap_err();
+    assert!(error.to_string().contains("port hint must not be empty"));
+}

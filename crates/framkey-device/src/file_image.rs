@@ -1,4 +1,8 @@
-use std::path::PathBuf;
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use framkey_core::Result;
 
@@ -30,7 +34,29 @@ impl VaultDevice for FileImageDevice {
     }
 
     fn write_save_image(&mut self, image: &SaveImage) -> Result<()> {
-        std::fs::write(&self.path, image.as_bytes())?;
+        let mut file = open_save_image_for_write(&self.path)?;
+        file.write_all(image.as_bytes())?;
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn open_save_image_for_write(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_save_image_for_write(path: &Path) -> std::io::Result<std::fs::File> {
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
 }

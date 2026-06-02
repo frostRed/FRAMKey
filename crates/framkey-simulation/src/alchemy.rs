@@ -74,6 +74,37 @@ pub(crate) fn alchemy_result_error(response_body: &Value) -> Option<String> {
     }
 }
 
+pub(crate) fn alchemy_response_evidence(response_body: &Value, http_status: u16) -> Value {
+    let result = response_body.get("result").and_then(Value::as_object);
+    let change_count = result
+        .and_then(|result| result.get("changes"))
+        .and_then(Value::as_array)
+        .map(Vec::len);
+    let result_error =
+        result
+            .and_then(|result| result.get("error"))
+            .is_some_and(|error| match error {
+                Value::Null => false,
+                Value::String(message) => !message.is_empty(),
+                _ => true,
+            });
+    let json_rpc_error_code = response_body
+        .get("error")
+        .and_then(Value::as_object)
+        .and_then(|error| error.get("code"))
+        .filter(|code| code.is_number() || code.is_string())
+        .cloned();
+
+    json!({
+        "provider": "alchemy_simulateAssetChanges",
+        "httpStatus": http_status,
+        "jsonRpcError": response_body.get("error").is_some(),
+        "jsonRpcErrorCode": json_rpc_error_code,
+        "resultError": result_error,
+        "changeCount": change_count,
+    })
+}
+
 pub(crate) fn apply_alchemy_asset_changes(
     report: &mut TransactionSimulationReport,
     response_body: &Value,

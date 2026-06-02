@@ -1,3 +1,5 @@
+use std::fmt;
+
 use framkey_core::{
     FramkeyError, Generation, PolicyId, Result, UnixTimestamp, WalletId, WalletType,
 };
@@ -41,6 +43,45 @@ impl VaultFile {
             ));
         }
 
+        for wrapper in &self.dek_wrappers {
+            wrapper.validate()?;
+        }
+
+        self.validate_recovery_policy()?;
+
+        Ok(())
+    }
+
+    fn validate_recovery_policy(&self) -> Result<()> {
+        if self.recovery_policy.label.trim().is_empty() {
+            return Err(FramkeyError::invalid_data(
+                "vault recovery policy label must not be blank",
+            ));
+        }
+
+        let matching_recovery_wrapper = self.dek_wrappers.iter().any(|wrapper| {
+            matches!(
+                wrapper,
+                DekWrapper::Recovery { policy_id, .. } if *policy_id == self.recovery_policy.policy_id
+            )
+        });
+        let contains_recovery_wrapper = self
+            .dek_wrappers
+            .iter()
+            .any(|wrapper| matches!(wrapper, DekWrapper::Recovery { .. }));
+
+        if self.recovery_policy.policy_id == PolicyId::ZERO {
+            if contains_recovery_wrapper {
+                return Err(FramkeyError::invalid_data(
+                    "vault has recovery wrapper but no recovery policy id",
+                ));
+            }
+        } else if !matching_recovery_wrapper {
+            return Err(FramkeyError::invalid_data(
+                "vault recovery policy id does not match a recovery DEK wrapper",
+            ));
+        }
+
         Ok(())
     }
 }
@@ -63,6 +104,39 @@ pub enum DekWrapper {
         policy_id: PolicyId,
         encrypted_dek: AeadBox,
     },
+}
+
+impl DekWrapper {
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::MacKeychain {
+                keychain_item_id, ..
+            } => validate_keychain_item_id(keychain_item_id),
+            Self::DevTest { label, .. } => {
+                if label.trim().is_empty() {
+                    return Err(FramkeyError::invalid_data(
+                        "dev/test DEK wrapper label must not be blank",
+                    ));
+                }
+                Ok(())
+            }
+            Self::Recovery { .. } => Ok(()),
+        }
+    }
+}
+
+fn validate_keychain_item_id(keychain_item_id: &str) -> Result<()> {
+    if keychain_item_id.trim().is_empty() {
+        return Err(FramkeyError::invalid_data(
+            "macOS Keychain item id must not be blank",
+        ));
+    }
+    if keychain_item_id.contains('\0') {
+        return Err(FramkeyError::invalid_data(
+            "macOS Keychain item id must not contain NUL bytes",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,10 +225,20 @@ pub struct DevEncryptedVaultMetadata {
     pub active_slot_payload_hash_valid: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DevEncryptedVaultImage {
     pub save_image: Vec<u8>,
     pub metadata: DevEncryptedVaultMetadata,
+}
+
+impl fmt::Debug for DevEncryptedVaultImage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DevEncryptedVaultImage")
+            .field("save_image_len", &self.save_image.len())
+            .field("metadata", &self.metadata)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,15 +268,36 @@ pub struct KeychainVaultMetadata {
     pub active_slot_payload_hash_valid: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct KeychainEncryptedVaultImage {
     pub save_image: Vec<u8>,
     pub metadata: KeychainEncryptedVaultMetadata,
     pub recovery_backup_pack: Option<RecoveryBackupPack>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for KeychainEncryptedVaultImage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KeychainEncryptedVaultImage")
+            .field("save_image_len", &self.save_image.len())
+            .field("metadata", &self.metadata)
+            .field("recovery_backup_pack", &self.recovery_backup_pack)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct RecoveryRewrappedKeychainVaultImage {
     pub save_image: Vec<u8>,
     pub metadata: KeychainVaultMetadata,
+}
+
+impl fmt::Debug for RecoveryRewrappedKeychainVaultImage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveryRewrappedKeychainVaultImage")
+            .field("save_image_len", &self.save_image.len())
+            .field("metadata", &self.metadata)
+            .finish()
+    }
 }

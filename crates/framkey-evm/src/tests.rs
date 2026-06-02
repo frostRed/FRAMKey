@@ -31,6 +31,15 @@ fn personal_sign_recovers_signer() {
 }
 
 #[test]
+fn rejects_unprefixed_evm_addresses() {
+    assert!(
+        "2c7536e3605d9c16a7a3d7b1898e529396a65c23"
+            .parse::<EvmAddress>()
+            .is_err()
+    );
+}
+
+#[test]
 fn signs_eip155_legacy_transaction_vector() {
     let secret = SecretBytes::new(
         decode_hex_array::<32>("4646464646464646464646464646464646464646464646464646464646464646")
@@ -57,6 +66,52 @@ fn signs_eip155_legacy_transaction_vector() {
         signed.raw_transaction_hex(),
         "0xf86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83"
     );
+}
+
+#[test]
+fn rejects_transactions_that_mix_legacy_and_eip1559_fee_fields() {
+    let secret = SecretBytes::new(
+        decode_hex_array::<32>("4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318")
+            .unwrap(),
+    );
+    let error = sign_transaction(
+        &secret,
+        &EvmTransaction {
+            chain_id: 1,
+            nonce: "0x0".to_owned(),
+            gas_limit: "0x5208".to_owned(),
+            to: Some("0x0000000000000000000000000000000000000001".to_owned()),
+            value: "0x0".to_owned(),
+            data: "0x".to_owned(),
+            gas_price: Some("0x3b9aca00".to_owned()),
+            max_fee_per_gas: Some("0x3b9aca00".to_owned()),
+            max_priority_fee_per_gas: Some("0x3b9aca00".to_owned()),
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("cannot mix gasPrice"));
+}
+
+#[test]
+fn validates_transactions_without_signing_secret() {
+    let transaction = EvmTransaction {
+        chain_id: 1,
+        nonce: "0x0".to_owned(),
+        gas_limit: "0x5208".to_owned(),
+        to: Some("0x0000000000000000000000000000000000000001".to_owned()),
+        value: "0x0".to_owned(),
+        data: "0x".to_owned(),
+        gas_price: Some("0x3b9aca00".to_owned()),
+        max_fee_per_gas: None,
+        max_priority_fee_per_gas: None,
+    };
+    validate_transaction(&transaction).unwrap();
+
+    let mut malformed = transaction;
+    malformed.to = Some("0x1234".to_owned());
+    let error = validate_transaction(&malformed).unwrap_err();
+    assert!(error.to_string().contains("transaction to"));
 }
 
 #[test]
@@ -197,6 +252,38 @@ fn signs_permit2_batch_typed_data_with_array_fields() {
 
     assert_eq!(signed.address, recovered);
     assert_eq!(signed.typed_data_hash.len(), 32);
+}
+
+#[test]
+fn debug_output_redacts_reusable_signed_material() {
+    let secret = SecretBytes::new(
+        decode_hex_array::<32>("4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318")
+            .unwrap(),
+    );
+    let personal = personal_sign(&secret, b"FRAMKey debug redaction").unwrap();
+    let transaction = sign_transaction(
+        &secret,
+        &EvmTransaction {
+            chain_id: 1,
+            nonce: "0x0".to_owned(),
+            gas_limit: "0x5208".to_owned(),
+            to: Some("0x0000000000000000000000000000000000000001".to_owned()),
+            value: "0x0".to_owned(),
+            data: "0x".to_owned(),
+            gas_price: None,
+            max_fee_per_gas: Some("0x3b9aca00".to_owned()),
+            max_priority_fee_per_gas: Some("0x3b9aca00".to_owned()),
+        },
+    )
+    .unwrap();
+
+    let personal_debug = format!("{personal:?}");
+    let transaction_debug = format!("{transaction:?}");
+
+    assert!(!personal_debug.contains(&personal.signature_hex()));
+    assert!(!transaction_debug.contains(&transaction.raw_transaction_hex()));
+    assert!(personal_debug.contains("signature_len"));
+    assert!(transaction_debug.contains("raw_transaction_len"));
 }
 
 #[test]

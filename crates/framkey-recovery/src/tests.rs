@@ -90,6 +90,30 @@ fn backup_pack_matches_policy_matrix() {
 }
 
 #[test]
+fn debug_output_redacts_recovery_material() {
+    let root_key = [0x42_u8; RECOVERY_ROOT_KEY_BYTES];
+    let entropy = RecoveryBackupEntropy {
+        group_polynomial_coefficients: [0x55; RECOVERY_ROOT_KEY_BYTES],
+        cloud_member_pad: [0xAA; RECOVERY_ROOT_KEY_BYTES],
+    };
+    let pack = RecoveryBackupPack::standard(
+        [0x11; 16], 7, [0x22; 16], [0x33; 16], 1234, &root_key, entropy,
+    );
+    let share_hex = pack.files[0].share_hex.clone();
+    let bundle = RecoveryBackupBundle::new(pack.files[0].clone(), b"encrypted vault");
+
+    let pack_debug = format!("{pack:?}");
+    let bundle_debug = format!("{bundle:?}");
+    let entropy_debug = format!("{entropy:?}");
+
+    assert!(!pack_debug.contains(&share_hex));
+    assert!(!bundle_debug.contains(&share_hex));
+    assert!(!bundle_debug.contains("656e63727970746564207661756c74"));
+    assert!(!entropy_debug.contains("55555555"));
+    assert!(!entropy_debug.contains("aaaaaaaa"));
+}
+
+#[test]
 fn duplicate_group_shares_are_rejected() {
     let error = interpolate_at_zero(&[(1, 2), (1, 3)]).unwrap_err();
     assert!(error.to_string().contains("duplicate"));

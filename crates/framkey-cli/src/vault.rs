@@ -13,8 +13,9 @@ use serde_json::json;
 use crate::{
     args::VaultCommand,
     constants::DEFAULT_KEYCHAIN_ACCESS_POLICY,
+    files::write_new_file,
     recovery::{
-        read_encrypted_vault_backup_from_bundle, read_recovery_backup_files, write_new_file,
+        read_encrypted_vault_backup_from_bundle, read_recovery_backup_files,
         write_recovery_backup_pack,
     },
     signer_helper::{
@@ -31,7 +32,7 @@ pub(crate) fn run_vault(command: VaultCommand) -> Result<()> {
                 Generation(args.generation),
                 &args.label,
             )?);
-            std::fs::write(&args.out, image.as_bytes())?;
+            write_new_file(&args.out, image.as_bytes())?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({
@@ -102,7 +103,7 @@ pub(crate) fn run_vault(command: VaultCommand) -> Result<()> {
             } = response;
 
             let image = SaveImage::new(save_image);
-            std::fs::write(&args.out, image.as_bytes())?;
+            write_new_file(&args.out, image.as_bytes())?;
             let recovery_backups = match (&args.recovery_out_dir, recovery_backup_pack) {
                 (Some(out_dir), Some(pack)) => Some(write_recovery_backup_pack(
                     out_dir,
@@ -227,7 +228,7 @@ pub(crate) fn run_vault(command: VaultCommand) -> Result<()> {
                 &dev_kek,
             )?;
             let image = SaveImage::new(built.save_image);
-            std::fs::write(&args.out, image.as_bytes())?;
+            write_new_file(&args.out, image.as_bytes())?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&json!({

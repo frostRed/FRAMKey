@@ -34,7 +34,7 @@ pub(crate) fn classify_error(error: &anyhow::Error) -> IpcErrorCode {
     let message = error.to_string();
     if message.contains("local unlock binding changed") {
         IpcErrorCode::RecoveryRequired
-    } else if message.contains("Touch ID") {
+    } else if message.contains("Touch ID") || message.contains("LocalAuthentication") {
         IpcErrorCode::TouchIdFailed
     } else if message.contains("Keychain") {
         IpcErrorCode::KeychainItemNotFound

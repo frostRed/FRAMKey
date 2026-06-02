@@ -422,14 +422,14 @@ impl AppState {
         expected_address: Option<String>,
     ) -> Result<SignerPersonalSignResponse> {
         let wallet = self.mock_wallet()?;
-        if let Some(expected) = expected_address {
-            if !wallet.address.eq_ignore_ascii_case(&expected) {
-                anyhow::bail!(
-                    "personal_sign account mismatch: requested {}, mock wallet {}",
-                    expected,
-                    wallet.address
-                );
-            }
+        if let Some(expected) = expected_address
+            && !wallet.address.eq_ignore_ascii_case(&expected)
+        {
+            anyhow::bail!(
+                "personal_sign account mismatch: requested {}, mock wallet {}",
+                expected,
+                wallet.address
+            );
         }
         let signed = personal_sign(&wallet.secret, &message)?;
         Ok(SignerPersonalSignResponse {
@@ -461,14 +461,14 @@ impl AppState {
         expected_address: Option<String>,
     ) -> Result<SignerSignTypedDataResponse> {
         let wallet = self.mock_wallet()?;
-        if let Some(expected) = expected_address {
-            if !wallet.address.eq_ignore_ascii_case(&expected) {
-                anyhow::bail!(
-                    "typed-data account mismatch: requested {}, mock wallet {}",
-                    expected,
-                    wallet.address
-                );
-            }
+        if let Some(expected) = expected_address
+            && !wallet.address.eq_ignore_ascii_case(&expected)
+        {
+            anyhow::bail!(
+                "typed-data account mismatch: requested {}, mock wallet {}",
+                expected,
+                wallet.address
+            );
         }
         let signed = sign_typed_data_v4(&wallet.secret, &typed_data)?;
         Ok(SignerSignTypedDataResponse {

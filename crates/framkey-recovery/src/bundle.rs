@@ -1,3 +1,5 @@
+use std::fmt;
+
 use framkey_core::{FramkeyError, Result};
 use serde::{Deserialize, Serialize};
 
@@ -48,7 +50,7 @@ pub struct RecoveryBackupFileDescriptor {
     pub share_hash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryBackupFile {
     pub format: String,
@@ -84,7 +86,7 @@ pub struct RecoveryBackupBundle {
     pub instructions: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryBackupVaultBackup {
     pub encoding: String,
@@ -93,10 +95,55 @@ pub struct RecoveryBackupVaultBackup {
     pub bytes_hex: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RecoveryBackupEntropy {
     pub group_polynomial_coefficients: [u8; RECOVERY_ROOT_KEY_BYTES],
     pub cloud_member_pad: [u8; RECOVERY_ROOT_KEY_BYTES],
+}
+
+impl fmt::Debug for RecoveryBackupFile {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveryBackupFile")
+            .field("format", &self.format)
+            .field("format_version", &self.format_version)
+            .field("backup_set_id", &self.backup_set_id)
+            .field("wallet_id", &self.wallet_id)
+            .field("generation", &self.generation)
+            .field("policy_id", &self.policy_id)
+            .field("group_kind", &self.group_kind)
+            .field("group_label", &self.group_label)
+            .field("group_share_index", &self.group_share_index)
+            .field("group_threshold", &self.group_threshold)
+            .field("member_index", &self.member_index)
+            .field("member_threshold", &self.member_threshold)
+            .field("member_count", &self.member_count)
+            .field("member_label", &self.member_label)
+            .field("share_encoding", &self.share_encoding)
+            .field("share_hash", &share_hash(&self.share_hex))
+            .field("instructions", &self.instructions)
+            .finish()
+    }
+}
+
+impl fmt::Debug for RecoveryBackupVaultBackup {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveryBackupVaultBackup")
+            .field("encoding", &self.encoding)
+            .field("byte_count", &self.byte_count)
+            .field("blake3", &self.blake3)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for RecoveryBackupEntropy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RecoveryBackupEntropy")
+            .field("root_key_bytes", &RECOVERY_ROOT_KEY_BYTES)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RecoveryBackupBundle {

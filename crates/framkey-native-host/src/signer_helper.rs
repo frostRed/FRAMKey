@@ -2,7 +2,8 @@ use std::{
     fs::File,
     io::{Read, Write},
     path::Path,
-    process::{Command, Stdio},
+    process::{Child, Command, Output, Stdio},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -12,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::{
     config::{SignerHelperConfig, SignerHelperSandbox},
-    constants::MACOS_NO_NETWORK_SANDBOX_PROFILE,
+    constants::{MACOS_NO_NETWORK_SANDBOX_PROFILE, SIGNER_HELPER_TIMEOUT},
 };
 
 pub(crate) fn run_signer_helper(
@@ -38,7 +39,14 @@ pub(crate) fn run_signer_helper(
         stdin.write_all(b"\n")?;
     }
 
-    let output = child.wait_with_output()?;
+    let output = wait_for_signer_helper_output(child, SIGNER_HELPER_TIMEOUT)?;
+    if output.stdout.is_empty() {
+        anyhow::bail!(
+            "signer helper returned empty stdout with {}; stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let response: SignerHelperResponse =
         serde_json::from_slice(&output.stdout).map_err(|error| {
             anyhow::anyhow!(
@@ -59,6 +67,25 @@ pub(crate) fn run_signer_helper(
     }
 
     Ok(response)
+}
+
+pub(crate) fn wait_for_signer_helper_output(mut child: Child, timeout: Duration) -> Result<Output> {
+    let started_at = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(child.wait_with_output()?);
+        }
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let output = child.wait_with_output()?;
+            anyhow::bail!(
+                "signer helper timed out after {} ms waiting for macOS LocalAuthentication; stderr: {}",
+                timeout.as_millis(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn signer_helper_command(helper: &SignerHelperConfig) -> Command {

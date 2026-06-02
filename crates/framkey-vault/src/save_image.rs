@@ -95,7 +95,7 @@ impl SaveImageLayout {
         }
 
         let slot_area = image_size - SAVE_IMAGE_HEADER_LEN;
-        if slot_area % 2 != 0 {
+        if !slot_area.is_multiple_of(2) {
             return Err(FramkeyError::invalid_data(
                 "save image slot area must divide evenly into two slots",
             ));
@@ -303,9 +303,12 @@ fn inspect_slot(
         payload_len: parsed.payload.len(),
         payload_hash: hash_to_hex(actual_payload_hash.as_bytes()),
         payload_hash_valid: actual_payload_hash.as_bytes() == &parsed.expected_payload_hash,
-        payload_preview: String::from_utf8_lossy(&parsed.payload[..parsed.payload.len().min(160)])
-            .into_owned(),
+        payload_preview: redacted_payload_preview(parsed.payload.len()),
     })
+}
+
+fn redacted_payload_preview(payload_len: usize) -> String {
+    format!("<redacted {payload_len} bytes>")
 }
 
 fn slot_region<'a>(image: &'a [u8], layout: &SaveImageLayout, slot: SaveSlot) -> Result<&'a [u8]> {

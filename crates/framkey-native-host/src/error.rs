@@ -6,7 +6,7 @@ pub(crate) fn error_to_ipc(error: anyhow::Error) -> IpcError {
         || message.contains("RecoveryRequired")
     {
         IpcErrorCode::RecoveryRequired
-    } else if message.contains("Touch ID") {
+    } else if message.contains("Touch ID") || message.contains("LocalAuthentication") {
         IpcErrorCode::TouchIdFailed
     } else if message.contains("Keychain") {
         IpcErrorCode::KeychainItemNotFound

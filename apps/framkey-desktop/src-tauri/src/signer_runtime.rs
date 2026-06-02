@@ -86,14 +86,12 @@ pub(crate) fn build_keychain_vault_with_helper(
         }),
     )?;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::BuildKeychainVault(result),
-        } => Ok(result),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::BuildKeychainVault(result)) => Ok(result),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -114,14 +112,12 @@ pub(crate) fn recover_keychain_vault_with_helper(
         }),
     )?;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::RecoverKeychainVault(result),
-        } => Ok(result),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::RecoverKeychainVault(result)) => Ok(result),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -138,14 +134,12 @@ pub(crate) fn validate_recovery_files_with_helper(
         }),
     )?;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::ValidateRecoveryFiles(result),
-        } => Ok(result),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::ValidateRecoveryFiles(result)) => Ok(result),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -164,14 +158,12 @@ pub(crate) fn open_keychain_vault_with_helper(
         }),
     )?;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::OpenKeychainVault(result),
-        } => Ok(result),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::OpenKeychainVault(result)) => Ok(result),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -194,14 +186,12 @@ pub(crate) fn personal_sign_with_helper(
         }),
     )?;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::PersonalSign(result),
-        } => Ok(result),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::PersonalSign(result)) => Ok(result),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -224,14 +214,12 @@ pub(crate) fn sign_typed_data_with_helper(
         }),
     )?;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::SignTypedData(result),
-        } => Ok(result),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::SignTypedData(result)) => Ok(result),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -254,14 +242,12 @@ pub(crate) fn sign_transaction_with_helper(
         }),
     )?;
 
-    match response {
-        SignerHelperResponse::Ok {
-            result: SignerHelperResult::SignTransaction(result),
-        } => Ok(result),
-        SignerHelperResponse::Ok { result } => {
+    match response.into_result() {
+        Ok(SignerHelperResult::SignTransaction(result)) => Ok(result),
+        Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
-        SignerHelperResponse::Error { error } => {
+        Err(error) => {
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
@@ -629,13 +615,14 @@ pub(crate) fn cleanup_recovery_backup_pack(
 pub(crate) fn cleanup_paths(paths: &[PathBuf]) -> Result<()> {
     let mut first_error = None;
     for path in paths {
-        if let Err(error) = std::fs::remove_file(&path) {
-            if error.kind() != std::io::ErrorKind::NotFound && first_error.is_none() {
-                first_error = Some(anyhow::anyhow!(
-                    "failed to remove {}: {error}",
-                    path.display()
-                ));
-            }
+        if let Err(error) = std::fs::remove_file(path)
+            && error.kind() != std::io::ErrorKind::NotFound
+            && first_error.is_none()
+        {
+            first_error = Some(anyhow::anyhow!(
+                "failed to remove {}: {error}",
+                path.display()
+            ));
         }
     }
 
