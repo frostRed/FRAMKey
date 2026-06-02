@@ -439,13 +439,40 @@ pub(crate) async fn framkey_pick_recovery_out_dir(
 
 #[tauri::command]
 pub(crate) async fn framkey_provider_request(
+    window: WebviewWindow,
     app: tauri::AppHandle,
     request: ProviderRequest,
 ) -> Result<ProviderEnvelope, String> {
     let response_id = request.id.clone();
+    let window_label = window.label().to_owned();
+    let window_url = if window_label == "dapp" {
+        match window.url() {
+            Ok(url) => Some(url),
+            Err(error) => {
+                return Ok(ProviderEnvelope::error(
+                    response_id,
+                    error_to_provider_error(anyhow::anyhow!(
+                        "failed to read dApp provider window URL: {error}"
+                    )),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+    let request = match bind_provider_request_context(request, &window_label, window_url.as_ref()) {
+        Ok(request) => request,
+        Err(error) => {
+            return Ok(ProviderEnvelope::error(
+                response_id,
+                error_to_provider_error(error),
+            ));
+        }
+    };
+    let response_id = request.id.clone();
     eprintln!(
-        "framkey_provider_request id={} method={}",
-        request.id, request.method
+        "framkey_provider_request window={} id={} method={}",
+        window_label, request.id, request.method
     );
     tauri::async_runtime::spawn_blocking(move || {
         let started = Instant::now();

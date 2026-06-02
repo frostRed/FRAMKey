@@ -93,7 +93,7 @@ pub(crate) fn ensure_main_window(app: &tauri::AppHandle) -> Result<()> {
         .title("FRAMKey")
         .inner_size(1160.0, 760.0)
         .min_inner_size(940.0, 620.0)
-        .devtools(true)
+        .devtools(desktop_devtools_enabled())
         .build()?;
     let _ = window.show();
     let _ = window.set_focus();
@@ -156,7 +156,7 @@ pub(crate) fn build_dapp_window(app: &tauri::AppHandle, target: WebviewUrl) -> R
         .title("FRAMKey dApp WebView")
         .inner_size(1080.0, 720.0)
         .min_inner_size(760.0, 520.0)
-        .devtools(true)
+        .devtools(desktop_devtools_enabled())
         .initialization_script(&initialization_script)
         .on_navigation(move |url| {
             let state = navigation_app.state::<AppState>();
@@ -261,6 +261,14 @@ pub(crate) fn trusted_autosmoke_enabled() -> bool {
 
 pub(crate) fn recovery_autosmoke_enabled() -> bool {
     env_truthy("FRAMKEY_DESKTOP_RECOVERY_AUTOSMOKE")
+}
+
+pub(crate) fn desktop_devtools_enabled() -> bool {
+    desktop_devtools_enabled_from_value(env_string("FRAMKEY_DESKTOP_DEVTOOLS").as_deref())
+}
+
+pub(crate) fn desktop_devtools_enabled_from_value(value: Option<&str>) -> bool {
+    cfg!(debug_assertions) && matches!(value.map(str::trim), Some("1" | "true" | "yes" | "on"))
 }
 
 pub(crate) fn wallet_send_autosmoke_enabled() -> bool {

@@ -449,3 +449,41 @@ pub(crate) fn validate_chain_id(chain_id: &str) -> Result<()> {
     }
     Ok(())
 }
+
+pub(crate) fn validate_desktop_device_config(device: &DeviceConfig) -> Result<()> {
+    match device {
+        DeviceConfig::File { path } => validate_desktop_path("file save-image path", path),
+        DeviceConfig::GbxCart {
+            port: Some(port), ..
+        } => validate_desktop_text("GBxCart port", port),
+        DeviceConfig::GbxCart { .. } => Ok(()),
+    }
+}
+
+pub(crate) fn validate_desktop_keychain_name(label: &str, value: &str) -> Result<()> {
+    validate_desktop_text(&format!("Keychain {label}"), value)
+}
+
+pub(crate) fn validate_desktop_text(label: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("desktop {label} must not be blank");
+    }
+    if value.trim() != value {
+        anyhow::bail!("desktop {label} must not have leading or trailing whitespace");
+    }
+    if value.chars().any(char::is_control) {
+        anyhow::bail!("desktop {label} must not contain control characters");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_desktop_path(label: &str, path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("desktop {label} must not be blank");
+    }
+    let path_text = path.display().to_string();
+    if path_text.chars().any(char::is_control) {
+        anyhow::bail!("desktop {label} must not contain control characters");
+    }
+    Ok(())
+}

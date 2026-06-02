@@ -101,8 +101,7 @@ fn status_result(config: &NativeHostConfig) -> Value {
         "chainId": config.chain_id,
         "device": config.device.describe(),
         "keychain": {
-            "service": config.keychain_service,
-            "account": config.keychain_account,
+            "configured": true,
         },
         "capabilities": {
             "readOnlyAccounts": true,
@@ -118,13 +117,13 @@ fn account_result(config: &NativeHostConfig, account: &NativeAccount) -> Value {
     json!({
         "address": account.address,
         "chainId": config.chain_id,
-        "metadata": account.opened.metadata,
+        "wallet": {
+            "kind": "keychain_vault",
+            "mock": false,
+        },
         "keychain": {
-            "service": account.opened.keychain_service,
-            "account": account.opened.keychain_account,
-            "itemId": account.opened.keychain_item_id,
-            "deviceId": account.opened.device_id,
-            "kekId": account.opened.kek_id,
+            "configured": true,
+            "accessPolicy": account.opened.keychain_access_policy,
         },
         "signerHelper": account.helper_report,
     })

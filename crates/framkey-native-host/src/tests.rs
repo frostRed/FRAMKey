@@ -6,7 +6,7 @@ use crate::{
     constants::{DEFAULT_KEYCHAIN_ACCOUNT, DEFAULT_KEYCHAIN_SERVICE},
     error::error_to_ipc,
     handler::{NativeHostState, handle_request_result},
-    signer_helper::wait_for_signer_helper_output,
+    signer_helper::{signer_helper_stderr_summary, wait_for_signer_helper_output},
 };
 use framkey_gbxcart::GbaSaveType;
 use framkey_ipc::{IpcErrorCode, IpcRequest};
@@ -112,7 +112,12 @@ fn status_redacts_local_device_paths() {
     assert_eq!(result["device"]["kind"], "file");
     assert_eq!(result["device"]["pathConfigured"], true);
     assert!(result["device"].get("path").is_none());
+    assert_eq!(result["keychain"]["configured"], true);
+    assert!(result["keychain"].get("service").is_none());
+    assert!(result["keychain"].get("account").is_none());
     assert!(!result.to_string().contains("private-vault.sav"));
+    assert!(!result.to_string().contains(DEFAULT_KEYCHAIN_SERVICE));
+    assert!(!result.to_string().contains(DEFAULT_KEYCHAIN_ACCOUNT));
 }
 
 #[test]
@@ -155,6 +160,16 @@ fn local_authentication_errors_map_to_touch_id_failed() {
     ));
 
     assert_eq!(error.code, IpcErrorCode::TouchIdFailed);
+}
+
+#[test]
+fn signer_helper_stderr_summary_redacts_contents() {
+    let summary = signer_helper_stderr_summary(b"secret keychain and recovery bytes");
+
+    assert_eq!(summary, "34 bytes redacted");
+    assert!(!summary.contains("secret"));
+    assert!(!summary.contains("recovery"));
+    assert_eq!(signer_helper_stderr_summary(b""), "empty");
 }
 
 #[cfg(unix)]

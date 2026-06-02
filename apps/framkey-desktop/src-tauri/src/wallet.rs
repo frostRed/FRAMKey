@@ -56,6 +56,40 @@ pub(crate) fn status_result(config: &DesktopConfig) -> Value {
     })
 }
 
+pub(crate) fn provider_status_result(config: &DesktopConfig) -> Value {
+    json!({
+        "app": "framkey-desktop",
+        "version": env!("CARGO_PKG_VERSION"),
+        "chainId": config.chain_id,
+        "network": active_chain_value(&config.chain_id),
+        "supportedChains": supported_alchemy_chains_value(),
+        "wallet": config.wallet.describe(),
+        "capabilities": {
+            "readOnlyAccounts": true,
+            "accountPermissions": "session_origin_approval",
+            "requestReview": true,
+            "approvalBroker": "controlled_personal_sign",
+            "typedDataApprovalBroker": "controlled_typed_data_signing",
+            "personalSign": "approval_required",
+            "sendTransaction": config.wallet.send_transaction_capability(),
+            "signTypedData": "permit_approval_required",
+            "networkAdd": "trusted_approval_known_alchemy_chains",
+            "networkSwitch": "trusted_approval_known_alchemy_chains",
+            "watchAsset": "trusted_approval_erc20_persistent_local",
+            "simulation": config.simulation.capability_value(),
+            "rpcProxy": config.rpc.is_some(),
+        },
+        "simulation": config.simulation.describe(),
+        "rpc": config.rpc.as_ref().map(DesktopRpcConfig::describe),
+        "trustModel": {
+            "trustedWalletUi": true,
+            "untrustedDappWebView": true,
+            "localRuntimeDetailsExposed": false,
+            "signingEnabled": "personal_sign_and_permit_typed_data_after_approval",
+        }
+    })
+}
+
 pub(crate) fn rpc_health_snapshot(config: &DesktopConfig) -> Result<Value> {
     let expected_chain_id = normalize_chain_id(&config.chain_id)?;
     let checked_at = now_unix_ms();

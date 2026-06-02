@@ -44,14 +44,14 @@ pub(crate) fn run_signer_helper(
         anyhow::bail!(
             "signer helper returned empty stdout with {}; stderr: {}",
             output.status,
-            String::from_utf8_lossy(&output.stderr)
+            signer_helper_stderr_summary(&output.stderr)
         );
     }
     let response: SignerHelperResponse =
         serde_json::from_slice(&output.stdout).map_err(|error| {
             anyhow::anyhow!(
                 "failed to parse signer helper response: {error}; stderr: {}",
-                String::from_utf8_lossy(&output.stderr)
+                signer_helper_stderr_summary(&output.stderr)
             )
         })?;
 
@@ -81,10 +81,18 @@ pub(crate) fn wait_for_signer_helper_output(mut child: Child, timeout: Duration)
             anyhow::bail!(
                 "signer helper timed out after {} ms waiting for macOS LocalAuthentication; stderr: {}",
                 timeout.as_millis(),
-                String::from_utf8_lossy(&output.stderr)
+                signer_helper_stderr_summary(&output.stderr)
             );
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+pub(crate) fn signer_helper_stderr_summary(stderr: &[u8]) -> String {
+    if stderr.is_empty() {
+        "empty".to_owned()
+    } else {
+        format!("{} bytes redacted", stderr.len())
     }
 }
 
@@ -120,9 +128,15 @@ fn verify_helper_hash(helper: &SignerHelperConfig) -> Result<()> {
 }
 
 pub(crate) fn helper_report(helper: &SignerHelperConfig) -> Result<Value> {
+    let hash_matches = if let Some(expected) = &helper.expected_blake3 {
+        Some(hash_file_blake3(&helper.path)? == *expected)
+    } else {
+        None
+    };
     Ok(json!({
-        "path": helper.path.display().to_string(),
-        "blake3": hash_file_blake3(&helper.path)?,
+        "ready": true,
+        "hashPinned": helper.expected_blake3.is_some(),
+        "hashMatches": hash_matches,
         "sandbox": helper.sandbox.as_str(),
     }))
 }

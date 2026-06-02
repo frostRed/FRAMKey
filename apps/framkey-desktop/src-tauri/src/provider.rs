@@ -4,6 +4,7 @@ use framkey_ipc::{
     MAX_SIGNER_HELPER_PERSONAL_SIGN_MESSAGE_BYTES, MAX_SIGNER_HELPER_TYPED_DATA_BYTES,
 };
 use serde_json::{Map, Value, json};
+use tauri::Url;
 
 use crate::review;
 use crate::*;
@@ -21,7 +22,7 @@ pub(crate) fn handle_provider_request(
             &config.chain_id
         )?))),
         "framkey_getStatus" | "wallet_getCapabilities" => {
-            Ok(ProviderResponse::Result(status_result(config)))
+            Ok(ProviderResponse::Result(provider_status_result(config)))
         }
         "eth_accounts" => handle_eth_accounts_request(state, request),
         "eth_requestAccounts" => handle_request_accounts_request(state, config, request),
@@ -38,6 +39,7 @@ pub(crate) fn handle_provider_request(
             ))
         }
         "framkey_getAccount" => {
+            ensure_trusted_provider_origin(request)?;
             let account = state.load_and_connect_account(config)?;
             Ok(ProviderResponse::Result(account_result(config, account)))
         }
@@ -81,6 +83,43 @@ pub(crate) fn handle_provider_request(
             request.method
         )),
     }
+}
+
+pub(crate) fn bind_provider_request_context(
+    mut request: ProviderRequest,
+    window_label: &str,
+    window_url: Option<&Url>,
+) -> Result<ProviderRequest> {
+    match window_label {
+        "main" => {
+            request.origin = Some(TRUSTED_UI_ORIGIN.to_owned());
+        }
+        "dapp" => {
+            let url = window_url
+                .ok_or_else(|| anyhow::anyhow!("dApp provider request missing window URL"))?;
+            let origin = dapp_origin_from_url(url).ok_or_else(|| {
+                anyhow::anyhow!("dApp provider request URL does not have an origin")
+            })?;
+            if origin == TRUSTED_UI_ORIGIN {
+                anyhow::bail!("dApp provider request cannot use the trusted UI origin");
+            }
+            if let Some(claimed_origin) = request.origin.as_deref() {
+                let claimed_origin = validate_permission_origin(claimed_origin)?;
+                if claimed_origin != origin {
+                    anyhow::bail!(
+                        "dApp provider request origin {} does not match window origin {}",
+                        claimed_origin,
+                        origin
+                    );
+                }
+            }
+            request.origin = Some(origin);
+        }
+        other => {
+            anyhow::bail!("provider request is not allowed from window {other}");
+        }
+    }
+    Ok(request)
 }
 
 pub(crate) fn is_typed_data_method(method: &str) -> bool {
@@ -232,6 +271,16 @@ pub(crate) fn account_addresses_for_request(
         return Ok(Vec::new());
     }
     Ok(state.connected_account_address()?.into_iter().collect())
+}
+
+pub(crate) fn ensure_trusted_provider_origin(request: &ProviderRequest) -> Result<()> {
+    if request.origin.as_deref() == Some(TRUSTED_UI_ORIGIN) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{} is restricted to the trusted FRAMKey UI; dApps must use eth_requestAccounts",
+        request.method
+    )
 }
 
 pub(crate) fn signing_permission_error_response(

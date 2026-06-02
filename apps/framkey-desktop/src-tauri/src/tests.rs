@@ -121,6 +121,113 @@ fn mock_status_reports_mock_transaction_capability() {
 }
 
 #[test]
+fn provider_status_hides_local_runtime_details_from_dapps() {
+    let state = AppState::new();
+    let mut config = fixture_config();
+    config.device = DeviceConfig::File {
+        path: PathBuf::from("/Users/example/.framkey/private-vault.sav"),
+    };
+    config.keychain_service = "io.framkey.private".to_owned();
+    config.keychain_account = "private-account".to_owned();
+    config.helper.path = PathBuf::from("/Users/example/bin/private-helper");
+    config.rpc = Some(DesktopRpcConfig {
+        endpoint_url: "https://eth-mainnet.g.alchemy.com/v2/secret-token".to_owned(),
+        network: Some("eth-mainnet".to_owned()),
+        timeout_ms: 1_000,
+    });
+    let request = ProviderRequest {
+        id: "public-status".to_owned(),
+        method: "framkey_getStatus".to_owned(),
+        params: json!([]),
+        origin: Some("https://app.example".to_owned()),
+    };
+
+    let ProviderResponse::Result(status) =
+        handle_provider_request(&state, &config, &request).unwrap()
+    else {
+        panic!("expected provider status result");
+    };
+
+    assert!(status.get("device").is_none());
+    assert!(status.get("keychain").is_none());
+    assert!(status.get("signerHelper").is_none());
+    let serialized = serde_json::to_string(&status).unwrap();
+    assert!(!serialized.contains("private-vault.sav"));
+    assert!(!serialized.contains("private-helper"));
+    assert!(!serialized.contains("io.framkey.private"));
+    assert!(!serialized.contains("private-account"));
+    assert!(!serialized.contains("secret-token"));
+    assert!(!serialized.contains("g.alchemy.com/v2"));
+}
+
+#[test]
+fn framkey_get_account_is_restricted_to_trusted_provider_origin() {
+    let state = AppState::new();
+    let config = fixture_config();
+    let untrusted = ProviderRequest {
+        id: "untrusted-get-account".to_owned(),
+        method: "framkey_getAccount".to_owned(),
+        params: json!([]),
+        origin: Some("https://app.example".to_owned()),
+    };
+
+    let error = match handle_provider_request(&state, &config, &untrusted) {
+        Ok(_) => panic!("untrusted framkey_getAccount should be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("restricted to the trusted"));
+
+    let trusted = ProviderRequest {
+        origin: Some(TRUSTED_UI_ORIGIN.to_owned()),
+        ..untrusted
+    };
+    let ProviderResponse::Result(account) =
+        handle_provider_request(&state, &config, &trusted).unwrap()
+    else {
+        panic!("expected trusted account result");
+    };
+    assert!(account["address"].as_str().unwrap().starts_with("0x"));
+}
+
+#[test]
+fn provider_request_origin_is_bound_to_window_context() {
+    let request = ProviderRequest {
+        id: "origin-bind".to_owned(),
+        method: "eth_chainId".to_owned(),
+        params: json!([]),
+        origin: Some("https://app.example".to_owned()),
+    };
+    let dapp_url = tauri::Url::parse("https://app.example/swap?token=secret").unwrap();
+
+    let bound = bind_provider_request_context(request.clone(), "dapp", Some(&dapp_url)).unwrap();
+    assert_eq!(bound.origin.as_deref(), Some("https://app.example"));
+
+    let forged = ProviderRequest {
+        origin: Some(TRUSTED_UI_ORIGIN.to_owned()),
+        ..request.clone()
+    };
+    assert!(
+        bind_provider_request_context(forged, "dapp", Some(&dapp_url))
+            .unwrap_err()
+            .to_string()
+            .contains("does not match window origin")
+    );
+
+    let trusted = bind_provider_request_context(request, "main", Some(&dapp_url)).unwrap();
+    assert_eq!(trusted.origin.as_deref(), Some(TRUSTED_UI_ORIGIN));
+}
+
+#[test]
+fn desktop_devtools_are_explicit_debug_opt_in() {
+    assert!(!desktop_devtools_enabled_from_value(None));
+    assert_eq!(
+        desktop_devtools_enabled_from_value(Some("1")),
+        cfg!(debug_assertions)
+    );
+    assert!(!desktop_devtools_enabled_from_value(Some("false")));
+}
+
+#[test]
 fn dapp_compatibility_check_request_defaults_to_read_only() {
     let request = DappCompatibilityCheckRequest { mode: None };
 
@@ -2902,6 +3009,28 @@ fn desktop_config_rejects_blank_keychain_names() {
 
     let mut config = fixture_config();
     config.keychain_account = "\n".to_owned();
+    assert!(config.validate().is_err());
+
+    let mut config = fixture_config();
+    config.keychain_account = " default".to_owned();
+    assert!(config.validate().is_err());
+
+    let mut config = fixture_config();
+    config.device = DeviceConfig::GbxCart {
+        port: Some(" \t".to_owned()),
+        save_type: GbaSaveType::SramFram512Kbit,
+        expected_save_size: None,
+    };
+    assert!(config.validate().is_err());
+
+    let mut config = fixture_config();
+    config.device = DeviceConfig::File {
+        path: PathBuf::new(),
+    };
+    assert!(config.validate().is_err());
+
+    let mut config = fixture_config();
+    config.helper.path = PathBuf::new();
     assert!(config.validate().is_err());
 }
 

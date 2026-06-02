@@ -1,3 +1,62 @@
+# Real Runtime Boundary Audit
+
+Status: completed
+
+## Goal
+
+Audit and harden the runtime boundaries that only show their real risk on hardware, macOS Keychain, or the Tauri WebView bridge.
+
+## Scope
+
+- GBxCart/file-device configuration validation and status exposure.
+- macOS Keychain item validation as it flows through the desktop app and signer helper.
+- Tauri trusted main window versus untrusted dApp WebView behavior, including status surfaces and devtools defaults.
+- Redaction of helper/runtime diagnostics that can be triggered by real Keychain or hardware failures.
+
+## Invariants
+
+- Do not weaken Touch ID, Keychain current-set binding, signer-helper isolation, recovery authorization, or transaction approval policy.
+- Do not expose local filesystem paths, serial-port hints, helper paths, Keychain service/account names, RPC URLs, tokens, vault bytes, recovery shares, signatures, or raw transaction calldata to untrusted dApp JavaScript.
+- Keep full local diagnostics available only to the trusted main window.
+- Keep mock/autosmoke paths development-only and explicit.
+
+## Likely Files
+
+- `apps/framkey-desktop/src-tauri/src/wallet.rs`
+- `apps/framkey-desktop/src-tauri/src/provider.rs`
+- `apps/framkey-desktop/src-tauri/src/config.rs`
+- `apps/framkey-desktop/src-tauri/src/dapp.rs`
+- `apps/framkey-desktop/src-tauri/tauri.conf.json`
+- `crates/framkey-native-host/src/signer_helper.rs`
+- `apps/framkey-desktop/src-tauri/src/tests.rs`
+- `crates/framkey-native-host/src/tests.rs`
+
+## Verification
+
+- Focused desktop tests for public provider status and config validation.
+- Focused native-host tests for helper stderr redaction.
+- `node --check` for provider/UI scripts if JS is touched.
+- `cargo fmt --all -- --check`.
+- `cargo check -p framkey-desktop -p framkey-native-host`.
+- Focused `cargo nextest` slices for changed crates.
+
+Completed verification:
+
+- `cargo fmt --all`: passed.
+- `python3 -m json.tool apps/framkey-desktop/src-tauri/tauri.conf.json >/dev/null`: passed.
+- `cargo nextest run -p framkey-desktop -E 'test(provider_status_hides_local_runtime_details_from_dapps) or test(framkey_get_account_is_restricted_to_trusted_provider_origin) or test(provider_request_origin_is_bound_to_window_context) or test(desktop_devtools_are_explicit_debug_opt_in) or test(desktop_config_rejects_blank_keychain_names)'`: passed, 5 tests.
+- `cargo nextest run -p framkey-native-host -E 'test(status_redacts_local_device_paths) or test(config_validation_rejects_ambiguous_keychain_names_and_device_hints) or test(signer_helper_stderr_summary_redacts_contents) or test(signer_helper_wait_times_out_and_kills_child)'`: passed, 4 tests.
+- `cargo check -p framkey-desktop -p framkey-native-host`: passed.
+- `cargo nextest run -p framkey-desktop -p framkey-native-host`: passed, 116 tests.
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy -p framkey-desktop -p framkey-native-host --all-targets -- -D warnings`: passed.
+
+## Main Risks
+
+- Over-redacting the trusted status panel would make local hardware/Keychain diagnosis harder, so public dApp-facing status needs a separate smaller shape.
+- Disabling devtools unconditionally would slow local debugging, so the debug build can opt in with an explicit environment flag while release defaults closed.
+- Early config validation must reject malformed paths/hints without making valid configured GBxCart/file workflows harder to run.
+
 # Cloud Vault Backup Artifacts
 
 Status: active

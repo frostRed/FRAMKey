@@ -174,9 +174,10 @@ impl DesktopConfig {
 
     pub(crate) fn validate(&self) -> Result<()> {
         validate_chain_id(&self.chain_id)?;
-        if self.keychain_service.trim().is_empty() || self.keychain_account.trim().is_empty() {
-            anyhow::bail!("desktop Keychain service/account must not be blank");
-        }
+        validate_desktop_device_config(&self.device)?;
+        validate_desktop_keychain_name("service", &self.keychain_service)?;
+        validate_desktop_keychain_name("account", &self.keychain_account)?;
+        validate_desktop_path("signer helper path", &self.helper.path)?;
         self.simulation.validate()?;
         if let Some(rpc) = &self.rpc {
             rpc.validate()?;
