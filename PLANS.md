@@ -96,3 +96,218 @@ Complete the recovery v1 durability loop with compact backup bundle files, so ea
 - `cargo check -p framkey-desktop`
 - `cargo nextest run -p framkey-desktop recovery`
 - Runtime UI check that Safety shows Cloud 1, Cloud 2, Local 1, and Local 2 bundle placement.
+
+# ETH DeFi Policy Hardening
+
+Status: completed
+
+## Goal
+
+Move the current ETH/DeFi signing layer from a simulation-assisted prototype toward a safer daily-use boundary by enforcing typed-data semantics, adding protocol-aware transaction policy blockers, improving fee preparation defaults, and constraining untrusted dApp telemetry metadata.
+
+## Scope
+
+- Enforce backend Permit/Permit2 semantic checks before typed-data signing reaches the signer helper.
+- Keep unknown typed-data, raw `eth_sign`, and unsupported signing methods blocked.
+- Add local protocol semantic blockers for transaction policy where the existing decoder can already identify high-risk or under-specified DeFi intents.
+- Prefer EIP-1559 fee defaults where the RPC endpoint supports them, while preserving explicit dApp fee fields and existing fail-closed behavior.
+- Schema-whitelist dApp provider telemetry detail fields on the Rust boundary.
+
+## Invariants
+
+- Untrusted dApps must not gain access to trusted commands, Keychain, filesystem, GBxCart, recovery, or signer-helper internals.
+- No policy change may allow signing without trusted-window approval and backend authorization.
+- Live simulation remains required for ordinary transaction approval; local-only or semantically incomplete DeFi review must not become ordinary-signable.
+- Permit signing must bind to the connected wallet, active chain, expected verifying contract semantics, and bounded approval risk.
+- Do not log or persist raw params, calldata, signatures, RPC URLs, Alchemy tokens, wallet secret, KEK, DEK, RRK, or recovery shares.
+
+## Likely Files
+
+- `apps/framkey-desktop/src-tauri/src/review/summary.rs`
+- `apps/framkey-desktop/src-tauri/src/review/authorization.rs`
+- `apps/framkey-desktop/src-tauri/src/review/tests.rs`
+- `apps/framkey-desktop/src-tauri/src/provider.rs`
+- `apps/framkey-desktop/src-tauri/src/transactions.rs`
+- `apps/framkey-desktop/src-tauri/src/config.rs`
+- `apps/framkey-desktop/src-tauri/src/tests.rs`
+- `apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`
+- `crates/framkey-simulation/src/assessment.rs`
+- `crates/framkey-simulation/src/decoder.rs`
+- `crates/framkey-simulation/src/tests.rs`
+- `README.md`
+- `docs/tauri-defi-browser.md`
+- `docs/product-roadmap.md`
+- `docs/threat-model.md`
+
+## Verification
+
+- `echo $RUSTC_WRAPPER`
+- `sccache --show-stats`
+- `cargo fmt --all -- --check`
+- `cargo check -p framkey-simulation`
+- `cargo check -p framkey-desktop`
+- `cargo nextest run -p framkey-simulation`
+- `cargo nextest run -p framkey-desktop`
+- `node --check apps/framkey-desktop/ui/main.js`
+- `node --check apps/framkey-desktop/ui/dapp.js`
+- `node --test apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`
+
+## Main Risks
+
+- Over-tightening typed-data semantics may block legitimate dApp Permit flows until the review UI and policy registry know enough about more protocols.
+- Protocol intent decoding is intentionally partial; blockers must fail safe without pretending to be a full local EVM simulator.
+- EIP-1559 defaults need conservative fallback behavior because some supported RPC endpoints may not expose useful fee history.
+
+# ETH DeFi Protocol Semantics and Execution Reliability
+
+Status: completed
+
+## Goal
+
+Complete the next four ETH DeFi hardening slices in order: Universal Router / Permit2 deep decoding, Aave account-level risk evidence, transaction execution reliability, and counterparty registry productization.
+
+## Scope
+
+- Decode supported Universal Router command inputs deeply enough for local policy to reason about swaps, recipients, payer direction, and Permit2 transfer/permit intent.
+- Require or attach Aave account-level risk evidence for borrow, withdraw, and collateral toggle reviews before those flows can leave high-risk review.
+- Harden transaction preparation and send behavior around unsupported transaction envelopes, blob fields, access lists, nonce selection, and fee bounds.
+- Move protocol counterparty knowledge out of ad-hoc assessment code into a small reusable registry surface.
+
+## Invariants
+
+- Untrusted dApps must not gain filesystem, Keychain, GBxCart, recovery, signer-helper, or trusted command access.
+- No transaction or typed-data signing path may bypass trusted-window approval, backend authorization, active-chain checks, or connected-wallet binding.
+- DeFi decoding is advisory unless complete enough for policy; malformed, unsupported, or semantically incomplete protocol calls fail closed or remain high risk.
+- Live simulation remains required for ordinary transaction approval.
+- Do not log or persist RPC URLs, API keys, raw signatures, wallet secrets, KEK, DEK, RRK, recovery shares, or plaintext vault material.
+- Do not widen recovery, backup, or Keychain behavior while implementing this DeFi slice.
+
+## Likely Files
+
+- `crates/framkey-simulation/src/decoder.rs`
+- `crates/framkey-simulation/src/assessment.rs`
+- `crates/framkey-simulation/src/lib.rs`
+- `crates/framkey-simulation/src/model.rs`
+- `crates/framkey-simulation/src/tests.rs`
+- `apps/framkey-desktop/src-tauri/src/transactions.rs`
+- `apps/framkey-desktop/src-tauri/src/review/summary.rs`
+- `apps/framkey-desktop/src-tauri/src/review/tests.rs`
+- `apps/framkey-desktop/src-tauri/src/tests.rs`
+- `apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`
+- `README.md`
+- `docs/tauri-defi-browser.md`
+- `docs/product-roadmap.md`
+- `docs/threat-model.md`
+
+## Verification
+
+- `echo $RUSTC_WRAPPER`
+- `sccache --show-stats`
+- `cargo fmt --all -- --check`
+- `cargo check -p framkey-simulation`
+- `cargo check -p framkey-desktop`
+- `cargo nextest run -p framkey-simulation`
+- `cargo nextest run -p framkey-desktop`
+- `cargo clippy -p framkey-simulation -p framkey-desktop --all-targets -- -D warnings`
+- `node --check apps/framkey-desktop/src-tauri/src/provider-injection.js`
+- `node --test apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`
+- `git diff --check`
+
+## Main Risks
+
+- Universal Router command coverage is version-sensitive; unsupported command IDs must stay visible to policy instead of being treated as safe.
+- Aave health-factor RPC evidence can be stale between review and mining; local policy must keep conservative thresholds and still rely on simulation.
+- Nonce reservation can reduce duplicate-nonce races locally, but it cannot prevent replacement or pending-pool drift caused outside this app.
+
+# ETH DeFi Review Fixes and Approval UX
+
+Status: completed
+
+## Goal
+
+Fix the concrete DeFi review issues found in static review, then make dApp account-connection approvals discoverable from the trusted UI so remote apps do not spin indefinitely after selecting FRAMKey.
+
+## Scope
+
+- Keep Aave borrow, withdraw, and collateral-disable conservative unless policy has post-transaction health evidence.
+- Flag Aave third-party withdraw recipients as high risk.
+- Make nonce reservation release correct when multiple local prepared transactions fail out of order.
+- Validate Permit/Permit2 typed-data schema, not just `primaryType` and message field names.
+- Investigate and fix the trusted approval UI path for `eth_requestAccounts` / `wallet_requestPermissions` pending requests.
+
+## Invariants
+
+- Untrusted dApps must not gain filesystem, Keychain, GBxCart, recovery, signer-helper, vault, or trusted command access.
+- No signing or account exposure may bypass trusted-window approval, active origin checks, and backend authorization.
+- Current Aave account evidence may block or inform, but must not prove post-transaction safety by itself.
+- Permit/Permit2 signing must remain limited to exact known EIP-712 semantics and bounded authority.
+- UI fixes must make the pending approval actionable without auto-approving remote origins.
+
+## Likely Files
+
+- `crates/framkey-simulation/src/assessment.rs`
+- `crates/framkey-simulation/src/tests.rs`
+- `apps/framkey-desktop/src-tauri/src/state.rs`
+- `apps/framkey-desktop/src-tauri/src/review/summary.rs`
+- `apps/framkey-desktop/src-tauri/src/review/tests.rs`
+- `apps/framkey-desktop/ui/main.js`
+- `apps/framkey-desktop/ui/styles.css`
+- `apps/framkey-desktop/src-tauri/src/tests.rs`
+- `README.md`
+- `docs/tauri-defi-browser.md`
+- `docs/threat-model.md`
+
+## Verification
+
+- `cargo fmt --all -- --check`
+- `cargo check -p framkey-simulation -p framkey-desktop`
+- `cargo nextest run -p framkey-simulation -p framkey-desktop`
+- `cargo clippy -p framkey-simulation -p framkey-desktop --all-targets -- -D warnings`
+- `node --check apps/framkey-desktop/ui/main.js`
+- `node --check apps/framkey-desktop/ui/dapp.js`
+- `node --test apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`
+- `git diff --check`
+
+## Main Risks
+
+- Tightening typed-data schema may block a legitimate dApp variant until explicitly modeled.
+- Holding Aave account-changing actions in high-risk review is safer but less convenient until post-state protocol simulation exists.
+- Approval UX must avoid training users to approve hidden or unactionable requests.
+
+# ETH DeFi Wallet Picker Icon and Badge UX
+
+Status: completed
+
+## Goal
+
+Make FRAMKey show the product icon in remote dApp wallet pickers and avoid duplicating one pending approval badge across trusted workspace tabs.
+
+## Scope
+
+- Replace the EIP-6963 provider announcement icon with the existing bundled product icon instead of the temporary letter mark.
+- Stop rendering pending approval badges on trusted workspace tabs.
+- Keep the Apps approval callout and review panel behavior intact so pending approvals remain discoverable.
+
+## Invariants
+
+- Do not change account exposure, signing, permission, or approval semantics.
+- Do not add remote asset loads for wallet icons; provider metadata must remain self-contained.
+- Pending approvals must remain actionable from the review surface without implying that Home, Apps, Safety, Activity, or System each has separate work.
+
+## Likely Files
+
+- `apps/framkey-desktop/src-tauri/src/provider-injection.js`
+- `apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`
+- `apps/framkey-desktop/ui/main.js`
+
+## Verification
+
+- `node --check apps/framkey-desktop/src-tauri/src/provider-injection.js`
+- `node --check apps/framkey-desktop/ui/main.js`
+- `node --test apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`
+- `git diff --check`
+
+## Main Risks
+
+- Some dApp wallet pickers may cache EIP-6963 provider metadata until the page is refreshed.
+- Over-hiding counts would make approvals hard to find, so the in-page approval callout and review count must remain.

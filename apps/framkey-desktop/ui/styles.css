@@ -1627,6 +1627,10 @@ button:active {
   order: 90;
 }
 
+body[data-pending-review="true"] .review-panel {
+  order: 2;
+}
+
 .transaction-activity {
   display: grid;
   max-height: 360px;
@@ -2290,6 +2294,55 @@ button:active {
 .review-meta span[data-tone="bad"] {
   background: #fbefef;
   color: var(--bad);
+}
+
+.pending-review-callout {
+  min-height: 78px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 14px;
+  align-items: center;
+  justify-items: start;
+  width: 100%;
+  border: 1px solid rgba(174, 119, 0, 0.32);
+  border-left: 4px solid var(--warn);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: #fff8e8;
+  color: var(--text);
+  text-align: left;
+}
+
+.pending-review-callout[hidden] {
+  display: none;
+}
+
+.pending-review-callout span {
+  grid-row: 1 / 3;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: rgba(174, 119, 0, 0.14);
+  color: #775100;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.pending-review-callout strong,
+.pending-review-callout small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pending-review-callout strong {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.pending-review-callout small {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .review-list {

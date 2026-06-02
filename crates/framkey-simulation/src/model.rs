@@ -33,6 +33,9 @@ pub struct TransactionSimulationReport {
     // Sanitized provider metadata only; never store the full RPC response body here.
     #[serde(default, alias = "rawProviderResponse")]
     pub provider_evidence: Option<Value>,
+    // Sanitized protocol-specific read-only evidence, separate from live simulation status.
+    #[serde(default)]
+    pub protocol_evidence: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,6 +260,14 @@ pub struct TransactionTrustItem {
     pub status: TransactionTrustStatus,
     pub message: String,
     pub severity: WarningSeverity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnownProtocolCounterparty {
+    pub chain_id: &'static str,
+    pub address: &'static str,
+    pub label: &'static str,
+    pub protocol: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

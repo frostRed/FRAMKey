@@ -41,15 +41,6 @@ pub(crate) fn typed_data_param(params: &Value) -> Option<&Value> {
         .or_else(|| items.get(1))
 }
 
-pub(crate) fn find_first_address(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) if looks_like_eth_address(text) => Some(text.clone()),
-        Value::Array(items) => items.iter().find_map(find_first_address),
-        Value::Object(object) => object.values().find_map(find_first_address),
-        _ => None,
-    }
-}
-
 pub(crate) fn looks_like_eth_address(value: &str) -> bool {
     value.len() == 42
         && value.starts_with("0x")

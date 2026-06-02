@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs::{self},
     path::{Path, PathBuf},
     sync::{Condvar, Mutex},
@@ -33,6 +33,7 @@ pub(crate) struct AppState {
     pub(crate) wallet_ui_state_path: Option<PathBuf>,
     pub(crate) wallet_ui_state_persistence: Mutex<WalletUiStatePersistenceStatus>,
     pub(crate) transaction_activity: Mutex<TransactionActivityLog>,
+    pub(crate) pending_nonces: Mutex<BTreeMap<(String, String), BTreeSet<u128>>>,
     pub(crate) transaction_activity_persistence_path: Option<PathBuf>,
     pub(crate) transaction_activity_persistence: Mutex<TransactionActivityPersistenceStatus>,
     pub(crate) recovery_ui_state: Mutex<RecoveryUiState>,
@@ -43,6 +44,14 @@ pub(crate) struct AppState {
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectedAccountSession {
     pub(crate) address: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingNonceReservation {
+    pub(crate) chain_id: String,
+    pub(crate) address: String,
+    pub(crate) nonce: String,
+    pub(crate) nonce_value: u128,
 }
 
 impl ConnectedAccountSession {
@@ -90,6 +99,7 @@ impl AppState {
             wallet_ui_state_path: None,
             wallet_ui_state_persistence: Mutex::new(WalletUiStatePersistenceStatus::disabled()),
             transaction_activity: Mutex::new(TransactionActivityLog::new()),
+            pending_nonces: Mutex::new(BTreeMap::new()),
             transaction_activity_persistence_path: None,
             transaction_activity_persistence: Mutex::new(
                 TransactionActivityPersistenceStatus::disabled(),
@@ -138,6 +148,7 @@ impl AppState {
             wallet_ui_state_path: None,
             wallet_ui_state_persistence: Mutex::new(WalletUiStatePersistenceStatus::disabled()),
             transaction_activity: Mutex::new(activity),
+            pending_nonces: Mutex::new(BTreeMap::new()),
             transaction_activity_persistence_path: Some(path),
             transaction_activity_persistence: Mutex::new(persistence),
             recovery_ui_state: Mutex::new(recovery_ui_state),
@@ -239,11 +250,13 @@ impl AppState {
     ) -> Result<ReviewRequest> {
         let transaction_review = match dangerous_method_kind(&request.method) {
             Some(review::ReviewMethodKind::Transaction) => {
-                Some(config.simulation.transaction_review(
+                let mut review = config.simulation.transaction_review(
                     &request.method,
                     &request.params,
                     &config.chain_id,
-                ))
+                );
+                enrich_aave_account_evidence(config, &mut review);
+                Some(review)
             }
             _ => None,
         };
@@ -443,6 +456,55 @@ impl AppState {
                     return Ok(from);
                 }
                 self.require_connected_account_address()
+            }
+        }
+    }
+
+    pub(crate) fn reserve_transaction_nonce(
+        &self,
+        chain_id: &str,
+        address: &str,
+        rpc_pending_nonce: &str,
+    ) -> Result<PendingNonceReservation> {
+        let rpc_nonce = hex_quantity_to_u128(rpc_pending_nonce)
+            .with_context(|| "pending transaction nonce from RPC is malformed")?;
+        let address = address
+            .parse::<EvmAddress>()
+            .map_err(|_| anyhow::anyhow!("transaction wallet address is not a valid EVM address"))?
+            .to_string();
+        let key = (chain_id.to_ascii_lowercase(), address.to_ascii_lowercase());
+        let mut guard = self
+            .pending_nonces
+            .lock()
+            .map_err(|_| anyhow::anyhow!("FRAMKey pending nonce lock poisoned"))?;
+        let reserved = guard.entry(key).or_default();
+        let mut next_nonce = rpc_nonce;
+        while reserved.contains(&next_nonce) {
+            next_nonce = next_nonce
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("pending transaction nonce overflowed"))?;
+        }
+        reserved.insert(next_nonce);
+        Ok(PendingNonceReservation {
+            chain_id: chain_id.to_owned(),
+            address,
+            nonce: format!("0x{next_nonce:x}"),
+            nonce_value: next_nonce,
+        })
+    }
+
+    pub(crate) fn release_transaction_nonce(&self, reservation: &PendingNonceReservation) {
+        let key = (
+            reservation.chain_id.to_ascii_lowercase(),
+            reservation.address.to_ascii_lowercase(),
+        );
+        let Ok(mut guard) = self.pending_nonces.lock() else {
+            return;
+        };
+        if let Some(reserved) = guard.get_mut(&key) {
+            reserved.remove(&reservation.nonce_value);
+            if reserved.is_empty() {
+                guard.remove(&key);
             }
         }
     }

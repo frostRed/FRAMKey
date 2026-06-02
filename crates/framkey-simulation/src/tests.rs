@@ -1,10 +1,11 @@
 use super::*;
-use crate::assessment::known_counterparty;
+use crate::registry::known_counterparty;
 use std::{
     io::{Read, Write},
     net::TcpListener,
     sync::mpsc,
     thread,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde_json::{Value, json};
@@ -479,14 +480,14 @@ fn known_counterparty_registry_covers_switchable_permit2_and_aave_pools() {
 fn decodes_uniswap_v2_swap_path_intent() {
     let token_in = "0x1111111111111111111111111111111111111111";
     let token_out = "0x2222222222222222222222222222222222222222";
-    let recipient = "0x3333333333333333333333333333333333333333";
+    let recipient = "0x000000000000000000000000000000000000000a";
     let data = format!(
         "0x38ed1739{}{}{}{}{}{}{}{}",
         abi_u256(100),
         abi_u256(90),
         abi_u256(160),
         abi_address(recipient),
-        abi_u256(999),
+        abi_u256(future_swap_deadline()),
         abi_u256(2),
         abi_address(token_in),
         abi_address(token_out),
@@ -571,14 +572,14 @@ fn malformed_uniswap_v2_dynamic_path_fails_closed() {
 fn decodes_uniswap_v3_exact_input_single_intent() {
     let token_in = "0x1111111111111111111111111111111111111111";
     let token_out = "0x2222222222222222222222222222222222222222";
-    let recipient = "0x3333333333333333333333333333333333333333";
+    let recipient = "0x000000000000000000000000000000000000000a";
     let data = format!(
         "0x414bf389{}{}{}{}{}{}{}{}",
         abi_address(token_in),
         abi_address(token_out),
         abi_u256(3000),
         abi_address(recipient),
-        abi_u256(12345),
+        abi_u256(future_swap_deadline()),
         abi_u256(1_000_000),
         abi_u256(990_000),
         abi_u256(0),
@@ -614,22 +615,104 @@ fn decodes_uniswap_v3_exact_input_single_intent() {
 }
 
 #[test]
-fn decodes_uniswap_universal_router_execute_without_raw_payload() {
+fn live_uniswap_swap_with_safe_local_semantics_can_use_ordinary_approval() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let token_in = "0x1111111111111111111111111111111111111111";
+    let token_out = "0x2222222222222222222222222222222222222222";
     let data = format!(
-        "0x3593564c{}{}{}{}{}{}",
-        abi_u256(96),
-        abi_u256(160),
-        abi_u256(123),
-        abi_u256(2),
-        abi_bytes_word("0001"),
+        "0x414bf389{}{}{}{}{}{}{}{}",
+        abi_address(token_in),
+        abi_address(token_out),
+        abi_u256(3000),
+        abi_address(from),
+        abi_u256(future_swap_deadline()),
+        abi_u256(1_000_000),
+        abi_u256(990_000),
         abi_u256(0),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0xe592427a0aece92de3edee1f18e0157c05861564",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Allowed);
+    assert!(review.policy.can_sign);
+    assert_eq!(review.risk.level, TransactionRiskLevel::Low);
+}
+
+#[test]
+fn live_uniswap_zero_slippage_still_requires_high_risk_override() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let token_in = "0x1111111111111111111111111111111111111111";
+    let token_out = "0x2222222222222222222222222222222222222222";
+    let data = format!(
+        "0x414bf389{}{}{}{}{}{}{}{}",
+        abi_address(token_in),
+        abi_address(token_out),
+        abi_u256(3000),
+        abi_address(from),
+        abi_u256(future_swap_deadline()),
+        abi_u256(1_000_000),
+        abi_u256(0),
+        abi_u256(0),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0xe592427a0aece92de3edee1f18e0157c05861564",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(
+        review.policy.decision,
+        TransactionPolicyDecision::RequiresUserOverride
+    );
+    assert!(!review.policy.can_sign);
+    assert!(review.policy.override_allowed);
+    assert!(risk_reason(&review, "uniswap_zero_slippage_floor").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+}
+
+#[test]
+fn decodes_uniswap_universal_router_execute_without_raw_payload() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let token_in = "0x1111111111111111111111111111111111111111";
+    let token_out = "0x2222222222222222222222222222222222222222";
+    let input = universal_router_v3_exact_in_input(
+        from,
+        1_000_000,
+        990_000,
+        &uniswap_v3_path_hex(token_in, 3000, token_out),
+        true,
+    );
+    let data = format!(
+        "0x3593564c{}",
+        universal_router_execute_args("00", &[input.as_str()], Some(future_swap_deadline())),
     );
     let review = local_transaction_review(
         "eth_sendTransaction",
         &json!([
             {
                 "chainId": "0x1",
-                "from": "0x000000000000000000000000000000000000000a",
+                "from": from,
                 "to": "0x4444444444444444444444444444444444444444",
                 "value": "0x0",
                 "data": data
@@ -643,22 +726,161 @@ fn decodes_uniswap_universal_router_execute_without_raw_payload() {
     assert_eq!(report.status, SimulationStatus::LocalDecoded);
     assert_eq!(call.standard, "uniswap_universal_router");
     assert_eq!(call.function, "execute(bytes,bytes[],uint256)");
-    assert_eq!(decoded_arg(call, "commandBytes"), Some("2"));
-    assert_eq!(decoded_arg(call, "inputCount"), Some("0"));
-    assert_eq!(decoded_arg(call, "deadline"), Some("123"));
+    assert_eq!(decoded_arg(call, "commandBytes"), Some("1"));
+    assert_eq!(decoded_arg(call, "commandCount"), Some("1"));
+    assert_eq!(decoded_arg(call, "inputCount"), Some("1"));
+    assert_eq!(decoded_arg(call, "commandTypes"), Some("V3_SWAP_EXACT_IN"));
+    assert_eq!(decoded_arg(call, "decodedCommandCount"), Some("1"));
+    assert_eq!(decoded_arg(call, "unsupportedCommandCount"), Some("0"));
+    assert_eq!(decoded_arg(call, "swapCount"), Some("1"));
+    assert_eq!(decoded_arg(call, "recipient"), Some(from));
+    assert_eq!(decoded_arg(call, "amountOutMinimum"), Some("990000"));
+    assert_eq!(decoded_arg(call, "tokenIn"), Some(token_in));
+    assert_eq!(decoded_arg(call, "tokenOut"), Some(token_out));
     assert!(
         call.arguments
             .iter()
-            .all(|argument| argument.value != "0001")
+            .all(|argument| argument.value != input)
     );
     assert_no_unknown_selector(report);
     assert_live_simulation_only_override(&review);
 }
 
 #[test]
+fn live_supported_universal_router_swap_can_use_ordinary_approval() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let input = universal_router_v3_exact_in_input(
+        from,
+        1_000_000,
+        990_000,
+        &uniswap_v3_path_hex(
+            "0x1111111111111111111111111111111111111111",
+            3000,
+            "0x2222222222222222222222222222222222222222",
+        ),
+        true,
+    );
+    let data = format!(
+        "0x3593564c{}",
+        universal_router_execute_args("00", &[input.as_str()], Some(future_swap_deadline())),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Allowed);
+    assert!(review.policy.can_sign);
+    assert!(risk_reason(&review, "universal_router_semantics_incomplete").is_none());
+    assert_eq!(review.risk.level, TransactionRiskLevel::Low);
+}
+
+#[test]
+fn live_unsupported_universal_router_command_requires_high_risk_override() {
+    let data = format!(
+        "0x3593564c{}",
+        universal_router_execute_args("1f", &[""], Some(future_swap_deadline())),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": "0x000000000000000000000000000000000000000a",
+                "to": "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(
+        review.policy.decision,
+        TransactionPolicyDecision::RequiresUserOverride
+    );
+    assert!(risk_reason(&review, "universal_router_semantics_incomplete").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+}
+
+#[test]
+fn decodes_universal_router_permit2_permit_and_transfer_summary() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let token = "0x1111111111111111111111111111111111111111";
+    let recipient = "0x000000000000000000000000000000000000000b";
+    let spender = "0x66a9893cc07d91d95644aedd05d03f95e1dba8af";
+    let permit_input = universal_router_permit2_permit_input(
+        token,
+        1_000_000,
+        future_swap_deadline(),
+        7,
+        spender,
+        future_swap_deadline(),
+        &"11".repeat(65),
+    );
+    let transfer_input = format!(
+        "{}{}{}",
+        abi_address(token),
+        abi_address(recipient),
+        abi_u256(1_000_000),
+    );
+    let data = format!(
+        "0x3593564c{}",
+        universal_router_execute_args(
+            "0a02",
+            &[permit_input.as_str(), transfer_input.as_str()],
+            Some(future_swap_deadline()),
+        ),
+    );
+    let review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+
+    let call = review.simulation.decoded_call.as_ref().unwrap();
+    assert_eq!(decoded_arg(call, "permit2PermitCount"), Some("1"));
+    assert_eq!(decoded_arg(call, "permit2TransferCount"), Some("1"));
+    assert_eq!(decoded_arg(call, "permit2Token"), Some(token));
+    assert_eq!(decoded_arg(call, "permit2Spender"), Some(spender));
+    assert_eq!(decoded_arg(call, "permit2SignatureBytes"), Some("65"));
+    assert_eq!(review.impact.approval_count, 1);
+    assert_eq!(review.impact.transfer_count, 1);
+    assert!(
+        review
+            .simulation
+            .decoded_call
+            .as_ref()
+            .unwrap()
+            .arguments
+            .iter()
+            .all(|argument| argument.value != permit_input)
+    );
+}
+
+#[test]
 fn decodes_aave_supply_intent() {
     let asset = "0x1111111111111111111111111111111111111111";
-    let on_behalf_of = "0x2222222222222222222222222222222222222222";
+    let on_behalf_of = "0x000000000000000000000000000000000000000a";
     let data = format!(
         "0x617ba037{}{}{}{}",
         abi_address(asset),
@@ -690,6 +912,162 @@ fn decodes_aave_supply_intent() {
     assert_eq!(decoded_arg(call, "onBehalfOf"), Some(on_behalf_of));
     assert_no_unknown_selector(report);
     assert_live_simulation_only_override(&review);
+}
+
+#[test]
+fn live_aave_borrow_requires_high_risk_override() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let data = format!(
+        "0xa415bcad{}{}{}{}{}",
+        abi_address("0x1111111111111111111111111111111111111111"),
+        abi_u256(50_000_000),
+        abi_u256(2),
+        abi_u256(0),
+        abi_address(from),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(
+        review.policy.decision,
+        TransactionPolicyDecision::RequiresUserOverride
+    );
+    assert!(risk_reason(&review, "aave_borrow_health_factor_unknown").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+}
+
+#[test]
+fn live_aave_borrow_with_safe_current_account_data_still_requires_high_risk_override() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let data = format!(
+        "0xa415bcad{}{}{}{}{}",
+        abi_address("0x1111111111111111111111111111111111111111"),
+        abi_u256(50_000_000),
+        abi_u256(2),
+        abi_u256(0),
+        abi_address(from),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    review.simulation.protocol_evidence = Some(json!({
+        "aave": {
+            "status": "ok",
+            "healthFactor": "2000000000000000000"
+        }
+    }));
+    mark_live_simulated(&mut review);
+
+    assert_eq!(
+        review.policy.decision,
+        TransactionPolicyDecision::RequiresUserOverride
+    );
+    assert!(!review.policy.can_sign);
+    assert!(review.policy.override_allowed);
+    assert!(risk_reason(&review, "aave_borrow_health_factor_unknown").is_none());
+    assert!(risk_reason(&review, "aave_post_transaction_health_factor_unknown").is_some());
+    assert!(risk_reason(&review, "aave_health_factor_caution").is_none());
+    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+}
+
+#[test]
+fn live_aave_withdraw_to_third_party_requires_high_risk_override() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let recipient = "0x000000000000000000000000000000000000000b";
+    let data = format!(
+        "0x69328dec{}{}{}",
+        abi_address("0x1111111111111111111111111111111111111111"),
+        abi_u256(50_000_000),
+        abi_address(recipient),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    review.simulation.protocol_evidence = Some(json!({
+        "aave": {
+            "status": "ok",
+            "healthFactor": "2000000000000000000"
+        }
+    }));
+    mark_live_simulated(&mut review);
+
+    assert_eq!(
+        review.policy.decision,
+        TransactionPolicyDecision::RequiresUserOverride
+    );
+    assert!(risk_reason(&review, "aave_third_party_withdraw_recipient").is_some());
+    assert!(risk_reason(&review, "aave_post_transaction_health_factor_unknown").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+}
+
+#[test]
+fn live_aave_borrow_with_unsafe_account_data_is_blocked() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let data = format!(
+        "0xa415bcad{}{}{}{}{}",
+        abi_address("0x1111111111111111111111111111111111111111"),
+        abi_u256(50_000_000),
+        abi_u256(2),
+        abi_u256(0),
+        abi_address(from),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    review.simulation.protocol_evidence = Some(json!({
+        "aave": {
+            "status": "ok",
+            "healthFactor": "1100000000000000000"
+        }
+    }));
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
+    assert!(!review.policy.can_sign);
+    assert!(risk_reason(&review, "aave_health_factor_liquidation_risk").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
 }
 
 #[test]
@@ -1244,6 +1622,14 @@ fn abi_u256(value: u128) -> String {
     format!("{value:064x}")
 }
 
+fn future_swap_deadline() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as u128)
+        .unwrap_or(0)
+        .saturating_add(60 * 60)
+}
+
 fn abi_address(value: &str) -> String {
     let address = value.strip_prefix("0x").unwrap_or(value);
     format!("{address:0>64}")
@@ -1251,6 +1637,117 @@ fn abi_address(value: &str) -> String {
 
 fn abi_bytes_word(hex_bytes: &str) -> String {
     format!("{hex_bytes:0<64}")
+}
+
+fn abi_bool(value: bool) -> String {
+    abi_u256(u128::from(value))
+}
+
+fn abi_dynamic_bytes(hex_bytes: &str) -> String {
+    format!(
+        "{}{}",
+        abi_u256((hex_bytes.len() / 2) as u128),
+        abi_padded_hex(hex_bytes)
+    )
+}
+
+fn abi_padded_hex(hex_bytes: &str) -> String {
+    let mut padded = hex_bytes.to_owned();
+    let remainder = padded.len() % 64;
+    if remainder != 0 {
+        padded.push_str(&"0".repeat(64 - remainder));
+    }
+    padded
+}
+
+fn abi_bytes_array(items: &[&str]) -> String {
+    let tails = items
+        .iter()
+        .map(|item| abi_dynamic_bytes(item))
+        .collect::<Vec<_>>();
+    let mut offset = 32_usize.saturating_mul(items.len());
+    let mut offsets = String::new();
+    for tail in &tails {
+        offsets.push_str(&abi_u256(offset as u128));
+        offset = offset.saturating_add(tail.len() / 2);
+    }
+    format!(
+        "{}{}{}",
+        abi_u256(items.len() as u128),
+        offsets,
+        tails.join("")
+    )
+}
+
+fn universal_router_execute_args(
+    commands_hex: &str,
+    inputs: &[&str],
+    deadline: Option<u128>,
+) -> String {
+    let commands = abi_dynamic_bytes(commands_hex);
+    let encoded_inputs = abi_bytes_array(inputs);
+    let head_words = if deadline.is_some() { 3 } else { 2 };
+    let commands_offset = 32_usize.saturating_mul(head_words);
+    let inputs_offset = commands_offset.saturating_add(commands.len() / 2);
+    let mut encoded = format!(
+        "{}{}",
+        abi_u256(commands_offset as u128),
+        abi_u256(inputs_offset as u128)
+    );
+    if let Some(deadline) = deadline {
+        encoded.push_str(&abi_u256(deadline));
+    }
+    encoded.push_str(&commands);
+    encoded.push_str(&encoded_inputs);
+    encoded
+}
+
+fn universal_router_v3_exact_in_input(
+    recipient: &str,
+    amount_in: u128,
+    amount_out_minimum: u128,
+    path_hex: &str,
+    payer_is_user: bool,
+) -> String {
+    format!(
+        "{}{}{}{}{}{}",
+        abi_address(recipient),
+        abi_u256(amount_in),
+        abi_u256(amount_out_minimum),
+        abi_u256(160),
+        abi_bool(payer_is_user),
+        abi_dynamic_bytes(path_hex),
+    )
+}
+
+fn universal_router_permit2_permit_input(
+    token: &str,
+    amount: u128,
+    expiration: u128,
+    nonce: u128,
+    spender: &str,
+    sig_deadline: u128,
+    signature_hex: &str,
+) -> String {
+    format!(
+        "{}{}{}{}{}{}{}{}",
+        abi_address(token),
+        abi_u256(amount),
+        abi_u256(expiration),
+        abi_u256(nonce),
+        abi_address(spender),
+        abi_u256(sig_deadline),
+        abi_u256(224),
+        abi_dynamic_bytes(signature_hex),
+    )
+}
+
+fn uniswap_v3_path_hex(token_in: &str, fee: u32, token_out: &str) -> String {
+    format!(
+        "{}{fee:06x}{}",
+        token_in.strip_prefix("0x").unwrap_or(token_in),
+        token_out.strip_prefix("0x").unwrap_or(token_out),
+    )
 }
 
 fn decoded_arg<'a>(call: &'a DecodedCall, name: &str) -> Option<&'a str> {

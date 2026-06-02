@@ -1,19 +1,104 @@
 (function () {
   "use strict";
 
+  const PROVIDER_ICON =
+    "data:image/png;base64," +
+    "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";
+
   const PROVIDER_INFO = {
     uuid: "b7b46ee4-48bc-4050-a02f-000000000001",
     name: "FRAMKey",
-    icon:
-      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23166c4d'/%3E%3Cpath d='M16 18h32v8H26v8h18v8H26v14H16V18z' fill='white'/%3E%3Cpath d='M39 34l9 11h-8l-8-11h7z' fill='%23d8f5e6'/%3E%3C/svg%3E",
+    icon: PROVIDER_ICON,
     rdns: "dev.framkey",
   };
   const PROVIDER_SMOKE_TIMEOUT_MS = 30_000;
   const PROVIDER_SMOKE_MESSAGE_HEX = "0x4652414d4b65792072656d6f746520736d6f6b65";
   const PROVIDER_SMOKE_TX_TO = "0x0000000000000000000000000000000000000001";
   const PROVIDER_SMOKE_PERMIT_TOKEN = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
-  const PROVIDER_SMOKE_PERMIT_SPENDER = "0x000000000022d473030f116ddee9f6b43ac78ba3";
-  const PROVIDER_SMOKE_PERMIT_RECIPIENT = "0x0000000000000000000000000000000000000002";
+  const PROVIDER_SMOKE_PERMIT2_CONTRACT = "0x000000000022d473030f116ddee9f6b43ac78ba3";
+  const PROVIDER_SMOKE_PERMIT_SPENDERS = {
+    "0x1": "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+    "0xaa36a7": "0x3a9d48ab9751398bbfa63ad67599bb04e4bdf98b",
+    "0x2105": "0x6ff5693b99212da76ad316178a184ab56d299b43",
+    "0xa": "0x851116d9223fabed8e56c0e6b8ad0c31d98b3507",
+    "0xa4b1": "0xa51afafe0263b40edaef0df8781ea9aa03e381a3",
+    "0x89": "0x1095692a6237d83c6a72f3f5efedb9a670c49223",
+  };
 
   class FramKeyProviderRpcError extends Error {
     constructor(error) {
@@ -568,11 +653,13 @@
 
   function providerSmokePermitTypedData(chainIdHex) {
     const chainId = decimalChainId(chainIdHex) ?? "1";
+    const normalizedChainIdHex = normalizeChainIdHex(chainIdHex) ?? "0x1";
+    const deadline = String(Math.floor(Date.now() / 1000) + 3600);
     return {
       domain: {
         name: "Permit2",
         chainId,
-        verifyingContract: PROVIDER_SMOKE_PERMIT_SPENDER,
+        verifyingContract: PROVIDER_SMOKE_PERMIT2_CONTRACT,
       },
       primaryType: "PermitSingle",
       types: {
@@ -597,13 +684,22 @@
         details: {
           token: PROVIDER_SMOKE_PERMIT_TOKEN,
           amount: "1000000",
-          expiration: "1900000000",
+          expiration: deadline,
           nonce: "0",
         },
-        spender: PROVIDER_SMOKE_PERMIT_RECIPIENT,
-        sigDeadline: "1900000100",
+        spender:
+          PROVIDER_SMOKE_PERMIT_SPENDERS[normalizedChainIdHex] ??
+          PROVIDER_SMOKE_PERMIT_SPENDERS["0x1"],
+        sigDeadline: deadline,
       },
     };
+  }
+
+  function normalizeChainIdHex(chainIdHex) {
+    if (typeof chainIdHex !== "string" || !/^0x[0-9a-fA-F]+$/.test(chainIdHex)) {
+      return null;
+    }
+    return `0x${BigInt(chainIdHex).toString(16)}`;
   }
 
   const provider = new FramKeyProvider();

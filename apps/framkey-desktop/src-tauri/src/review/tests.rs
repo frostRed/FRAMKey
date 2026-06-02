@@ -168,6 +168,7 @@ fn transaction_guidance_explains_live_simulation_failure_block() {
 
 #[test]
 fn summarizes_erc20_permit_typed_data() {
+    let deadline = future_deadline();
     let summary = summarize_typed_data(
         "eth_signTypedData_v4",
         &json!([
@@ -192,13 +193,14 @@ fn summarizes_erc20_permit_typed_data() {
                 },
                 "message": {
                     "owner": "0x1111111111111111111111111111111111111111",
-                    "spender": "0x2222222222222222222222222222222222222222",
+                    "spender": "0x000000000022d473030f116ddee9f6b43ac78ba3",
                     "value": "1000000",
                     "nonce": "7",
-                    "deadline": "1900000000"
+                    "deadline": deadline
                 }
             }
         ]),
+        "0x1",
     );
 
     assert_eq!(
@@ -212,11 +214,13 @@ fn summarizes_erc20_permit_typed_data() {
         "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
     );
     assert_eq!(summary["typedData"]["permit"]["amount"], "1000000");
+    assert_eq!(summary["typedData"]["policy"]["canSign"], true);
     assert_eq!(summary["decision"], "blocked_before_approval");
 }
 
 #[test]
 fn summarizes_permit2_typed_data() {
+    let deadline = future_deadline();
     let summary = summarize_typed_data(
         "eth_signTypedData_v4",
         &json!([
@@ -245,15 +249,16 @@ fn summarizes_permit2_typed_data() {
                 "message": {
                     "details": {
                         "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-                        "amount": "1461501637330902918203684832716283019655932542975",
-                        "expiration": "1900000000",
+                        "amount": "1000000",
+                        "expiration": deadline,
                         "nonce": "9"
                     },
-                    "spender": "0x3333333333333333333333333333333333333333",
-                    "sigDeadline": "1900000100"
+                    "spender": "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+                    "sigDeadline": deadline
                 }
             }
         ]),
+        "0x1",
     );
 
     assert_eq!(summary["typedData"]["intent"], "permit2_permit_single");
@@ -267,9 +272,54 @@ fn summarizes_permit2_typed_data() {
     );
     assert_eq!(
         summary["typedData"]["permit"]["spender"],
-        "0x3333333333333333333333333333333333333333"
+        "0x66a9893cc07d91d95644aedd05d03f95e1dba8af"
     );
+    assert_eq!(summary["typedData"]["policy"]["canSign"], true);
     assert_eq!(summary["decision"], "blocked_before_approval");
+}
+
+#[test]
+fn typed_data_schema_mismatch_blocks_signing() {
+    let deadline = future_deadline();
+    let summary = summarize_typed_data(
+        "eth_signTypedData_v4",
+        &json!([
+            "0x1111111111111111111111111111111111111111",
+            {
+                "domain": {
+                    "name": "USD Coin",
+                    "version": "2",
+                    "chainId": 1,
+                    "verifyingContract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+                },
+                "primaryType": "Permit",
+                "types": {
+                    "EIP712Domain": [],
+                    "Permit": [
+                        {"name": "owner", "type": "address"},
+                        {"name": "spender", "type": "address"},
+                        {"name": "value", "type": "uint160"},
+                        {"name": "nonce", "type": "uint256"},
+                        {"name": "deadline", "type": "uint256"}
+                    ]
+                },
+                "message": {
+                    "owner": "0x1111111111111111111111111111111111111111",
+                    "spender": "0x000000000022d473030f116ddee9f6b43ac78ba3",
+                    "value": "1000000",
+                    "nonce": "7",
+                    "deadline": deadline
+                }
+            }
+        ]),
+        "0x1",
+    );
+
+    assert_eq!(summary["typedData"]["policy"]["canSign"], false);
+    assert_eq!(
+        summary["typedData"]["policy"]["blockers"][0]["code"],
+        "typed_data_schema_mismatch"
+    );
 }
 
 #[test]
@@ -330,6 +380,7 @@ fn approval_consumes_decision_token() {
 #[test]
 fn recognized_typed_data_approval_enters_controlled_signing_mode() {
     let mut queue = ReviewQueue::new();
+    let deadline = future_deadline();
     let request = queue
         .capture(
             "request-1".to_owned(),
@@ -357,10 +408,10 @@ fn recognized_typed_data_approval_enters_controlled_signing_mode() {
                     },
                     "message": {
                         "owner": "0x1111111111111111111111111111111111111111",
-                        "spender": "0x2222222222222222222222222222222222222222",
+                        "spender": "0x000000000022d473030f116ddee9f6b43ac78ba3",
                         "value": "1000000",
                         "nonce": "7",
-                        "deadline": "1900000000"
+                        "deadline": deadline
                     }
                 }
             ]),
@@ -382,6 +433,128 @@ fn recognized_typed_data_approval_enters_controlled_signing_mode() {
         typed_data_signing_authorization(&outcome.review_request).unwrap(),
         "controlled_typed_data_signing"
     );
+}
+
+#[test]
+fn typed_data_owner_mismatch_approval_remains_blocked() {
+    let mut queue = ReviewQueue::new();
+    let deadline = future_deadline();
+    let request = queue
+        .capture(
+            "request-1".to_owned(),
+            "eth_signTypedData_v4".to_owned(),
+            Some("https://example.test".to_owned()),
+            &json!([
+                "0x1111111111111111111111111111111111111111",
+                {
+                    "domain": {
+                        "name": "USD Coin",
+                        "version": "2",
+                        "chainId": 1,
+                        "verifyingContract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+                    },
+                    "primaryType": "Permit",
+                    "types": {
+                        "EIP712Domain": [],
+                        "Permit": [
+                            {"name": "owner", "type": "address"},
+                            {"name": "spender", "type": "address"},
+                            {"name": "value", "type": "uint256"},
+                            {"name": "nonce", "type": "uint256"},
+                            {"name": "deadline", "type": "uint256"}
+                        ]
+                    },
+                    "message": {
+                        "owner": "0x9999999999999999999999999999999999999999",
+                        "spender": "0x000000000022d473030f116ddee9f6b43ac78ba3",
+                        "value": "1000000",
+                        "nonce": "7",
+                        "deadline": deadline
+                    }
+                }
+            ]),
+            "0x1",
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(request.summary["typedData"]["policy"]["canSign"], false);
+    assert_eq!(
+        request.summary["typedData"]["policy"]["blockers"][0]["code"],
+        "permit_owner_mismatch"
+    );
+    let error = queue
+        .decide(
+            &request.id,
+            &request.decision_token,
+            ReviewDecision::Approve,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("permit_owner_mismatch"));
+}
+
+#[test]
+fn typed_data_unknown_spender_approval_remains_blocked() {
+    let mut queue = ReviewQueue::new();
+    let deadline = future_deadline();
+    let request = queue
+        .capture(
+            "request-1".to_owned(),
+            "eth_signTypedData_v4".to_owned(),
+            Some("https://example.test".to_owned()),
+            &json!([
+                "0x1111111111111111111111111111111111111111",
+                {
+                    "domain": {
+                        "name": "Permit2",
+                        "chainId": 1,
+                        "verifyingContract": "0x000000000022d473030f116ddee9f6b43ac78ba3"
+                    },
+                    "primaryType": "PermitSingle",
+                    "types": {
+                        "EIP712Domain": [],
+                        "PermitDetails": [
+                            {"name": "token", "type": "address"},
+                            {"name": "amount", "type": "uint160"},
+                            {"name": "expiration", "type": "uint48"},
+                            {"name": "nonce", "type": "uint48"}
+                        ],
+                        "PermitSingle": [
+                            {"name": "details", "type": "PermitDetails"},
+                            {"name": "spender", "type": "address"},
+                            {"name": "sigDeadline", "type": "uint256"}
+                        ]
+                    },
+                    "message": {
+                        "details": {
+                            "token": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                            "amount": "1000000",
+                            "expiration": deadline,
+                            "nonce": "9"
+                        },
+                        "spender": "0x3333333333333333333333333333333333333333",
+                        "sigDeadline": deadline
+                    }
+                }
+            ]),
+            "0x1",
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(request.summary["typedData"]["policy"]["canSign"], false);
+    assert_eq!(
+        request.summary["typedData"]["policy"]["blockers"][0]["code"],
+        "unknown_permit_spender"
+    );
+    let error = queue
+        .decide(
+            &request.id,
+            &request.decision_token,
+            ReviewDecision::Approve,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("unknown_permit_spender"));
 }
 
 #[test]
@@ -416,7 +589,7 @@ fn unknown_typed_data_approval_remains_blocked() {
             ReviewDecision::Approve,
         )
         .unwrap_err();
-    assert!(error.to_string().contains("recognized Permit"));
+    assert!(error.to_string().contains("unrecognized_typed_data_intent"));
     let pending = queue.get(&request.id).unwrap();
     assert_eq!(pending.status, ReviewStatus::Pending);
     assert!(!pending.decision_token_consumed);
@@ -712,4 +885,8 @@ fn allowed_transaction_review() -> TransactionReviewReport {
     review.trust = evaluate_transaction_trust(&review.simulation);
     assert_eq!(review.policy.decision, TransactionPolicyDecision::Allowed);
     review
+}
+
+fn future_deadline() -> String {
+    current_unix_seconds().saturating_add(60 * 60).to_string()
 }

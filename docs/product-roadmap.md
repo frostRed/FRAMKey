@@ -111,10 +111,16 @@ Status: usable development wallet path in progress.
 - Added a trusted Portfolio ERC-20 Send flow that selects a token, validates decimal amount input, encodes `transfer(address,uint256)`, and reuses the same review/sign/broadcast/Activity pipeline without exposing a new dApp API.
 - Simplified Home into a wallet status and daily action surface; backup creation, placement, and restore now stay in the Safety workspace, Home Connect/Disconnect only changes trusted local UI session state, and address-only refresh/account queries use the connected session address instead of touching the vault device.
 - Made the trusted `Create Vault + Backups` action explicitly write-gated so the UI cannot invoke real vault creation until the configured-device write is confirmed.
-- Added local intent decoding for common top-level Uniswap V2/V3, Universal Router, multicall, and Aave V3 transaction selectors, with protocol labels in trusted transaction review.
+- Added local intent decoding for common top-level Uniswap V2/V3, supported Universal Router command inputs, multicall, and Aave V3 transaction selectors, with protocol labels in trusted transaction review.
 - Added backend-generated transaction risk summaries that combine policy blockers, simulation warnings, live-simulation state, and decoded protocol intent into a review-only level/action/reason model.
 - Added backend-generated transaction impact summaries for native value movement, decoded transfers, approval changes, and live provider asset-change coverage.
 - Added a backend-generated counterparty trust summary for known Uniswap, Permit2, and Aave contracts across the current switchable chains, with unknown active approval authorities requiring explicit high-risk approval.
+- Hardened Permit/Permit2 typed-data signing policy so approval requires exact recognized EIP-712 type schema, signer-owner agreement, active-chain domain agreement, known Permit2/verifying-contract semantics, known spender, bounded future deadlines/expirations, and no max-allowance Permit amounts.
+- Added protocol-aware transaction policy blockers for unsupported Universal Router commands, multicall incomplete local semantics, risky Uniswap swap parameters, third-party Aave withdraw recipients, and Aave account-changing actions without post-transaction health evidence.
+- Added sanitized Aave `getUserAccountData(address)` evidence for recognized Aave borrow, withdraw, and collateral-disable reviews.
+- Defaulted missing transaction fees to EIP-1559 `eth_feeHistory` suggestions before falling back to legacy `eth_gasPrice`, rejected unsupported transaction envelopes/blob fields/non-empty access lists/extreme fees, and added local pending-nonce reservation.
+- Moved known protocol counterparties into a reusable `framkey-simulation::registry` module.
+- Schema-whitelisted untrusted dApp provider telemetry detail on the Rust boundary before provider events are stored.
 - Keep unknown typed-data and raw `eth_sign` request capture without signing.
 - Show account balance snapshots and structured simulation/decoded transaction summaries in the trusted wallet UI, with raw JSON kept as collapsible debug context.
 
@@ -157,9 +163,9 @@ The current simulation layer returns a conservative normalized summary and can a
 - unknown calldata marker
 - raw provider response for audit
 
-Transaction signing is exposed only through trusted approval, transaction policy authorization, and signer-helper account validation. The known-counterparty registry now covers a narrow source-backed set across the current switchable chains: Uniswap V2 Router02, Uniswap V3 SwapRouter/SwapRouter02, Uniswap Universal Router, Permit2, and Aave V3 Pool where deployed on Ethereum, Sepolia, Base, OP Mainnet, Arbitrum One, and Polygon. It labels review cards and makes unknown active approval authority require high-risk approval. Before real funds, the policy gate still needs broader protocol coverage, deeper protocol semantics, clearer allowlists, and more production-grade risk policy.
+Transaction signing is exposed only through trusted approval, transaction policy authorization, and signer-helper account validation. The known-counterparty registry now covers a narrow source-backed set across the current switchable chains: Uniswap V2 Router02, Uniswap V3 SwapRouter/SwapRouter02, Uniswap Universal Router, Permit2, and Aave V3 Pool where deployed on Ethereum, Sepolia, Base, OP Mainnet, Arbitrum One, and Polygon. It labels review cards, makes unknown active approval authority require high-risk approval, feeds Permit/Permit2 spender policy, and is available as a dedicated simulation registry module. Before larger real-funds use, the policy gate still needs broader protocol coverage, stronger per-protocol allowlists, post-transaction Aave position policy, and production-grade slippage/route risk policy.
 
-Protocol-specific local decoding currently covers common token approvals/transfers plus selected Uniswap and Aave top-level intents. It is a review aid only: local-only decoded DeFi transactions still require the explicit high-risk path unless live simulation and policy evaluation allow ordinary approval.
+Protocol-specific local decoding currently covers common token approvals/transfers plus selected Uniswap and Aave intents, including supported Universal Router swap/Permit2 subcommands and current Aave account health evidence. It is a review aid and policy input, not a full EVM simulator: local-only decoded DeFi transactions still require the explicit high-risk path, and live-simulated transactions still require high-risk approval when local semantics are incomplete or protocol-specific risk blockers are present.
 
 ## Security Invariants
 

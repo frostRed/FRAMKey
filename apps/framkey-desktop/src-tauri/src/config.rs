@@ -1578,7 +1578,78 @@ pub(crate) fn sanitized_provider_event_detail(detail: Value) -> Result<Option<Va
             "bytes": len,
         })));
     }
-    Ok(Some(detail))
+    let Some(object) = detail.as_object() else {
+        return Ok(Some(json!({
+            "omitted": "detail must be an object",
+        })));
+    };
+
+    let mut sanitized = serde_json::Map::new();
+    let mut omitted_keys = 0usize;
+    for (key, value) in object {
+        if !provider_telemetry_detail_key_allowed(key) {
+            omitted_keys = omitted_keys.saturating_add(1);
+            continue;
+        }
+        let Some(value) = sanitized_provider_telemetry_detail_value(key, value)? else {
+            omitted_keys = omitted_keys.saturating_add(1);
+            continue;
+        };
+        sanitized.insert(key.clone(), value);
+    }
+    if omitted_keys > 0 {
+        sanitized.insert("_omittedKeys".to_owned(), json!(omitted_keys));
+    }
+    if sanitized.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Value::Object(sanitized)))
+}
+
+pub(crate) fn provider_telemetry_detail_key_allowed(key: &str) -> bool {
+    matches!(
+        key,
+        "provider"
+            | "mode"
+            | "source"
+            | "reason"
+            | "method"
+            | "resultKind"
+            | "resultPreview"
+            | "errorMessage"
+            | "targetChainId"
+            | "observedChainId"
+            | "chainId"
+            | "ok"
+            | "ethereumAssigned"
+            | "errorCode"
+            | "durationMs"
+    )
+}
+
+pub(crate) fn sanitized_provider_telemetry_detail_value(
+    key: &str,
+    value: &Value,
+) -> Result<Option<Value>> {
+    match value {
+        Value::String(text) => {
+            let max_chars = match key {
+                "errorMessage" => 240,
+                "resultPreview" => 64,
+                _ => 120,
+            };
+            Ok(Some(Value::String(truncate_for_event(
+                &validate_provider_event_text(text)?,
+                max_chars,
+            ))))
+        }
+        Value::Bool(value) => Ok(Some(Value::Bool(*value))),
+        Value::Number(number) if number.as_i64().is_some() || number.as_u64().is_some() => {
+            Ok(Some(Value::Number(number.clone())))
+        }
+        Value::Null => Ok(None),
+        _ => Ok(None),
+    }
 }
 
 pub(crate) fn error_to_provider_error(error: anyhow::Error) -> ProviderError {

@@ -156,6 +156,7 @@ pub fn local_transaction_report(
         approvals,
         warnings,
         provider_evidence: None,
+        protocol_evidence: None,
     }
 }
 
@@ -387,9 +388,15 @@ fn decode_known_call(
             ));
         }
         [0x35, 0x93, 0x56, 0x4c] => {
-            let Some(arguments) =
-                decode_uniswap_universal_router_execute_args(bytes, warnings, true)
-            else {
+            let Some(arguments) = decode_uniswap_universal_router_execute_args(
+                bytes,
+                from,
+                contract,
+                asset_transfers,
+                approvals,
+                warnings,
+                true,
+            ) else {
                 return;
             };
             *decoded_call = Some(decoded_call_value(
@@ -401,9 +408,15 @@ fn decode_known_call(
             ));
         }
         [0x24, 0x85, 0x6b, 0xc3] => {
-            let Some(arguments) =
-                decode_uniswap_universal_router_execute_args(bytes, warnings, false)
-            else {
+            let Some(arguments) = decode_uniswap_universal_router_execute_args(
+                bytes,
+                from,
+                contract,
+                asset_transfers,
+                approvals,
+                warnings,
+                false,
+            ) else {
                 return;
             };
             *decoded_call = Some(decoded_call_value(
@@ -814,6 +827,10 @@ fn decode_uniswap_v3_exact_input_args(
 
 fn decode_uniswap_universal_router_execute_args(
     bytes: &[u8],
+    from: Option<&str>,
+    contract: Option<&str>,
+    asset_transfers: &mut Vec<AssetTransfer>,
+    approvals: &mut Vec<ApprovalChange>,
     warnings: &mut Vec<SimulationWarning>,
     has_deadline: bool,
 ) -> Option<Vec<DecodedArgument>> {
@@ -832,22 +849,657 @@ fn decode_uniswap_universal_router_execute_args(
         "uniswap_universal_router_commands_malformed",
         "commands",
     )?;
-    let input_count = decode_dynamic_head_len(
+    let inputs = decode_dynamic_bytes_array_slices(
         bytes,
         argument_word(bytes, 1)?,
         warnings,
         "uniswap_universal_router_inputs_malformed",
         "inputs",
     )?;
+    let input_count = inputs.len();
     let mut arguments = vec![
         arg("commandBytes", "bytes", commands.len().to_string()),
+        arg("commandCount", "uint256", commands.len().to_string()),
         arg("inputCount", "bytes[]", input_count.to_string()),
     ];
     if has_deadline {
         let deadline = decode_u256_word(argument_word(bytes, 2)?);
         arguments.push(arg("deadline", "uint256", deadline.decimal));
     }
+
+    if commands.len() != input_count {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            "universal_router_inputs_mismatch",
+            "Universal Router command count does not match inputs count",
+        ));
+        arguments.push(arg("inputMismatch", "bool", "true".to_owned()));
+    }
+
+    let mut decoded_count = 0_usize;
+    let mut unsupported = Vec::new();
+    let mut swap_count = 0_usize;
+    let mut permit2_transfer_count = 0_usize;
+    let mut permit2_permit_count = 0_usize;
+    let mut token_action_count = 0_usize;
+    let mut command_names = Vec::new();
+
+    for (index, command_byte) in commands.iter().enumerate() {
+        let command = command_byte & 0x1f;
+        let command_name = universal_router_command_name(command);
+        if index < 12 {
+            command_names.push(command_name);
+        }
+        let Some(input) = inputs.get(index).copied() else {
+            continue;
+        };
+        match decode_universal_router_command_input(
+            command,
+            input,
+            from,
+            contract,
+            asset_transfers,
+            approvals,
+            warnings,
+            &mut arguments,
+        ) {
+            UniversalRouterCommandDecode::Decoded { category } => {
+                decoded_count += 1;
+                match category {
+                    UniversalRouterCommandCategory::Swap => swap_count += 1,
+                    UniversalRouterCommandCategory::Permit2Transfer => permit2_transfer_count += 1,
+                    UniversalRouterCommandCategory::Permit2Permit => permit2_permit_count += 1,
+                    UniversalRouterCommandCategory::TokenAction => token_action_count += 1,
+                    UniversalRouterCommandCategory::Other => {}
+                }
+            }
+            UniversalRouterCommandDecode::Unsupported => unsupported.push(command_name),
+        }
+    }
+
+    if !command_names.is_empty() {
+        arguments.push(arg(
+            "commandTypes",
+            "universalRouterCommand[]",
+            command_names.join(","),
+        ));
+    }
+    arguments.extend([
+        arg("decodedCommandCount", "uint256", decoded_count.to_string()),
+        arg(
+            "unsupportedCommandCount",
+            "uint256",
+            unsupported.len().to_string(),
+        ),
+        arg("swapCount", "uint256", swap_count.to_string()),
+        arg(
+            "permit2TransferCount",
+            "uint256",
+            permit2_transfer_count.to_string(),
+        ),
+        arg(
+            "permit2PermitCount",
+            "uint256",
+            permit2_permit_count.to_string(),
+        ),
+        arg(
+            "tokenActionCount",
+            "uint256",
+            token_action_count.to_string(),
+        ),
+    ]);
+    if !unsupported.is_empty() {
+        arguments.push(arg(
+            "unsupportedCommands",
+            "universalRouterCommand[]",
+            unsupported.join(","),
+        ));
+        warnings.push(warning(
+            WarningSeverity::Warning,
+            "universal_router_command_unsupported",
+            "Universal Router contains command IDs the local decoder does not support",
+        ));
+    }
     Some(arguments)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UniversalRouterCommandCategory {
+    Swap,
+    Permit2Transfer,
+    Permit2Permit,
+    TokenAction,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UniversalRouterCommandDecode {
+    Decoded {
+        category: UniversalRouterCommandCategory,
+    },
+    Unsupported,
+}
+
+fn universal_router_command_name(command: u8) -> &'static str {
+    match command {
+        0x00 => "V3_SWAP_EXACT_IN",
+        0x01 => "V3_SWAP_EXACT_OUT",
+        0x02 => "PERMIT2_TRANSFER_FROM",
+        0x03 => "PERMIT2_PERMIT_BATCH",
+        0x04 => "SWEEP",
+        0x05 => "TRANSFER",
+        0x06 => "PAY_PORTION",
+        0x08 => "V2_SWAP_EXACT_IN",
+        0x09 => "V2_SWAP_EXACT_OUT",
+        0x0a => "PERMIT2_PERMIT",
+        0x0b => "WRAP_ETH",
+        0x0c => "UNWRAP_WETH",
+        0x0d => "PERMIT2_TRANSFER_FROM_BATCH",
+        0x0e => "BALANCE_CHECK_ERC20",
+        0x1f => "EXECUTE_SUB_PLAN",
+        _ => "UNSUPPORTED",
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_universal_router_command_input(
+    command: u8,
+    input: &[u8],
+    from: Option<&str>,
+    contract: Option<&str>,
+    asset_transfers: &mut Vec<AssetTransfer>,
+    approvals: &mut Vec<ApprovalChange>,
+    warnings: &mut Vec<SimulationWarning>,
+    arguments: &mut Vec<DecodedArgument>,
+) -> UniversalRouterCommandDecode {
+    match command {
+        0x00 => {
+            decode_universal_router_v3_swap_input(input, warnings, arguments, true);
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::Swap,
+            }
+        }
+        0x01 => {
+            decode_universal_router_v3_swap_input(input, warnings, arguments, false);
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::Swap,
+            }
+        }
+        0x02 => {
+            decode_universal_router_permit2_transfer_input(
+                input,
+                from,
+                asset_transfers,
+                warnings,
+                arguments,
+            );
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::Permit2Transfer,
+            }
+        }
+        0x04 => {
+            decode_universal_router_token_action_input(
+                input,
+                contract,
+                asset_transfers,
+                warnings,
+                arguments,
+                "amountMin",
+            );
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::TokenAction,
+            }
+        }
+        0x05 => {
+            decode_universal_router_token_action_input(
+                input,
+                contract,
+                asset_transfers,
+                warnings,
+                arguments,
+                "value",
+            );
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::TokenAction,
+            }
+        }
+        0x06 => {
+            decode_universal_router_pay_portion_input(input, warnings, arguments);
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::TokenAction,
+            }
+        }
+        0x08 => {
+            decode_universal_router_v2_swap_input(input, warnings, arguments, true);
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::Swap,
+            }
+        }
+        0x09 => {
+            decode_universal_router_v2_swap_input(input, warnings, arguments, false);
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::Swap,
+            }
+        }
+        0x0a => {
+            decode_universal_router_permit2_permit_input(
+                input, from, approvals, warnings, arguments,
+            );
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::Permit2Permit,
+            }
+        }
+        0x0b | 0x0c => {
+            decode_universal_router_wrap_input(input, warnings, arguments);
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::TokenAction,
+            }
+        }
+        0x0e => {
+            decode_universal_router_balance_check_input(input, warnings, arguments);
+            UniversalRouterCommandDecode::Decoded {
+                category: UniversalRouterCommandCategory::Other,
+            }
+        }
+        _ => UniversalRouterCommandDecode::Unsupported,
+    }
+}
+
+fn decode_universal_router_v3_swap_input(
+    input: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    arguments: &mut Vec<DecodedArgument>,
+    exact_in: bool,
+) {
+    if require_input_words(
+        input,
+        5,
+        warnings,
+        "universal_router_v3_swap_input_short",
+        "Universal Router V3 swap input is too short",
+    )
+    .is_none()
+    {
+        return;
+    }
+    let Some(recipient) = decode_address_word(
+        input_word(input, 0).unwrap_or(&[]),
+        warnings,
+        "universal_router_v3_swap_input_malformed",
+        "recipient",
+    ) else {
+        return;
+    };
+    let amount_a = decode_u256_word(input_word(input, 1).unwrap_or(&[]));
+    let amount_b = decode_u256_word(input_word(input, 2).unwrap_or(&[]));
+    let Some(path) = decode_input_dynamic_bytes_slice(
+        input,
+        input_word(input, 3).unwrap_or(&[]),
+        warnings,
+        "universal_router_v3_path_malformed",
+        "path",
+    ) else {
+        return;
+    };
+    let Some(payer_is_user) = decode_bool_word(
+        input_word(input, 4).unwrap_or(&[]),
+        warnings,
+        "universal_router_v3_swap_input_malformed",
+        "payerIsUser",
+    ) else {
+        return;
+    };
+
+    arguments.push(arg("recipient", "address", recipient));
+    if exact_in {
+        arguments.push(arg("amountIn", "uint256", amount_a.decimal));
+        arguments.push(arg("amountOutMinimum", "uint256", amount_b.decimal));
+    } else {
+        arguments.push(arg("amountOut", "uint256", amount_a.decimal));
+        arguments.push(arg("amountInMaximum", "uint256", amount_b.decimal));
+    }
+    arguments.extend(uniswap_v3_path_arguments(path));
+    arguments.push(arg("payerIsUser", "bool", payer_is_user.to_string()));
+}
+
+fn decode_universal_router_v2_swap_input(
+    input: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    arguments: &mut Vec<DecodedArgument>,
+    exact_in: bool,
+) {
+    if require_input_words(
+        input,
+        5,
+        warnings,
+        "universal_router_v2_swap_input_short",
+        "Universal Router V2 swap input is too short",
+    )
+    .is_none()
+    {
+        return;
+    }
+    let Some(recipient) = decode_address_word(
+        input_word(input, 0).unwrap_or(&[]),
+        warnings,
+        "universal_router_v2_swap_input_malformed",
+        "recipient",
+    ) else {
+        return;
+    };
+    let amount_a = decode_u256_word(input_word(input, 1).unwrap_or(&[]));
+    let amount_b = decode_u256_word(input_word(input, 2).unwrap_or(&[]));
+    let Some(path_arguments) = decode_input_address_array_summary(
+        input,
+        input_word(input, 3).unwrap_or(&[]),
+        warnings,
+        "universal_router_v2_path_malformed",
+        "path",
+    ) else {
+        return;
+    };
+    let Some(payer_is_user) = decode_bool_word(
+        input_word(input, 4).unwrap_or(&[]),
+        warnings,
+        "universal_router_v2_swap_input_malformed",
+        "payerIsUser",
+    ) else {
+        return;
+    };
+
+    arguments.push(arg("recipient", "address", recipient));
+    if exact_in {
+        arguments.push(arg("amountIn", "uint256", amount_a.decimal));
+        arguments.push(arg("amountOutMin", "uint256", amount_b.decimal));
+    } else {
+        arguments.push(arg("amountOut", "uint256", amount_a.decimal));
+        arguments.push(arg("amountInMax", "uint256", amount_b.decimal));
+    }
+    arguments.extend(path_arguments);
+    arguments.push(arg("payerIsUser", "bool", payer_is_user.to_string()));
+}
+
+fn decode_universal_router_permit2_transfer_input(
+    input: &[u8],
+    from: Option<&str>,
+    asset_transfers: &mut Vec<AssetTransfer>,
+    warnings: &mut Vec<SimulationWarning>,
+    arguments: &mut Vec<DecodedArgument>,
+) {
+    if require_input_words(
+        input,
+        3,
+        warnings,
+        "universal_router_permit2_transfer_input_short",
+        "Universal Router Permit2 transfer input is too short",
+    )
+    .is_none()
+    {
+        return;
+    }
+    let Some(token) = decode_address_word(
+        input_word(input, 0).unwrap_or(&[]),
+        warnings,
+        "universal_router_permit2_transfer_input_malformed",
+        "token",
+    ) else {
+        return;
+    };
+    let Some(recipient) = decode_address_word(
+        input_word(input, 1).unwrap_or(&[]),
+        warnings,
+        "universal_router_permit2_transfer_input_malformed",
+        "recipient",
+    ) else {
+        return;
+    };
+    let amount = decode_u256_word(input_word(input, 2).unwrap_or(&[]));
+    arguments.extend([
+        arg("permit2Token", "address", token.clone()),
+        arg("recipient", "address", recipient.clone()),
+        arg("permit2Amount", "uint160", amount.decimal.clone()),
+    ]);
+    asset_transfers.push(AssetTransfer {
+        asset_kind: "erc20".to_owned(),
+        contract: Some(token),
+        from: from.map(str::to_owned),
+        to: Some(recipient),
+        amount: Some(amount),
+        token_id: None,
+    });
+}
+
+fn decode_universal_router_permit2_permit_input(
+    input: &[u8],
+    from: Option<&str>,
+    approvals: &mut Vec<ApprovalChange>,
+    warnings: &mut Vec<SimulationWarning>,
+    arguments: &mut Vec<DecodedArgument>,
+) {
+    if require_input_words(
+        input,
+        7,
+        warnings,
+        "universal_router_permit2_permit_input_short",
+        "Universal Router Permit2 permit input is too short",
+    )
+    .is_none()
+    {
+        return;
+    }
+    let Some(token) = decode_address_word(
+        input_word(input, 0).unwrap_or(&[]),
+        warnings,
+        "universal_router_permit2_permit_input_malformed",
+        "token",
+    ) else {
+        return;
+    };
+    let amount = decode_u256_word(input_word(input, 1).unwrap_or(&[]));
+    let expiration = decode_u256_word(input_word(input, 2).unwrap_or(&[]));
+    let nonce = decode_u256_word(input_word(input, 3).unwrap_or(&[]));
+    let Some(spender) = decode_address_word(
+        input_word(input, 4).unwrap_or(&[]),
+        warnings,
+        "universal_router_permit2_permit_input_malformed",
+        "spender",
+    ) else {
+        return;
+    };
+    let sig_deadline = decode_u256_word(input_word(input, 5).unwrap_or(&[]));
+    let Some(signature) = decode_input_dynamic_bytes_slice(
+        input,
+        input_word(input, 6).unwrap_or(&[]),
+        warnings,
+        "universal_router_permit2_signature_malformed",
+        "signature",
+    ) else {
+        return;
+    };
+    arguments.extend([
+        arg("permit2Token", "address", token.clone()),
+        arg("permit2Amount", "uint160", amount.decimal.clone()),
+        arg("permit2Expiration", "uint48", expiration.decimal),
+        arg("permit2Nonce", "uint48", nonce.decimal),
+        arg("permit2Spender", "address", spender.clone()),
+        arg("permit2SigDeadline", "uint256", sig_deadline.decimal),
+        arg(
+            "permit2SignatureBytes",
+            "bytes",
+            signature.len().to_string(),
+        ),
+    ]);
+    approvals.push(ApprovalChange {
+        asset_kind: "permit2".to_owned(),
+        contract: Some(token),
+        owner: from.map(str::to_owned),
+        spender: Some(spender),
+        operator: None,
+        amount: Some(amount),
+        approved: None,
+    });
+}
+
+fn decode_universal_router_token_action_input(
+    input: &[u8],
+    contract: Option<&str>,
+    asset_transfers: &mut Vec<AssetTransfer>,
+    warnings: &mut Vec<SimulationWarning>,
+    arguments: &mut Vec<DecodedArgument>,
+    amount_label: &str,
+) {
+    if require_input_words(
+        input,
+        3,
+        warnings,
+        "universal_router_token_action_input_short",
+        "Universal Router token action input is too short",
+    )
+    .is_none()
+    {
+        return;
+    }
+    let Some(token) = decode_address_word(
+        input_word(input, 0).unwrap_or(&[]),
+        warnings,
+        "universal_router_token_action_input_malformed",
+        "token",
+    ) else {
+        return;
+    };
+    let Some(recipient) = decode_address_word(
+        input_word(input, 1).unwrap_or(&[]),
+        warnings,
+        "universal_router_token_action_input_malformed",
+        "recipient",
+    ) else {
+        return;
+    };
+    let amount = decode_u256_word(input_word(input, 2).unwrap_or(&[]));
+    arguments.extend([
+        arg("token", "address", token.clone()),
+        arg("recipient", "address", recipient.clone()),
+        arg(amount_label, "uint256", amount.decimal.clone()),
+    ]);
+    asset_transfers.push(AssetTransfer {
+        asset_kind: "erc20".to_owned(),
+        contract: Some(token),
+        from: contract.map(str::to_owned),
+        to: Some(recipient),
+        amount: Some(amount),
+        token_id: None,
+    });
+}
+
+fn decode_universal_router_pay_portion_input(
+    input: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    arguments: &mut Vec<DecodedArgument>,
+) {
+    if require_input_words(
+        input,
+        3,
+        warnings,
+        "universal_router_pay_portion_input_short",
+        "Universal Router pay portion input is too short",
+    )
+    .is_none()
+    {
+        return;
+    }
+    let Some(token) = decode_address_word(
+        input_word(input, 0).unwrap_or(&[]),
+        warnings,
+        "universal_router_pay_portion_input_malformed",
+        "token",
+    ) else {
+        return;
+    };
+    let Some(recipient) = decode_address_word(
+        input_word(input, 1).unwrap_or(&[]),
+        warnings,
+        "universal_router_pay_portion_input_malformed",
+        "recipient",
+    ) else {
+        return;
+    };
+    let bips = decode_u256_word(input_word(input, 2).unwrap_or(&[]));
+    arguments.extend([
+        arg("token", "address", token),
+        arg("recipient", "address", recipient),
+        arg("bips", "uint256", bips.decimal),
+    ]);
+}
+
+fn decode_universal_router_wrap_input(
+    input: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    arguments: &mut Vec<DecodedArgument>,
+) {
+    if require_input_words(
+        input,
+        2,
+        warnings,
+        "universal_router_wrap_input_short",
+        "Universal Router wrap/unwrap input is too short",
+    )
+    .is_none()
+    {
+        return;
+    }
+    let Some(recipient) = decode_address_word(
+        input_word(input, 0).unwrap_or(&[]),
+        warnings,
+        "universal_router_wrap_input_malformed",
+        "recipient",
+    ) else {
+        return;
+    };
+    let amount_min = decode_u256_word(input_word(input, 1).unwrap_or(&[]));
+    arguments.extend([
+        arg("recipient", "address", recipient),
+        arg("amountMin", "uint256", amount_min.decimal),
+    ]);
+}
+
+fn decode_universal_router_balance_check_input(
+    input: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    arguments: &mut Vec<DecodedArgument>,
+) {
+    if require_input_words(
+        input,
+        3,
+        warnings,
+        "universal_router_balance_check_input_short",
+        "Universal Router balance check input is too short",
+    )
+    .is_none()
+    {
+        return;
+    }
+    let Some(owner) = decode_address_word(
+        input_word(input, 0).unwrap_or(&[]),
+        warnings,
+        "universal_router_balance_check_input_malformed",
+        "owner",
+    ) else {
+        return;
+    };
+    let Some(token) = decode_address_word(
+        input_word(input, 1).unwrap_or(&[]),
+        warnings,
+        "universal_router_balance_check_input_malformed",
+        "token",
+    ) else {
+        return;
+    };
+    let min_balance = decode_u256_word(input_word(input, 2).unwrap_or(&[]));
+    arguments.extend([
+        arg("owner", "address", owner),
+        arg("token", "address", token),
+        arg("minBalance", "uint256", min_balance.decimal),
+    ]);
 }
 
 fn decode_multicall_args(
@@ -1200,6 +1852,289 @@ fn decode_address_array_summary(
         ));
     }
     Some(arguments)
+}
+
+fn decode_dynamic_bytes_array_slices<'a>(
+    bytes: &'a [u8],
+    offset_word: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    code: &str,
+    label: &str,
+) -> Option<Vec<&'a [u8]>> {
+    let count = decode_dynamic_head_len(bytes, offset_word, warnings, code, label)?;
+    let offset = decode_usize_word(offset_word)?;
+    let Some(array_start) = 4_usize.checked_add(offset) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} offset overflows calldata length"),
+        ));
+        return None;
+    };
+    let Some(element_offsets_start) = array_start.checked_add(32) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} head overflows calldata length"),
+        ));
+        return None;
+    };
+    let Some(offset_words_len) = count.checked_mul(32) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} length is too large"),
+        ));
+        return None;
+    };
+    let Some(offset_words_end) = element_offsets_start.checked_add(offset_words_len) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} offsets overflow calldata length"),
+        ));
+        return None;
+    };
+    if bytes.len() < offset_words_end {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("calldata is too short for dynamic {label} offsets"),
+        ));
+        return None;
+    }
+
+    let mut slices = Vec::with_capacity(count);
+    for index in 0..count {
+        let word_start = element_offsets_start + (index * 32);
+        let offset_word = &bytes[word_start..word_start + 32];
+        let Some(element_offset) = decode_usize_word(offset_word) else {
+            warnings.push(warning(
+                WarningSeverity::Error,
+                code,
+                format!("dynamic {label} element offset is too large"),
+            ));
+            return None;
+        };
+        let Some(len_start) = element_offsets_start.checked_add(element_offset) else {
+            warnings.push(warning(
+                WarningSeverity::Error,
+                code,
+                format!("dynamic {label} element offset overflows calldata length"),
+            ));
+            return None;
+        };
+        let Some(len_word) = bytes.get(len_start..len_start + 32) else {
+            warnings.push(warning(
+                WarningSeverity::Error,
+                code,
+                format!("calldata is too short for dynamic {label} element length"),
+            ));
+            return None;
+        };
+        let Some(len) = decode_usize_word(len_word) else {
+            warnings.push(warning(
+                WarningSeverity::Error,
+                code,
+                format!("dynamic {label} element length is too large"),
+            ));
+            return None;
+        };
+        let Some(data_start) = len_start.checked_add(32) else {
+            warnings.push(warning(
+                WarningSeverity::Error,
+                code,
+                format!("dynamic {label} element data offset overflows calldata length"),
+            ));
+            return None;
+        };
+        let Some(data_end) = data_start.checked_add(len) else {
+            warnings.push(warning(
+                WarningSeverity::Error,
+                code,
+                format!("dynamic {label} element data length overflows calldata length"),
+            ));
+            return None;
+        };
+        let Some(data) = bytes.get(data_start..data_end) else {
+            warnings.push(warning(
+                WarningSeverity::Error,
+                code,
+                format!("calldata is too short for dynamic {label} element data"),
+            ));
+            return None;
+        };
+        slices.push(data);
+    }
+    Some(slices)
+}
+
+fn require_input_words(
+    input: &[u8],
+    word_count: usize,
+    warnings: &mut Vec<SimulationWarning>,
+    code: &str,
+    message: &str,
+) -> Option<()> {
+    let Some(required) = word_count.checked_mul(32) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            "input word count overflows supported decoder bounds",
+        ));
+        return None;
+    };
+    if input.len() < required {
+        warnings.push(warning(WarningSeverity::Error, code, message));
+        return None;
+    }
+    Some(())
+}
+
+fn input_word(input: &[u8], index: usize) -> Option<&[u8]> {
+    let start = index.checked_mul(32)?;
+    input.get(start..start + 32)
+}
+
+fn decode_input_address_array_summary(
+    input: &[u8],
+    offset_word: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    code: &str,
+    label: &str,
+) -> Option<Vec<DecodedArgument>> {
+    let count = decode_input_dynamic_head_len(input, offset_word, warnings, code, label)?;
+    let offset = decode_usize_word(offset_word)?;
+    let Some(values_start) = offset.checked_add(32) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} offset overflows input length"),
+        ));
+        return None;
+    };
+    let Some(values_len) = count.checked_mul(32) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} address array length is too large"),
+        ));
+        return None;
+    };
+    let Some(values_end) = values_start.checked_add(values_len) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} address array overflows input length"),
+        ));
+        return None;
+    };
+    if input.len() < values_end {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("input is too short for dynamic {label} address array"),
+        ));
+        return None;
+    }
+
+    let mut arguments = vec![arg("pathLength", "address[]", count.to_string())];
+    if count > 0 {
+        arguments.push(arg(
+            "pathFirst",
+            "address",
+            decode_address_word(
+                &input[values_start..values_start + 32],
+                warnings,
+                code,
+                "path first address",
+            )?,
+        ));
+    }
+    if count > 1 {
+        let last_start = values_start + ((count - 1) * 32);
+        arguments.push(arg(
+            "pathLast",
+            "address",
+            decode_address_word(
+                &input[last_start..last_start + 32],
+                warnings,
+                code,
+                "path last address",
+            )?,
+        ));
+    }
+    Some(arguments)
+}
+
+fn decode_input_dynamic_bytes_slice<'a>(
+    input: &'a [u8],
+    offset_word: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    code: &str,
+    label: &str,
+) -> Option<&'a [u8]> {
+    let len = decode_input_dynamic_head_len(input, offset_word, warnings, code, label)?;
+    let offset = decode_usize_word(offset_word)?;
+    let Some(data_start) = offset.checked_add(32) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} offset overflows input length"),
+        ));
+        return None;
+    };
+    let Some(data_end) = data_start.checked_add(len) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} bytes length overflows input length"),
+        ));
+        return None;
+    };
+    let Some(data) = input.get(data_start..data_end) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("input is too short for dynamic {label} bytes"),
+        ));
+        return None;
+    };
+    Some(data)
+}
+
+fn decode_input_dynamic_head_len(
+    input: &[u8],
+    offset_word: &[u8],
+    warnings: &mut Vec<SimulationWarning>,
+    code: &str,
+    label: &str,
+) -> Option<usize> {
+    let Some(offset) = decode_usize_word(offset_word) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} offset is too large"),
+        ));
+        return None;
+    };
+    let Some(len_word) = input.get(offset..offset + 32) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("input is too short for dynamic {label} length"),
+        ));
+        return None;
+    };
+    let Some(len) = decode_usize_word(len_word) else {
+        warnings.push(warning(
+            WarningSeverity::Error,
+            code,
+            format!("dynamic {label} length is too large"),
+        ));
+        return None;
+    };
+    Some(len)
 }
 
 fn decode_dynamic_head_len(

@@ -63,6 +63,9 @@ const dappUpdated = document.querySelector("#dapp-updated");
 const defiHomeTitle = document.querySelector("#defi-home-title");
 const defiHomeSubtitle = document.querySelector("#defi-home-subtitle");
 const defiHomeState = document.querySelector("#defi-home-state");
+const defiReviewCallout = document.querySelector("#defi-review-callout");
+const defiReviewCalloutTitle = document.querySelector("#defi-review-callout-title");
+const defiReviewCalloutDetail = document.querySelector("#defi-review-callout-detail");
 const defiStepRpc = document.querySelector("#defi-step-rpc");
 const defiStepProvider = document.querySelector("#defi-step-provider");
 const defiStepConnect = document.querySelector("#defi-step-connect");
@@ -125,6 +128,7 @@ let selectedTokenForSend = null;
 let latestConnectedOrigins = [];
 let latestProviderEvents = [];
 let latestReviewRequests = [];
+let lastPendingReviewKey = "";
 let latestTransactionActivity = [];
 let transactionActivitySmokeReported = false;
 let walletSendAutosmokeStarted = false;
@@ -368,11 +372,10 @@ function panelWorkspaces(panel) {
     .filter(Boolean);
 }
 
-function updateWorkspaceReviewCounts(requests = latestReviewRequests) {
-  const pendingCount = requests.filter((request) => request.status === "pending").length;
+function updateWorkspaceReviewCounts() {
   for (const count of workspaceCounts.values()) {
-    count.textContent = String(pendingCount);
-    count.hidden = pendingCount === 0;
+    count.textContent = "0";
+    count.hidden = true;
   }
 }
 
@@ -511,6 +514,7 @@ function renderDefiProductOverview() {
   }
   defiHomeState.textContent = state;
   defiHomeState.dataset.tone = tone;
+  renderDefiReviewCallout(pending);
 
   setJourneyStep(defiStepRpc, rpcReady ? "good" : "bad", rpcReady ? "Healthy" : "Needs RPC");
   setJourneyStep(
@@ -528,6 +532,23 @@ function renderDefiProductOverview() {
     pending.length > 0 ? "warn" : "good",
     pending.length > 0 ? `${pending.length} pending` : "Clear",
   );
+}
+
+function renderDefiReviewCallout(pending) {
+  if (!defiReviewCallout) {
+    return;
+  }
+  const request = pending[0] ?? null;
+  defiReviewCallout.hidden = !request;
+  if (!request) {
+    return;
+  }
+  const count = pending.length;
+  defiReviewCalloutTitle.textContent =
+    count === 1 ? reviewIntentTitle(request) : `${count} approval requests`;
+  defiReviewCalloutDetail.textContent = `${request.origin ?? "unknown origin"} · ${
+    request.method ?? "wallet request"
+  }`;
 }
 
 function setJourneyStep(element, tone, label) {
@@ -2670,7 +2691,8 @@ function renderReviewQueue(queue) {
   const requests = queue.requests ?? [];
   latestReviewRequests = requests;
   reviewCount.textContent = `${requests.length} captured`;
-  updateWorkspaceReviewCounts(requests);
+  updateWorkspaceReviewCounts();
+  updatePendingReviewSurface(requests);
   reviewList.replaceChildren();
   renderSessionReadiness();
   renderCompatibilityStatus();
@@ -2685,6 +2707,44 @@ function renderReviewQueue(queue) {
 
   for (const request of requests) {
     reviewList.append(renderReviewRequest(request));
+  }
+  syncPendingReviewFocus(requests);
+}
+
+function updatePendingReviewSurface(requests) {
+  const pending = requests.some((request) => request.status === "pending");
+  document.body.dataset.pendingReview = pending ? "true" : "false";
+  if (!pending) {
+    lastPendingReviewKey = "";
+  }
+}
+
+function syncPendingReviewFocus(requests) {
+  const pending = requests.filter((request) => request.status === "pending");
+  const pendingKey = pending.map((request) => request.id ?? request.providerRequestId ?? "").join("|");
+  if (pendingKey === lastPendingReviewKey) {
+    return;
+  }
+  lastPendingReviewKey = pendingKey;
+  if (pending.length === 0 || activeWorkspace !== "defi") {
+    return;
+  }
+  window.setTimeout(() => {
+    focusReviewPanel();
+  }, 0);
+}
+
+function focusReviewPanel() {
+  const panel = document.querySelector(".review-panel");
+  if (!panel || panel.hidden) {
+    return;
+  }
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  const firstAction = panel.querySelector(".review-item button:not([disabled])");
+  if (firstAction instanceof HTMLElement) {
+    window.setTimeout(() => {
+      firstAction.focus({ preventScroll: true });
+    }, 180);
   }
 }
 
@@ -4996,6 +5056,10 @@ function recommendedVaultBackupFile(result) {
 function renderReviewRequest(request) {
   const item = document.createElement("article");
   item.className = "review-item";
+  item.dataset.status = request.status ?? "pending";
+  if (request.id) {
+    item.dataset.reviewId = request.id;
+  }
 
   const header = document.createElement("div");
   header.className = "review-item-header";
@@ -6510,6 +6574,9 @@ walletActionSendButton.addEventListener("click", () => {
 });
 walletActionDefiButton.addEventListener("click", () => {
   setActiveWorkspace("defi");
+});
+defiReviewCallout?.addEventListener("click", () => {
+  focusReviewPanel();
 });
 for (const tab of workspaceTabs) {
   tab.addEventListener("click", () => {

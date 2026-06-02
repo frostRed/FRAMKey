@@ -640,6 +640,9 @@ pub(crate) fn handle_typed_data_request(
             return Err(error);
         }
     };
+    let expected_address = payload
+        .expected_address
+        .ok_or_else(|| anyhow::anyhow!("typed-data signing requires an explicit signer account"))?;
 
     let signed = (|| match config.wallet {
         DesktopWalletConfig::KeychainVault => {
@@ -648,11 +651,11 @@ pub(crate) fn handle_typed_data_request(
                 config,
                 save_image,
                 payload.typed_data,
-                payload.expected_address,
+                Some(expected_address),
             )
         }
         DesktopWalletConfig::MockInMemory => {
-            state.sign_typed_data_with_mock_wallet(payload.typed_data, payload.expected_address)
+            state.sign_typed_data_with_mock_wallet(payload.typed_data, Some(expected_address))
         }
     })();
 
@@ -684,16 +687,30 @@ pub(crate) fn handle_send_transaction_request(
 ) -> Result<ProviderResponse> {
     let wallet_address = state.transaction_wallet_address(config, request)?;
     let prepared = prepare_transaction(
+        state,
         config,
         request,
         &wallet_address,
         config.wallet == DesktopWalletConfig::MockInMemory,
     )?;
-    let review = state.capture_review_request(config, &prepared.review_request)?;
+    let review = match state.capture_review_request(config, &prepared.review_request) {
+        Ok(review) => review,
+        Err(error) => {
+            release_prepared_nonce(state, &prepared);
+            return Err(error);
+        }
+    };
     eprintln!("eth_sendTransaction captured review_id={}", review.id);
-    let approved = state.wait_for_review_approval(&review.id)?;
+    let approved = match state.wait_for_review_approval(&review.id) {
+        Ok(approved) => approved,
+        Err(error) => {
+            release_prepared_nonce(state, &prepared);
+            return Err(error);
+        }
+    };
     eprintln!("eth_sendTransaction approved review_id={}", approved.id);
     if approved.kind != review::ReviewMethodKind::Transaction {
+        release_prepared_nonce(state, &prepared);
         anyhow::bail!(
             "approved review request {} is not eth_sendTransaction",
             approved.id
@@ -704,6 +721,7 @@ pub(crate) fn handle_send_transaction_request(
         Err(error) => {
             let message = error.to_string();
             let _ = state.mark_review_sign_failed(&review.id, &message);
+            release_prepared_nonce(state, &prepared);
             return Err(error);
         }
     };
@@ -728,6 +746,7 @@ pub(crate) fn handle_send_transaction_request(
         Err(error) => {
             let message = error.to_string();
             let _ = state.mark_review_sign_failed(&review.id, &message);
+            release_prepared_nonce(state, &prepared);
             eprintln!(
                 "eth_sendTransaction signing failed review_id={}: {}",
                 review.id, message
@@ -736,12 +755,23 @@ pub(crate) fn handle_send_transaction_request(
         }
     };
 
-    let broadcast = rpc_provider_request(
+    let broadcast = match rpc_provider_request(
         config,
         &request.id,
         "eth_sendRawTransaction",
         json!([signed.raw_transaction]),
-    )?;
+    ) {
+        Ok(broadcast) => broadcast,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = state.mark_review_sign_failed(&review.id, &message);
+            eprintln!(
+                "eth_sendTransaction broadcast transport failed review_id={}: {}",
+                review.id, message
+            );
+            return Err(error);
+        }
+    };
     match broadcast {
         ProviderResponse::Result(tx_hash) => {
             let tx_hash = tx_hash
@@ -766,12 +796,19 @@ pub(crate) fn handle_send_transaction_request(
         ProviderResponse::Error(error) => {
             let message = error.message.clone();
             let _ = state.mark_review_sign_failed(&review.id, &message);
+            release_prepared_nonce(state, &prepared);
             eprintln!(
                 "eth_sendTransaction broadcast failed review_id={}: {}",
                 review.id, message
             );
             Ok(ProviderResponse::Error(error))
         }
+    }
+}
+
+fn release_prepared_nonce(state: &AppState, prepared: &PreparedTransaction) {
+    if let Some(reservation) = &prepared.nonce_reservation {
+        state.release_transaction_nonce(reservation);
     }
 }
 

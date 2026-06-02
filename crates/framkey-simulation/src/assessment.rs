@@ -1,8 +1,10 @@
+use std::{
+    cmp::Ordering,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
 use crate::{
-    decoder::{
-        is_max_u256, looks_like_eth_address, overrideable_policy_blocker, policy_blocker,
-        same_chain_id,
-    },
+    decoder::{is_max_u256, looks_like_eth_address, overrideable_policy_blocker, policy_blocker},
     model::{
         ApprovalChange, AssetTransfer, PolicyBlocker, SimulationMode, SimulationStatus,
         TokenAmount, TransactionImpactItem, TransactionImpactKind, TransactionImpactSummary,
@@ -11,7 +13,12 @@ use crate::{
         TransactionSimulationReport, TransactionTrustItem, TransactionTrustLevel,
         TransactionTrustRole, TransactionTrustStatus, TransactionTrustSummary, WarningSeverity,
     },
+    registry::known_counterparty,
 };
+
+const MAX_SWAP_DEADLINE_SECONDS_FROM_NOW: u64 = 24 * 60 * 60;
+const AAVE_BLOCK_HEALTH_FACTOR_WAD: &str = "1200000000000000000";
+const AAVE_SAFE_HEALTH_FACTOR_WAD: &str = "1500000000000000000";
 
 pub fn evaluate_transaction_policy(
     report: &TransactionSimulationReport,
@@ -81,6 +88,7 @@ pub fn evaluate_transaction_policy(
             "approval grants token authority to an unrecognized spender or operator",
         ));
     }
+    add_protocol_semantic_blockers(report, &mut blockers);
 
     let has_blocking = blockers.iter().any(|blocker| !blocker.overrideable);
     let has_overrideable = blockers.iter().any(|blocker| blocker.overrideable);
@@ -101,6 +109,300 @@ pub fn evaluate_transaction_policy(
         override_allowed,
         blockers,
     }
+}
+
+fn add_protocol_semantic_blockers(
+    report: &TransactionSimulationReport,
+    blockers: &mut Vec<PolicyBlocker>,
+) {
+    let Some(call) = &report.decoded_call else {
+        return;
+    };
+    match call.standard.as_str() {
+        "uniswap_universal_router" => {
+            add_universal_router_blockers(report, blockers);
+        }
+        "multicall" => push_overrideable_blocker(
+            blockers,
+            "multicall_semantics_incomplete",
+            "multicall nested calls are not fully decoded locally",
+        ),
+        "uniswap_v2_router" | "uniswap_v3_swap_router" => {
+            add_uniswap_swap_blockers(report, blockers);
+        }
+        "aave_v3_pool" => {
+            add_aave_blockers(report, blockers);
+        }
+        _ => {}
+    }
+}
+
+fn add_universal_router_blockers(
+    report: &TransactionSimulationReport,
+    blockers: &mut Vec<PolicyBlocker>,
+) {
+    let Some(call) = &report.decoded_call else {
+        return;
+    };
+    if decoded_arg(call, "unsupportedCommandCount")
+        .and_then(parse_decimal_usize)
+        .is_some_and(|count| count > 0)
+    {
+        push_overrideable_blocker(
+            blockers,
+            "universal_router_semantics_incomplete",
+            "Universal Router contains commands the local decoder does not fully support",
+        );
+    }
+    add_uniswap_swap_blockers(report, blockers);
+}
+
+fn add_uniswap_swap_blockers(
+    report: &TransactionSimulationReport,
+    blockers: &mut Vec<PolicyBlocker>,
+) {
+    let Some(call) = &report.decoded_call else {
+        return;
+    };
+    if decoded_args(call, "amountOutMin")
+        .chain(decoded_args(call, "amountOutMinimum"))
+        .any(|amount| amount == "0")
+    {
+        push_overrideable_blocker(
+            blockers,
+            "uniswap_zero_slippage_floor",
+            "Uniswap swap has a zero minimum output amount",
+        );
+    }
+
+    if let Some(deadline) = decoded_arg(call, "deadline") {
+        match parse_decimal_u64(deadline) {
+            Some(deadline) => {
+                let now = current_unix_seconds();
+                if deadline <= now {
+                    push_overrideable_blocker(
+                        blockers,
+                        "swap_deadline_expired",
+                        "swap deadline is expired",
+                    );
+                } else if deadline.saturating_sub(now) > MAX_SWAP_DEADLINE_SECONDS_FROM_NOW {
+                    push_overrideable_blocker(
+                        blockers,
+                        "swap_deadline_too_far",
+                        "swap deadline is too far in the future for ordinary approval",
+                    );
+                }
+            }
+            None => push_overrideable_blocker(
+                blockers,
+                "swap_deadline_invalid",
+                "swap deadline is not a valid unix timestamp",
+            ),
+        }
+    }
+
+    if let Some(from) = report.transaction.from.as_deref()
+        && looks_like_eth_address(from)
+        && decoded_args(call, "recipient")
+            .chain(decoded_args(call, "to"))
+            .any(|recipient| {
+                looks_like_eth_address(recipient) && !from.eq_ignore_ascii_case(recipient)
+            })
+    {
+        push_overrideable_blocker(
+            blockers,
+            "swap_third_party_recipient",
+            "swap output recipient differs from the signing account",
+        );
+    }
+}
+
+fn add_aave_blockers(report: &TransactionSimulationReport, blockers: &mut Vec<PolicyBlocker>) {
+    let Some(call) = &report.decoded_call else {
+        return;
+    };
+    if let Some(on_behalf_of) = decoded_arg(call, "onBehalfOf")
+        && let Some(from) = report.transaction.from.as_deref()
+        && looks_like_eth_address(from)
+        && looks_like_eth_address(on_behalf_of)
+        && !from.eq_ignore_ascii_case(on_behalf_of)
+    {
+        push_overrideable_blocker(
+            blockers,
+            "aave_third_party_account",
+            "Aave request acts on behalf of an account different from the signer",
+        );
+    }
+    if call.function == "withdraw(address,uint256,address)"
+        && let Some(to) = decoded_arg(call, "to")
+        && let Some(from) = report.transaction.from.as_deref()
+        && looks_like_eth_address(from)
+        && looks_like_eth_address(to)
+        && !from.eq_ignore_ascii_case(to)
+    {
+        push_overrideable_blocker(
+            blockers,
+            "aave_third_party_withdraw_recipient",
+            "Aave withdraw sends assets to an account different from the signer",
+        );
+    }
+
+    match call.function.as_str() {
+        "borrow(address,uint256,uint256,uint16,address)" => add_aave_health_factor_blocker(
+            report,
+            blockers,
+            "aave_borrow_health_factor_unknown",
+            "Aave borrow requires account health-factor evidence",
+        ),
+        "withdraw(address,uint256,address)" => add_aave_health_factor_blocker(
+            report,
+            blockers,
+            "aave_withdraw_health_factor_unknown",
+            "Aave withdraw requires account health-factor evidence",
+        ),
+        "setUserUseReserveAsCollateral(address,bool)" => {
+            if decoded_arg(call, "useAsCollateral") == Some("false") {
+                add_aave_health_factor_blocker(
+                    report,
+                    blockers,
+                    "aave_collateral_disable_risk",
+                    "disabling Aave collateral requires account health-factor evidence",
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn add_aave_health_factor_blocker(
+    report: &TransactionSimulationReport,
+    blockers: &mut Vec<PolicyBlocker>,
+    unknown_code: &str,
+    unknown_message: &str,
+) {
+    match aave_health_factor_evidence(report) {
+        AaveHealthFactorEvidence::Healthy => push_overrideable_blocker(
+            blockers,
+            "aave_post_transaction_health_factor_unknown",
+            "Aave current health-factor evidence does not prove post-transaction account safety",
+        ),
+        AaveHealthFactorEvidence::Caution => push_overrideable_blocker(
+            blockers,
+            "aave_health_factor_caution",
+            "Aave account health factor is below the ordinary-approval threshold",
+        ),
+        AaveHealthFactorEvidence::Unsafe => {
+            if blockers
+                .iter()
+                .any(|blocker| blocker.code == "aave_health_factor_liquidation_risk")
+            {
+                return;
+            }
+            blockers.push(policy_blocker(
+                "aave_health_factor_liquidation_risk",
+                "Aave account health factor is too close to liquidation for signing",
+            ));
+        }
+        AaveHealthFactorEvidence::Missing => {
+            push_overrideable_blocker(blockers, unknown_code, unknown_message);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AaveHealthFactorEvidence {
+    Healthy,
+    Caution,
+    Unsafe,
+    Missing,
+}
+
+fn aave_health_factor_evidence(report: &TransactionSimulationReport) -> AaveHealthFactorEvidence {
+    let Some(health_factor) = report
+        .protocol_evidence
+        .as_ref()
+        .and_then(|evidence| evidence.get("aave"))
+        .and_then(|aave| {
+            (aave.get("status").and_then(serde_json::Value::as_str) == Some("ok")).then_some(aave)
+        })
+        .and_then(|aave| aave.get("healthFactor").and_then(serde_json::Value::as_str))
+    else {
+        return AaveHealthFactorEvidence::Missing;
+    };
+    if compare_decimal_strings(health_factor, AAVE_BLOCK_HEALTH_FACTOR_WAD)
+        .is_some_and(|ordering| ordering == Ordering::Less)
+    {
+        return AaveHealthFactorEvidence::Unsafe;
+    }
+    if compare_decimal_strings(health_factor, AAVE_SAFE_HEALTH_FACTOR_WAD)
+        .is_some_and(|ordering| ordering == Ordering::Less)
+    {
+        return AaveHealthFactorEvidence::Caution;
+    }
+    AaveHealthFactorEvidence::Healthy
+}
+
+fn push_overrideable_blocker(blockers: &mut Vec<PolicyBlocker>, code: &str, message: &str) {
+    if blockers.iter().any(|blocker| blocker.code == code) {
+        return;
+    }
+    blockers.push(overrideable_policy_blocker(code, message));
+}
+
+fn decoded_arg<'a>(call: &'a crate::model::DecodedCall, name: &str) -> Option<&'a str> {
+    call.arguments
+        .iter()
+        .find(|argument| argument.name == name)
+        .map(|argument| argument.value.as_str())
+}
+
+fn decoded_args<'a>(
+    call: &'a crate::model::DecodedCall,
+    name: &'a str,
+) -> impl Iterator<Item = &'a str> + 'a {
+    call.arguments
+        .iter()
+        .filter(move |argument| argument.name == name)
+        .map(|argument| argument.value.as_str())
+}
+
+fn parse_decimal_u64(value: &str) -> Option<u64> {
+    if value.is_empty() || !value.as_bytes().iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn parse_decimal_usize(value: &str) -> Option<usize> {
+    if value.is_empty() || !value.as_bytes().iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn compare_decimal_strings(left: &str, right: &str) -> Option<Ordering> {
+    if left.is_empty()
+        || right.is_empty()
+        || !left.as_bytes().iter().all(u8::is_ascii_digit)
+        || !right.as_bytes().iter().all(u8::is_ascii_digit)
+    {
+        return None;
+    }
+    let left = left.trim_start_matches('0');
+    let right = right.trim_start_matches('0');
+    let left = if left.is_empty() { "0" } else { left };
+    let right = if right.is_empty() { "0" } else { right };
+    Some(match left.len().cmp(&right.len()) {
+        Ordering::Equal => left.cmp(right),
+        ordering => ordering,
+    })
+}
+
+fn current_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 pub fn evaluate_transaction_impact(
@@ -519,263 +821,6 @@ fn approval_uses_operator(approval: &ApprovalChange) -> bool {
     approval.operator.is_some() && approval.approved.unwrap_or(true)
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct KnownCounterparty {
-    pub(crate) chain_id: &'static str,
-    pub(crate) address: &'static str,
-    pub(crate) label: &'static str,
-    pub(crate) protocol: &'static str,
-}
-
-// Source-backed protocol labels for the chains the desktop app can switch to.
-// These labels are review/policy context; they are not a replacement for simulation.
-const KNOWN_COUNTERPARTIES: &[KnownCounterparty] = &[
-    KnownCounterparty {
-        chain_id: "0x1",
-        address: "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
-        label: "V2 Router02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x1",
-        address: "0xe592427a0aece92de3edee1f18e0157c05861564",
-        label: "V3 SwapRouter",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x1",
-        address: "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
-        label: "SwapRouter02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x1",
-        address: "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
-        label: "Universal Router",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x1",
-        address: "0x4c82d1fbfe28c977cbb58d8c7ff8fcf9f70a2cca",
-        label: "Universal Router 2.1.1",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x1",
-        address: "0x000000000022d473030f116ddee9f6b43ac78ba3",
-        label: "Permit2",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x1",
-        address: "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
-        label: "V3 Pool",
-        protocol: "Aave",
-    },
-    KnownCounterparty {
-        chain_id: "0xaa36a7",
-        address: "0xee567fe1712faf6149d80da1e6934e354124cfe3",
-        label: "V2 Router02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xaa36a7",
-        address: "0x3bfa4769fb09eefc5a80d6e87c3b9c650f7ae48e",
-        label: "SwapRouter02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xaa36a7",
-        address: "0x3a9d48ab9751398bbfa63ad67599bb04e4bdf98b",
-        label: "Universal Router",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xaa36a7",
-        address: "0x000000000022d473030f116ddee9f6b43ac78ba3",
-        label: "Permit2",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xaa36a7",
-        address: "0x6ae43d3271ff6888e7fc43fd7321a503ff738951",
-        label: "V3 Pool",
-        protocol: "Aave",
-    },
-    KnownCounterparty {
-        chain_id: "0x2105",
-        address: "0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24",
-        label: "V2 Router02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x2105",
-        address: "0x2626664c2603336e57b271c5c0b26f421741e481",
-        label: "SwapRouter02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x2105",
-        address: "0x6ff5693b99212da76ad316178a184ab56d299b43",
-        label: "Universal Router",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x2105",
-        address: "0xfdf682f51fe81aa4898f0ae2163d8a55c127fbc7",
-        label: "Universal Router 2.1.1",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x2105",
-        address: "0x000000000022d473030f116ddee9f6b43ac78ba3",
-        label: "Permit2",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x2105",
-        address: "0xa238dd80c259a72e81d7e4664a9801593f98d1c5",
-        label: "V3 Pool",
-        protocol: "Aave",
-    },
-    KnownCounterparty {
-        chain_id: "0xa",
-        address: "0x4a7b5da61326a6379179b40d00f57e5bbdc962c2",
-        label: "V2 Router02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa",
-        address: "0xe592427a0aece92de3edee1f18e0157c05861564",
-        label: "V3 SwapRouter",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa",
-        address: "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
-        label: "SwapRouter02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa",
-        address: "0x851116d9223fabed8e56c0e6b8ad0c31d98b3507",
-        label: "Universal Router",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa",
-        address: "0x8b844f885672f333bc0042cb669255f93a4c1e6b",
-        label: "Universal Router 2.1.1",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa",
-        address: "0x000000000022d473030f116ddee9f6b43ac78ba3",
-        label: "Permit2",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa",
-        address: "0x794a61358d6845594f94dc1db02a252b5b4814ad",
-        label: "V3 Pool",
-        protocol: "Aave",
-    },
-    KnownCounterparty {
-        chain_id: "0xa4b1",
-        address: "0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24",
-        label: "V2 Router02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa4b1",
-        address: "0xe592427a0aece92de3edee1f18e0157c05861564",
-        label: "V3 SwapRouter",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa4b1",
-        address: "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
-        label: "SwapRouter02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa4b1",
-        address: "0xa51afafe0263b40edaef0df8781ea9aa03e381a3",
-        label: "Universal Router",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa4b1",
-        address: "0x8b844f885672f333bc0042cb669255f93a4c1e6b",
-        label: "Universal Router 2.1.1",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa4b1",
-        address: "0x000000000022d473030f116ddee9f6b43ac78ba3",
-        label: "Permit2",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0xa4b1",
-        address: "0x794a61358d6845594f94dc1db02a252b5b4814ad",
-        label: "V3 Pool",
-        protocol: "Aave",
-    },
-    KnownCounterparty {
-        chain_id: "0x89",
-        address: "0xedf6066a2b290c185783862c7f4776a2c8077ad1",
-        label: "V2 Router02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x89",
-        address: "0xe592427a0aece92de3edee1f18e0157c05861564",
-        label: "V3 SwapRouter",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x89",
-        address: "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
-        label: "SwapRouter02",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x89",
-        address: "0x1095692a6237d83c6a72f3f5efedb9a670c49223",
-        label: "Universal Router",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x89",
-        address: "0x8b844f885672f333bc0042cb669255f93a4c1e6b",
-        label: "Universal Router 2.1.1",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x89",
-        address: "0x000000000022d473030f116ddee9f6b43ac78ba3",
-        label: "Permit2",
-        protocol: "Uniswap",
-    },
-    KnownCounterparty {
-        chain_id: "0x89",
-        address: "0x794a61358d6845594f94dc1db02a252b5b4814ad",
-        label: "V3 Pool",
-        protocol: "Aave",
-    },
-];
-
-pub(crate) fn known_counterparty(chain_id: &str, address: &str) -> Option<KnownCounterparty> {
-    if !looks_like_eth_address(address) {
-        return None;
-    }
-    let address = address.to_ascii_lowercase();
-    KNOWN_COUNTERPARTIES.iter().copied().find(|known| {
-        same_chain_id(chain_id, known.chain_id) && address.eq_ignore_ascii_case(known.address)
-    })
-}
-
 pub fn evaluate_transaction_risk(
     report: &TransactionSimulationReport,
     policy: &TransactionPolicyEvaluation,
@@ -838,6 +883,20 @@ pub fn evaluate_transaction_risk(
                 | "high_risk_unlimited_approval"
                 | "high_risk_operator_approval"
                 | "unknown_approval_authority"
+                | "universal_router_semantics_incomplete"
+                | "multicall_semantics_incomplete"
+                | "uniswap_zero_slippage_floor"
+                | "swap_deadline_expired"
+                | "swap_deadline_too_far"
+                | "swap_deadline_invalid"
+                | "swap_third_party_recipient"
+                | "aave_third_party_account"
+                | "aave_third_party_withdraw_recipient"
+                | "aave_borrow_health_factor_unknown"
+                | "aave_withdraw_health_factor_unknown"
+                | "aave_collateral_disable_risk"
+                | "aave_post_transaction_health_factor_unknown"
+                | "aave_health_factor_caution"
         )
     });
     let has_warning = report
@@ -895,6 +954,21 @@ fn policy_blocker_title(code: &str) -> &'static str {
         "high_risk_unlimited_approval" => "Unlimited token approval",
         "high_risk_operator_approval" => "Approval for all",
         "unknown_approval_authority" => "Unknown approval authority",
+        "universal_router_semantics_incomplete" => "Universal Router review incomplete",
+        "multicall_semantics_incomplete" => "Multicall review incomplete",
+        "uniswap_zero_slippage_floor" => "Zero swap output minimum",
+        "swap_deadline_expired" => "Expired swap deadline",
+        "swap_deadline_too_far" => "Long swap deadline",
+        "swap_deadline_invalid" => "Invalid swap deadline",
+        "swap_third_party_recipient" => "Third-party swap recipient",
+        "aave_third_party_account" => "Third-party Aave account",
+        "aave_third_party_withdraw_recipient" => "Third-party Aave withdraw recipient",
+        "aave_borrow_health_factor_unknown" => "Aave borrow risk",
+        "aave_withdraw_health_factor_unknown" => "Aave withdraw risk",
+        "aave_collateral_disable_risk" => "Aave collateral risk",
+        "aave_post_transaction_health_factor_unknown" => "Aave post-transaction risk",
+        "aave_health_factor_caution" => "Aave health factor caution",
+        "aave_health_factor_liquidation_risk" => "Aave liquidation risk",
         _ => "Policy reason",
     }
 }

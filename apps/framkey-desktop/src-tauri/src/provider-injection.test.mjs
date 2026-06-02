@@ -119,7 +119,8 @@ test("announces EIP-6963 provider without replacing an existing window.ethereum"
   assert.ok(announcement);
   assert.equal(announcement.detail.provider, window.framkey);
   assert.equal(announcement.detail.info.name, "FRAMKey");
-  assert.match(announcement.detail.info.icon, /^data:image\/svg\+xml,/);
+  assert.match(announcement.detail.info.icon, /^data:image\/png;base64,/);
+  assert.equal(announcement.detail.info.icon.includes("svg"), false);
 });
 
 test("updates selectedAddress and emits accountsChanged after account requests", async () => {
@@ -404,7 +405,7 @@ test("interactive remote provider smoke connects, signs, and hides signature pre
       );
       assert.equal(
         request.params[1].message.spender,
-        "0x0000000000000000000000000000000000000002",
+        "0x6ff5693b99212da76ad316178a184ab56d299b43",
       );
       return { id: request.id, result: typedSignature };
     }

@@ -140,11 +140,8 @@ pub(crate) fn typed_data_broker_mode_for_decision(
     }
     match decision {
         ReviewDecision::Approve if request.method == "eth_signTypedData_v4" => {
-            if signable_typed_data_intent(request).is_some() {
-                Ok("controlled_typed_data_signing")
-            } else {
-                bail!("typed-data signing is only enabled for recognized Permit requests")
-            }
+            ensure_signable_typed_data(request)?;
+            Ok("controlled_typed_data_signing")
         }
         ReviewDecision::Approve => {
             bail!("typed-data signing is only enabled for eth_signTypedData_v4")
@@ -157,6 +154,9 @@ pub(crate) fn typed_data_broker_mode_for_decision(
 }
 
 pub fn signable_typed_data_intent(request: &ReviewRequest) -> Option<&'static str> {
+    if typed_data_policy_can_sign(request) != Some(true) {
+        return None;
+    }
     let intent = request
         .summary
         .get("typedData")
@@ -171,6 +171,60 @@ pub fn signable_typed_data_intent(request: &ReviewRequest) -> Option<&'static st
         "permit2_batch_transfer_from" => Some("permit2_batch_transfer_from"),
         _ => None,
     }
+}
+
+pub(crate) fn ensure_signable_typed_data(request: &ReviewRequest) -> Result<&'static str> {
+    let intent = request
+        .summary
+        .get("typedData")
+        .and_then(Value::as_object)
+        .and_then(|typed_data| typed_data.get("intent"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            anyhow::anyhow!("typed-data review request {} is missing intent", request.id)
+        })?;
+    let Some(signable_intent) = signable_typed_data_intent(request) else {
+        let blocker = first_typed_data_policy_blocker(request);
+        let message = blocker
+            .as_ref()
+            .and_then(|blocker| blocker.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("typed-data signing is only enabled for recognized Permit requests");
+        let code = blocker
+            .as_ref()
+            .and_then(|blocker| blocker.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or("typed_data_policy_blocked");
+        bail!("typed-data policy blocks signing: {code}: {message}");
+    };
+    if signable_intent != intent {
+        bail!("typed-data signing is only enabled for recognized Permit requests");
+    }
+    Ok(signable_intent)
+}
+
+pub(crate) fn typed_data_policy_can_sign(request: &ReviewRequest) -> Option<bool> {
+    request
+        .summary
+        .get("typedData")
+        .and_then(Value::as_object)
+        .and_then(|typed_data| typed_data.get("policy"))
+        .and_then(Value::as_object)
+        .and_then(|policy| policy.get("canSign"))
+        .and_then(Value::as_bool)
+}
+
+pub(crate) fn first_typed_data_policy_blocker(request: &ReviewRequest) -> Option<Value> {
+    request
+        .summary
+        .get("typedData")
+        .and_then(Value::as_object)
+        .and_then(|typed_data| typed_data.get("policy"))
+        .and_then(Value::as_object)
+        .and_then(|policy| policy.get("blockers"))
+        .and_then(Value::as_array)
+        .and_then(|blockers| blockers.first())
+        .cloned()
 }
 
 pub(crate) fn transaction_broker_mode_for_decision(

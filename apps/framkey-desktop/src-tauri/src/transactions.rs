@@ -1,14 +1,25 @@
 use anyhow::{Context, Result};
 use framkey_evm::{EvmAddress, EvmSignedTransaction, EvmTransaction};
 use framkey_ipc::SignerSignTransactionResponse;
+use framkey_simulation::{
+    TransactionReviewReport, evaluate_transaction_impact, evaluate_transaction_policy,
+    evaluate_transaction_risk, evaluate_transaction_trust, known_protocol_counterparty,
+};
 use serde_json::{Map, Value, json};
 
 use crate::*;
+
+const DEFAULT_PRIORITY_FEE_PER_GAS: &str = "0x3b9aca00";
+const AAVE_GET_USER_ACCOUNT_DATA_SELECTOR: &str = "0xbf92857c";
+const MAX_LEGACY_GAS_PRICE_WEI: u128 = 1_000_000_000_000;
+const MAX_EIP1559_MAX_FEE_PER_GAS_WEI: u128 = 1_000_000_000_000;
+const MAX_EIP1559_PRIORITY_FEE_PER_GAS_WEI: u128 = 100_000_000_000;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedTransaction {
     pub(crate) review_request: ProviderRequest,
     pub(crate) transaction: EvmTransaction,
+    pub(crate) nonce_reservation: Option<PendingNonceReservation>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +53,7 @@ impl From<SignerSignTransactionResponse> for DesktopSignedTransaction {
 }
 
 pub(crate) fn prepare_transaction(
+    state: &AppState,
     config: &DesktopConfig,
     request: &ProviderRequest,
     wallet_address: &str,
@@ -61,6 +73,7 @@ pub(crate) fn prepare_transaction(
             config.chain_id
         );
     }
+    validate_transaction_envelope_fields(tx)?;
     reject_access_list(tx)?;
 
     let to = optional_string_field(tx, "to")?;
@@ -69,13 +82,18 @@ pub(crate) fn prepare_transaction(
         .or(optional_string_field(tx, "input")?)
         .unwrap_or_else(|| "0x".to_owned());
 
-    let nonce = match optional_string_field(tx, "nonce")? {
-        Some(nonce) => nonce,
+    let (nonce, nonce_reservation) = match optional_string_field(tx, "nonce")? {
+        Some(nonce) => (nonce, None),
         None => rpc_string_result(
             config,
             "eth_getTransactionCount",
             json!([wallet_address, "pending"]),
-        )?,
+        )
+        .and_then(|rpc_nonce| {
+            state
+                .reserve_transaction_nonce(&config.chain_id, wallet_address, &rpc_nonce)
+                .map(|reservation| (reservation.nonce.clone(), Some(reservation)))
+        })?,
     };
 
     let gas_limit =
@@ -98,12 +116,8 @@ pub(crate) fn prepare_transaction(
             }
         };
 
-    let mut gas_price = optional_string_field(tx, "gasPrice")?;
-    let max_fee_per_gas = optional_string_field(tx, "maxFeePerGas")?;
-    let max_priority_fee_per_gas = optional_string_field(tx, "maxPriorityFeePerGas")?;
-    if gas_price.is_none() && max_fee_per_gas.is_none() && max_priority_fee_per_gas.is_none() {
-        gas_price = Some(rpc_string_result(config, "eth_gasPrice", json!([]))?);
-    }
+    let (gas_price, max_fee_per_gas, max_priority_fee_per_gas) =
+        transaction_fee_fields(config, tx)?;
 
     let transaction = EvmTransaction {
         chain_id: configured_chain_id,
@@ -151,6 +165,7 @@ pub(crate) fn prepare_transaction(
             origin: request.origin.clone(),
         },
         transaction,
+        nonce_reservation,
     })
 }
 
@@ -175,12 +190,462 @@ pub(crate) fn optional_string_field(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransactionTypeHint {
+    Legacy,
+    Eip1559,
+}
+
+pub(crate) fn validate_transaction_envelope_fields(map: &Map<String, Value>) -> Result<()> {
+    let _ = transaction_type_hint(map)?;
+    for field in [
+        "maxFeePerBlobGas",
+        "blobVersionedHashes",
+        "blobs",
+        "commitments",
+        "proofs",
+        "sidecars",
+    ] {
+        reject_non_null_field(map, field, "blob transaction fields are not supported")?;
+    }
+    reject_non_null_field(
+        map,
+        "authorizationList",
+        "EIP-7702 authorizationList transactions are not supported",
+    )
+}
+
+pub(crate) fn transaction_type_hint(
+    map: &Map<String, Value>,
+) -> Result<Option<TransactionTypeHint>> {
+    let Some(value) = optional_string_field(map, "type")? else {
+        return Ok(None);
+    };
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "0" | "0x0" | "0x00" | "legacy" => Ok(Some(TransactionTypeHint::Legacy)),
+        "2" | "0x2" | "0x02" | "eip1559" | "eip-1559" => Ok(Some(TransactionTypeHint::Eip1559)),
+        "1" | "0x1" | "0x01" => {
+            anyhow::bail!("transaction type 1 access-list envelopes are not supported")
+        }
+        "3" | "0x3" | "0x03" => {
+            anyhow::bail!("transaction type 3 blob envelopes are not supported")
+        }
+        _ => anyhow::bail!("transaction type {value} is not supported"),
+    }
+}
+
+fn reject_non_null_field(map: &Map<String, Value>, field: &str, message: &str) -> Result<()> {
+    match map.get(field) {
+        None | Some(Value::Null) => Ok(()),
+        Some(_) => anyhow::bail!("transaction signing does not support {field}: {message}"),
+    }
+}
+
 pub(crate) fn reject_access_list(map: &Map<String, Value>) -> Result<()> {
     match map.get("accessList") {
         None | Some(Value::Null) => Ok(()),
         Some(Value::Array(items)) if items.is_empty() => Ok(()),
-        Some(_) => anyhow::bail!("mock transaction signing does not support accessList yet"),
+        Some(_) => anyhow::bail!("transaction signing does not support non-empty accessList yet"),
     }
+}
+
+pub(crate) fn transaction_fee_fields(
+    config: &DesktopConfig,
+    tx: &Map<String, Value>,
+) -> Result<(Option<String>, Option<String>, Option<String>)> {
+    let tx_type = transaction_type_hint(tx)?;
+    let gas_price = optional_string_field(tx, "gasPrice")?;
+    let mut max_fee_per_gas = optional_string_field(tx, "maxFeePerGas")?;
+    let mut max_priority_fee_per_gas = optional_string_field(tx, "maxPriorityFeePerGas")?;
+    if tx_type == Some(TransactionTypeHint::Legacy)
+        && (max_fee_per_gas.is_some() || max_priority_fee_per_gas.is_some())
+    {
+        anyhow::bail!("legacy transaction type cannot use EIP-1559 fee fields");
+    }
+    if tx_type == Some(TransactionTypeHint::Legacy) && gas_price.is_none() {
+        anyhow::bail!("legacy transaction type requires gasPrice");
+    }
+    if tx_type == Some(TransactionTypeHint::Eip1559) && gas_price.is_some() {
+        anyhow::bail!("EIP-1559 transaction type cannot use gasPrice");
+    }
+    if gas_price.is_some() && (max_fee_per_gas.is_some() || max_priority_fee_per_gas.is_some()) {
+        anyhow::bail!("transaction fee fields cannot mix gasPrice with EIP-1559 fee fields");
+    }
+    if gas_price.is_some() {
+        validate_legacy_fee_cap(gas_price.as_deref().expect("checked above"))?;
+        return Ok((gas_price, None, None));
+    }
+    if max_fee_per_gas.is_some() && max_priority_fee_per_gas.is_some() {
+        validate_eip1559_fee_caps(
+            max_fee_per_gas.as_deref().expect("checked above"),
+            max_priority_fee_per_gas.as_deref().expect("checked above"),
+        )?;
+        return Ok((None, max_fee_per_gas, max_priority_fee_per_gas));
+    }
+
+    match eip1559_fee_suggestion(config) {
+        Ok(suggestion) => {
+            if max_priority_fee_per_gas.is_none() {
+                max_priority_fee_per_gas = Some(suggestion.max_priority_fee_per_gas);
+            }
+            if max_fee_per_gas.is_none() {
+                let priority = max_priority_fee_per_gas
+                    .as_deref()
+                    .expect("priority fee set above");
+                max_fee_per_gas = Some(max_fee_from_base_fee(
+                    &suggestion.next_base_fee_per_gas,
+                    priority,
+                )?);
+            }
+            validate_eip1559_fee_caps(
+                max_fee_per_gas.as_deref().expect("set above"),
+                max_priority_fee_per_gas.as_deref().expect("set above"),
+            )?;
+            Ok((None, max_fee_per_gas, max_priority_fee_per_gas))
+        }
+        Err(error) if max_fee_per_gas.is_none() && max_priority_fee_per_gas.is_none() => {
+            eprintln!("eth_feeHistory unavailable, falling back to legacy gasPrice: {error}");
+            let gas_price = rpc_string_result(config, "eth_gasPrice", json!([]))?;
+            validate_legacy_fee_cap(&gas_price)?;
+            Ok((Some(gas_price), None, None))
+        }
+        Err(error) => Err(error).context("failed to complete EIP-1559 fee fields"),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Eip1559FeeSuggestion {
+    pub(crate) next_base_fee_per_gas: String,
+    pub(crate) max_priority_fee_per_gas: String,
+}
+
+pub(crate) fn eip1559_fee_suggestion(config: &DesktopConfig) -> Result<Eip1559FeeSuggestion> {
+    let result = rpc_result(config, "eth_feeHistory", json!(["0x1", "pending", [50]]))?;
+    eip1559_fee_suggestion_from_fee_history(&result)
+}
+
+pub(crate) fn eip1559_fee_suggestion_from_fee_history(
+    result: &Value,
+) -> Result<Eip1559FeeSuggestion> {
+    let base_fees = result
+        .get("baseFeePerGas")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("eth_feeHistory missing baseFeePerGas"))?;
+    let next_base_fee_per_gas = base_fees
+        .last()
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("eth_feeHistory missing next base fee"))?;
+    hex_quantity_to_u128(next_base_fee_per_gas)
+        .context("eth_feeHistory next base fee is malformed")?;
+
+    let max_priority_fee_per_gas = result
+        .get("reward")
+        .and_then(Value::as_array)
+        .and_then(|blocks| blocks.last())
+        .and_then(Value::as_array)
+        .and_then(|rewards| rewards.first())
+        .and_then(Value::as_str)
+        .filter(|reward| hex_quantity_to_u128(reward).is_ok_and(|value| value > 0))
+        .unwrap_or(DEFAULT_PRIORITY_FEE_PER_GAS);
+
+    Ok(Eip1559FeeSuggestion {
+        next_base_fee_per_gas: next_base_fee_per_gas.to_owned(),
+        max_priority_fee_per_gas: max_priority_fee_per_gas.to_owned(),
+    })
+}
+
+pub(crate) fn max_fee_from_base_fee(base_fee: &str, priority_fee: &str) -> Result<String> {
+    let base_fee = hex_quantity_to_u128(base_fee)?;
+    let priority_fee = hex_quantity_to_u128(priority_fee)?;
+    let max_fee = base_fee
+        .checked_mul(2)
+        .and_then(|base| base.checked_add(priority_fee))
+        .ok_or_else(|| anyhow::anyhow!("EIP-1559 fee calculation overflowed"))?;
+    Ok(format!("0x{max_fee:x}"))
+}
+
+fn validate_legacy_fee_cap(gas_price: &str) -> Result<()> {
+    let gas_price = hex_quantity_to_u128(gas_price)?;
+    if gas_price > MAX_LEGACY_GAS_PRICE_WEI {
+        anyhow::bail!("transaction gasPrice exceeds FRAMKey safety cap");
+    }
+    Ok(())
+}
+
+fn validate_eip1559_fee_caps(max_fee_per_gas: &str, max_priority_fee_per_gas: &str) -> Result<()> {
+    let max_fee = hex_quantity_to_u128(max_fee_per_gas)?;
+    let priority_fee = hex_quantity_to_u128(max_priority_fee_per_gas)?;
+    if max_fee > MAX_EIP1559_MAX_FEE_PER_GAS_WEI {
+        anyhow::bail!("transaction maxFeePerGas exceeds FRAMKey safety cap");
+    }
+    if priority_fee > MAX_EIP1559_PRIORITY_FEE_PER_GAS_WEI {
+        anyhow::bail!("transaction maxPriorityFeePerGas exceeds FRAMKey safety cap");
+    }
+    if priority_fee > max_fee {
+        anyhow::bail!("transaction maxPriorityFeePerGas cannot exceed maxFeePerGas");
+    }
+    Ok(())
+}
+
+pub(crate) fn enrich_aave_account_evidence(
+    config: &DesktopConfig,
+    review: &mut TransactionReviewReport,
+) {
+    let Some(target) = aave_account_evidence_target(&review.simulation) else {
+        return;
+    };
+    let evidence = if !target.known_pool {
+        json!({
+            "protocol": "Aave",
+            "source": "eth_call:getUserAccountData",
+            "status": "unrecognized_pool",
+            "chainId": review.simulation.chain_id,
+            "pool": target.pool,
+            "account": target.account,
+        })
+    } else if config.rpc.is_none() {
+        json!({
+            "protocol": "Aave",
+            "source": "eth_call:getUserAccountData",
+            "status": "rpc_missing",
+            "chainId": review.simulation.chain_id,
+            "pool": target.pool,
+            "account": target.account,
+        })
+    } else {
+        match fetch_aave_user_account_data(config, &target.pool, &target.account) {
+            Ok(mut evidence) => {
+                evidence.insert("chainId".to_owned(), json!(review.simulation.chain_id));
+                Value::Object(evidence)
+            }
+            Err(error) => json!({
+                "protocol": "Aave",
+                "source": "eth_call:getUserAccountData",
+                "status": "rpc_error",
+                "chainId": review.simulation.chain_id,
+                "pool": target.pool,
+                "account": target.account,
+                "error": truncate_for_event(&error.to_string(), 180),
+            }),
+        }
+    };
+
+    let mut protocol_evidence = review
+        .simulation
+        .protocol_evidence
+        .take()
+        .and_then(|value| match value {
+            Value::Object(map) => Some(map),
+            _ => None,
+        })
+        .unwrap_or_default();
+    protocol_evidence.insert("aave".to_owned(), evidence);
+    review.simulation.protocol_evidence = Some(Value::Object(protocol_evidence));
+    refresh_transaction_review_summaries(review);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AaveAccountEvidenceTarget {
+    pool: String,
+    account: String,
+    known_pool: bool,
+}
+
+fn aave_account_evidence_target(
+    report: &framkey_simulation::TransactionSimulationReport,
+) -> Option<AaveAccountEvidenceTarget> {
+    let call = report.decoded_call.as_ref()?;
+    if call.standard != "aave_v3_pool" || !aave_call_needs_account_evidence(call) {
+        return None;
+    }
+    let pool = report
+        .transaction
+        .to
+        .as_deref()
+        .or(call.contract.as_deref())?
+        .parse::<EvmAddress>()
+        .ok()?
+        .to_string();
+    let account = aave_account_for_call(report, call)?
+        .parse::<EvmAddress>()
+        .ok()?
+        .to_string();
+    let known_pool = known_protocol_counterparty(&report.chain_id, &pool)
+        .is_some_and(|known| known.protocol == "Aave");
+    Some(AaveAccountEvidenceTarget {
+        pool,
+        account,
+        known_pool,
+    })
+}
+
+fn aave_call_needs_account_evidence(call: &framkey_simulation::DecodedCall) -> bool {
+    match call.function.as_str() {
+        "borrow(address,uint256,uint256,uint16,address)" => true,
+        "withdraw(address,uint256,address)" => true,
+        "setUserUseReserveAsCollateral(address,bool)" => {
+            decoded_transaction_arg(call, "useAsCollateral") == Some("false")
+        }
+        _ => false,
+    }
+}
+
+fn aave_account_for_call<'a>(
+    report: &'a framkey_simulation::TransactionSimulationReport,
+    call: &'a framkey_simulation::DecodedCall,
+) -> Option<&'a str> {
+    match call.function.as_str() {
+        "borrow(address,uint256,uint256,uint16,address)" => {
+            decoded_transaction_arg(call, "onBehalfOf")
+        }
+        "withdraw(address,uint256,address)" | "setUserUseReserveAsCollateral(address,bool)" => {
+            report.transaction.from.as_deref()
+        }
+        _ => None,
+    }
+}
+
+fn decoded_transaction_arg<'a>(
+    call: &'a framkey_simulation::DecodedCall,
+    name: &str,
+) -> Option<&'a str> {
+    call.arguments
+        .iter()
+        .find(|argument| argument.name == name)
+        .map(|argument| argument.value.as_str())
+}
+
+fn fetch_aave_user_account_data(
+    config: &DesktopConfig,
+    pool: &str,
+    account: &str,
+) -> Result<Map<String, Value>> {
+    let result = rpc_string_result(
+        config,
+        "eth_call",
+        json!([
+            {
+                "to": pool,
+                "data": aave_user_account_data_call_data(account)?
+            },
+            "latest"
+        ]),
+    )?;
+    let values = decode_aave_user_account_data_result(&result)?;
+    let mut evidence = Map::new();
+    evidence.insert("protocol".to_owned(), json!("Aave"));
+    evidence.insert("source".to_owned(), json!("eth_call:getUserAccountData"));
+    evidence.insert("status".to_owned(), json!("ok"));
+    evidence.insert("pool".to_owned(), json!(pool));
+    evidence.insert("account".to_owned(), json!(account));
+    evidence.insert(
+        "totalCollateralBase".to_owned(),
+        json!(values.total_collateral_base),
+    );
+    evidence.insert("totalDebtBase".to_owned(), json!(values.total_debt_base));
+    evidence.insert(
+        "availableBorrowsBase".to_owned(),
+        json!(values.available_borrows_base),
+    );
+    evidence.insert(
+        "currentLiquidationThreshold".to_owned(),
+        json!(values.current_liquidation_threshold),
+    );
+    evidence.insert("ltv".to_owned(), json!(values.ltv));
+    evidence.insert("healthFactor".to_owned(), json!(values.health_factor));
+    Ok(evidence)
+}
+
+fn aave_user_account_data_call_data(account: &str) -> Result<String> {
+    let account = account
+        .parse::<EvmAddress>()
+        .map_err(|_| anyhow::anyhow!("Aave account is not a valid EVM address"))?
+        .to_string();
+    let account_hex = account
+        .strip_prefix("0x")
+        .ok_or_else(|| anyhow::anyhow!("normalized Aave account address is missing 0x prefix"))?;
+    Ok(format!(
+        "{AAVE_GET_USER_ACCOUNT_DATA_SELECTOR}{account_hex:0>64}"
+    ))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AaveUserAccountData {
+    total_collateral_base: String,
+    total_debt_base: String,
+    available_borrows_base: String,
+    current_liquidation_threshold: String,
+    ltv: String,
+    health_factor: String,
+}
+
+fn decode_aave_user_account_data_result(result: &str) -> Result<AaveUserAccountData> {
+    let hex = result
+        .strip_prefix("0x")
+        .ok_or_else(|| anyhow::anyhow!("Aave account data result must be 0x-prefixed"))?;
+    if hex.len() != 64 * 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        anyhow::bail!("Aave account data result must contain six uint256 words");
+    }
+    Ok(AaveUserAccountData {
+        total_collateral_base: hex_word_to_decimal(&hex[0..64])?,
+        total_debt_base: hex_word_to_decimal(&hex[64..128])?,
+        available_borrows_base: hex_word_to_decimal(&hex[128..192])?,
+        current_liquidation_threshold: hex_word_to_decimal(&hex[192..256])?,
+        ltv: hex_word_to_decimal(&hex[256..320])?,
+        health_factor: hex_word_to_decimal(&hex[320..384])?,
+    })
+}
+
+fn hex_word_to_decimal(hex: &str) -> Result<String> {
+    if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        anyhow::bail!("hex word must contain hex digits");
+    }
+    let mut digits = vec![0_u8];
+    for byte in hex.bytes() {
+        let nibble = hex_nibble_value(byte)
+            .ok_or_else(|| anyhow::anyhow!("hex word contains non-hex digit"))?;
+        decimal_digits_mul_add(&mut digits, 16, nibble);
+    }
+    let value = digits
+        .into_iter()
+        .skip_while(|digit| *digit == 0)
+        .map(|digit| char::from(b'0' + digit))
+        .collect::<String>();
+    Ok(if value.is_empty() {
+        "0".to_owned()
+    } else {
+        value
+    })
+}
+
+fn decimal_digits_mul_add(digits: &mut Vec<u8>, multiplier: u8, addend: u8) {
+    let mut carry = u16::from(addend);
+    for digit in digits.iter_mut().rev() {
+        let value = u16::from(*digit) * u16::from(multiplier) + carry;
+        *digit = u8::try_from(value % 10).expect("decimal digit fits");
+        carry = value / 10;
+    }
+    while carry > 0 {
+        digits.insert(0, u8::try_from(carry % 10).expect("decimal digit fits"));
+        carry /= 10;
+    }
+}
+
+fn hex_nibble_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn refresh_transaction_review_summaries(review: &mut TransactionReviewReport) {
+    review.policy = evaluate_transaction_policy(&review.simulation);
+    review.risk = evaluate_transaction_risk(&review.simulation, &review.policy);
+    review.impact = evaluate_transaction_impact(&review.simulation);
+    review.trust = evaluate_transaction_trust(&review.simulation);
 }
 
 pub(crate) fn validate_address_matches(actual: &str, expected: &str, label: &str) -> Result<()> {

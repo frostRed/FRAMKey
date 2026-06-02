@@ -1094,6 +1094,173 @@ fn token_send_amount_decimal_parser_and_calldata_are_exact() {
 }
 
 #[test]
+fn eip1559_fee_history_defaults_are_conservative() {
+    let suggestion = eip1559_fee_suggestion_from_fee_history(&json!({
+        "oldestBlock": "0x1",
+        "baseFeePerGas": ["0x10", "0x20"],
+        "gasUsedRatio": [0.5],
+        "reward": [["0x3"]],
+    }))
+    .unwrap();
+    assert_eq!(suggestion.next_base_fee_per_gas, "0x20");
+    assert_eq!(suggestion.max_priority_fee_per_gas, "0x3");
+    assert_eq!(
+        max_fee_from_base_fee(
+            &suggestion.next_base_fee_per_gas,
+            &suggestion.max_priority_fee_per_gas,
+        )
+        .unwrap(),
+        "0x43"
+    );
+
+    let suggestion = eip1559_fee_suggestion_from_fee_history(&json!({
+        "oldestBlock": "0x1",
+        "baseFeePerGas": ["0x10", "0x20"],
+        "gasUsedRatio": [0.5],
+        "reward": [[]],
+    }))
+    .unwrap();
+    assert_eq!(suggestion.max_priority_fee_per_gas, "0x3b9aca00");
+}
+
+#[test]
+fn unsupported_transaction_envelopes_are_rejected_before_review() {
+    let state = AppState::new();
+    let config = fixture_config();
+    let wallet = "0x000000000000000000000000000000000000000a";
+    let request = ProviderRequest {
+        id: "blob-tx".to_owned(),
+        method: "eth_sendTransaction".to_owned(),
+        params: json!([
+            {
+                "from": wallet,
+                "to": "0x0000000000000000000000000000000000000001",
+                "value": "0x0",
+                "data": "0x",
+                "nonce": "0x0",
+                "gas": "0x5208",
+                "gasPrice": "0x1",
+                "type": "0x3",
+                "maxFeePerBlobGas": "0x1"
+            }
+        ]),
+        origin: Some("https://example.test".to_owned()),
+    };
+
+    let error = prepare_transaction(&state, &config, &request, wallet, true).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("transaction type 3 blob envelopes are not supported")
+    );
+    assert!(state.review_queue_snapshot().unwrap().is_empty());
+}
+
+#[test]
+fn transaction_fee_caps_are_enforced() {
+    let config = fixture_config();
+    let high_gas_price = json!({
+        "gasPrice": "0xe8d4a51001"
+    });
+    let error = transaction_fee_fields(&config, high_gas_price.as_object().unwrap()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("gasPrice exceeds FRAMKey safety cap")
+    );
+
+    let inverted_eip1559 = json!({
+        "maxFeePerGas": "0x10",
+        "maxPriorityFeePerGas": "0x20"
+    });
+    let error = transaction_fee_fields(&config, inverted_eip1559.as_object().unwrap()).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("maxPriorityFeePerGas cannot exceed maxFeePerGas")
+    );
+}
+
+#[test]
+fn pending_nonce_reservation_advances_local_reuse() {
+    let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x5",
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x5",
+        }),
+    ]);
+    let state = AppState::new();
+    let mut config = fixture_config();
+    config.rpc = Some(DesktopRpcConfig {
+        endpoint_url: rpc_url,
+        network: Some("fixture".to_owned()),
+        timeout_ms: 1_000,
+    });
+    let wallet = "0x000000000000000000000000000000000000000a";
+    let request = ProviderRequest {
+        id: "nonce-reservation".to_owned(),
+        method: "eth_sendTransaction".to_owned(),
+        params: json!([
+            {
+                "from": wallet,
+                "to": "0x0000000000000000000000000000000000000001",
+                "value": "0x0",
+                "data": "0x",
+                "gas": "0x5208",
+                "gasPrice": "0x1"
+            }
+        ]),
+        origin: Some("https://example.test".to_owned()),
+    };
+
+    let first = prepare_transaction(&state, &config, &request, wallet, true).unwrap();
+    let second = prepare_transaction(&state, &config, &request, wallet, true).unwrap();
+
+    assert_eq!(first.transaction.nonce, "0x5");
+    assert_eq!(second.transaction.nonce, "0x6");
+    assert!(first.nonce_reservation.is_some());
+    assert!(second.nonce_reservation.is_some());
+    for _ in 0..2 {
+        let rpc_request: Value = serde_json::from_str(&request_rx.recv().unwrap()).unwrap();
+        assert_eq!(rpc_request["method"], "eth_getTransactionCount");
+        assert_eq!(rpc_request["params"][1], json!("pending"));
+    }
+}
+
+#[test]
+fn pending_nonce_reservation_reuses_released_gap_before_higher_nonce() {
+    let state = AppState::new();
+    let wallet = "0x000000000000000000000000000000000000000a";
+
+    let first = state
+        .reserve_transaction_nonce("0x1", wallet, "0x5")
+        .unwrap();
+    let second = state
+        .reserve_transaction_nonce("0x1", wallet, "0x5")
+        .unwrap();
+    assert_eq!(first.nonce, "0x5");
+    assert_eq!(second.nonce, "0x6");
+
+    state.release_transaction_nonce(&first);
+    let third = state
+        .reserve_transaction_nonce("0x1", wallet, "0x5")
+        .unwrap();
+    assert_eq!(third.nonce, "0x5");
+
+    state.release_transaction_nonce(&second);
+    let fourth = state
+        .reserve_transaction_nonce("0x1", wallet, "0x5")
+        .unwrap();
+    assert_eq!(fourth.nonce, "0x6");
+}
+
+#[test]
 fn trusted_native_send_requires_review_and_records_activity() {
     let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![
         json!({
@@ -1109,7 +1276,12 @@ fn trusted_native_send_requires_review_and_records_activity() {
         json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "result": "0x1",
+            "result": {
+                "oldestBlock": "0x1",
+                "baseFeePerGas": ["0x1", "0x2"],
+                "gasUsedRatio": [0.5],
+                "reward": [["0x1"]],
+            },
         }),
         json!({
             "jsonrpc": "2.0",
@@ -1175,7 +1347,7 @@ fn trusted_native_send_requires_review_and_records_activity() {
         vec![
             "eth_getTransactionCount",
             "eth_estimateGas",
-            "eth_gasPrice",
+            "eth_feeHistory",
             "eth_sendRawTransaction",
         ]
     );
@@ -1191,6 +1363,84 @@ fn trusted_native_send_requires_review_and_records_activity() {
     let serialized = serde_json::to_string(&activity).unwrap();
     assert!(!serialized.contains("rawTransaction"));
     assert!(!serialized.contains("decisionToken"));
+}
+
+#[test]
+fn aave_borrow_review_attaches_account_health_evidence() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let pool = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2";
+    let data = format!(
+        "0xa415bcad{}{}{}{}{}",
+        abi_address_word("0x1111111111111111111111111111111111111111"),
+        abi_u256_word(50_000_000),
+        abi_u256_word(2),
+        abi_u256_word(0),
+        abi_address_word(from),
+    );
+    let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": aave_account_data_result(2_000_000_000_000_000_000),
+    })]);
+    let state = AppState::new();
+    let mut config = fixture_config();
+    config.rpc = Some(DesktopRpcConfig {
+        endpoint_url: rpc_url.clone(),
+        network: Some("fixture".to_owned()),
+        timeout_ms: 1_000,
+    });
+    let request = ProviderRequest {
+        id: "aave-borrow-review".to_owned(),
+        method: "eth_sendTransaction".to_owned(),
+        params: json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": pool,
+                "value": "0x0",
+                "data": data,
+            }
+        ]),
+        origin: Some("https://app.aave.com".to_owned()),
+    };
+
+    let review = state.capture_review_request(&config, &request).unwrap();
+
+    assert_eq!(review.kind, review::ReviewMethodKind::Transaction);
+    assert_eq!(
+        review.summary["simulation"]["protocolEvidence"]["aave"]["status"],
+        json!("ok")
+    );
+    assert_eq!(
+        review.summary["simulation"]["protocolEvidence"]["aave"]["healthFactor"],
+        json!("2000000000000000000")
+    );
+    assert_eq!(
+        review.summary["policy"]["decision"],
+        json!("requires_user_override")
+    );
+    assert!(policy_blocker(&review.summary, "live_simulation_required").is_some());
+    assert!(policy_blocker(&review.summary, "aave_borrow_health_factor_unknown").is_none());
+    assert!(
+        policy_blocker(
+            &review.summary,
+            "aave_post_transaction_health_factor_unknown"
+        )
+        .is_some()
+    );
+    assert!(policy_blocker(&review.summary, "aave_health_factor_caution").is_none());
+
+    let rpc_request: Value = serde_json::from_str(&request_rx.recv().unwrap()).unwrap();
+    assert_eq!(rpc_request["method"], "eth_call");
+    assert_eq!(rpc_request["params"][0]["to"], json!(pool));
+    assert!(
+        rpc_request["params"][0]["data"]
+            .as_str()
+            .unwrap()
+            .starts_with("0xbf92857c")
+    );
+    let serialized = serde_json::to_string(&review.summary).unwrap();
+    assert!(!serialized.contains(&rpc_url));
 }
 
 #[test]
@@ -1248,7 +1498,12 @@ fn trusted_token_send_requires_review_and_records_activity() {
         json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "result": "0x1",
+            "result": {
+                "oldestBlock": "0x1",
+                "baseFeePerGas": ["0x1", "0x2"],
+                "gasUsedRatio": [0.5],
+                "reward": [["0x1"]],
+            },
         }),
         json!({
             "jsonrpc": "2.0",
@@ -1333,7 +1588,7 @@ fn trusted_token_send_requires_review_and_records_activity() {
         vec![
             "eth_getTransactionCount",
             "eth_estimateGas",
-            "eth_gasPrice",
+            "eth_feeHistory",
             "alchemy_getTokenMetadata",
             "eth_sendRawTransaction",
         ]
@@ -3101,6 +3356,44 @@ fn provider_event_log_redacts_params_and_caps_entries() {
 }
 
 #[test]
+fn provider_telemetry_detail_is_schema_whitelisted() {
+    let state = AppState::new();
+    state
+        .record_provider_telemetry_event(
+            "dapp",
+            ProviderTelemetryEvent {
+                event: "provider_smoke_request".to_owned(),
+                origin: Some("https://example.test".to_owned()),
+                url: Some("https://example.test/app?token=should_not_log#frag".to_owned()),
+                detail: json!({
+                    "provider": "dev.framkey",
+                    "method": "eth_signTypedData_v4",
+                    "ok": true,
+                    "resultPreview": "signature",
+                    "rawParams": ["0xdeadbeef"],
+                    "nested": { "signature": "0xaaaaaaaaaaaaaaaa" },
+                }),
+            },
+        )
+        .unwrap();
+
+    let events = state.provider_events_snapshot().unwrap();
+    assert_eq!(events.len(), 1);
+    let detail = events[0].detail.as_ref().unwrap();
+    assert_eq!(detail["provider"], json!("dev.framkey"));
+    assert_eq!(detail["method"], json!("eth_signTypedData_v4"));
+    assert_eq!(detail["ok"], json!(true));
+    assert_eq!(detail["resultPreview"], json!("signature"));
+    assert_eq!(detail["_omittedKeys"], json!(2));
+
+    let serialized = serde_json::to_string(&events).unwrap();
+    assert!(!serialized.contains("deadbeef"));
+    assert!(!serialized.contains("aaaaaaaa"));
+    assert!(!serialized.contains("should_not_log"));
+    assert!(!serialized.contains("#frag"));
+}
+
+#[test]
 fn mock_gas_fallback_distinguishes_native_and_contract_calls() {
     assert_eq!(
         default_mock_gas_limit("0x"),
@@ -3166,6 +3459,36 @@ fn fixture_config() -> DesktopConfig {
         simulation: DesktopSimulationConfig::LocalDecoderOnly,
         rpc: None,
     }
+}
+
+fn abi_u256_word(value: u128) -> String {
+    format!("{value:064x}")
+}
+
+fn abi_address_word(value: &str) -> String {
+    let address = value.strip_prefix("0x").unwrap_or(value);
+    format!("{address:0>64}")
+}
+
+fn aave_account_data_result(health_factor: u128) -> String {
+    format!(
+        "0x{}{}{}{}{}{}",
+        abi_u256_word(1_000_000_000),
+        abi_u256_word(100_000_000),
+        abi_u256_word(500_000_000),
+        abi_u256_word(8_000),
+        abi_u256_word(7_500),
+        abi_u256_word(health_factor),
+    )
+}
+
+fn policy_blocker<'a>(summary: &'a Value, code: &str) -> Option<&'a Value> {
+    summary
+        .get("policy")
+        .and_then(|policy| policy.get("blockers"))
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|blocker| blocker.get("code").and_then(Value::as_str) == Some(code))
 }
 
 fn fixture_connected_account(address: &str) -> DesktopAccount {
@@ -3259,6 +3582,9 @@ fn unix_mode(path: &Path) -> u32 {
 }
 
 fn permit_typed_data(owner: &str) -> Value {
+    let deadline = current_test_unix_seconds()
+        .saturating_add(60 * 60)
+        .to_string();
     json!({
         "domain": {
             "name": "USD Coin",
@@ -3287,9 +3613,16 @@ fn permit_typed_data(owner: &str) -> Value {
             "spender": "0x000000000022d473030f116ddee9f6b43ac78ba3",
             "value": "1000000",
             "nonce": "0",
-            "deadline": "1900000000"
+            "deadline": deadline
         }
     })
+}
+
+fn current_test_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 fn random_suffix() -> String {
