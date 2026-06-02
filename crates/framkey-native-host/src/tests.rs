@@ -5,7 +5,7 @@ use crate::{
     },
     constants::{DEFAULT_KEYCHAIN_ACCOUNT, DEFAULT_KEYCHAIN_SERVICE},
     error::error_to_ipc,
-    handler::handle_request_result,
+    handler::{NativeHostState, handle_request_result},
     signer_helper::wait_for_signer_helper_output,
 };
 use framkey_gbxcart::GbaSaveType;
@@ -51,12 +51,72 @@ fn rejects_signing_methods() {
         origin: Some("https://example.test".to_owned()),
     };
 
-    let error = handle_request_result(&config, &request).unwrap_err();
+    let mut state = NativeHostState::default();
+    let error = handle_request_result(&config, &mut state, &request).unwrap_err();
     assert_eq!(error.code, IpcErrorCode::DangerousSignatureBlocked);
 }
 
 #[test]
-fn config_validation_rejects_blank_keychain_names() {
+fn eth_accounts_without_session_does_not_touch_configured_device() {
+    let config = NativeHostConfig {
+        chain_id: "0x1".to_owned(),
+        device: NativeDeviceConfig::File {
+            path: PathBuf::from("/definitely/missing/framkey-fixture.sav"),
+        },
+        keychain_service: DEFAULT_KEYCHAIN_SERVICE.to_owned(),
+        keychain_account: DEFAULT_KEYCHAIN_ACCOUNT.to_owned(),
+        helper: SignerHelperConfig {
+            path: PathBuf::from("framkey-signer-helper"),
+            expected_blake3: None,
+            sandbox: SignerHelperSandbox::DisabledByConfig,
+        },
+    };
+    let request = IpcRequest {
+        id: "1".to_owned(),
+        method: "eth_accounts".to_owned(),
+        params: Value::Null,
+        origin: Some("https://example.test".to_owned()),
+    };
+
+    let mut state = NativeHostState::default();
+    let result = handle_request_result(&config, &mut state, &request).unwrap();
+
+    assert_eq!(result, serde_json::json!([]));
+}
+
+#[test]
+fn status_redacts_local_device_paths() {
+    let config = NativeHostConfig {
+        chain_id: "0x1".to_owned(),
+        device: NativeDeviceConfig::File {
+            path: PathBuf::from("/Users/example/.framkey/private-vault.sav"),
+        },
+        keychain_service: DEFAULT_KEYCHAIN_SERVICE.to_owned(),
+        keychain_account: DEFAULT_KEYCHAIN_ACCOUNT.to_owned(),
+        helper: SignerHelperConfig {
+            path: PathBuf::from("framkey-signer-helper"),
+            expected_blake3: None,
+            sandbox: SignerHelperSandbox::DisabledByConfig,
+        },
+    };
+    let request = IpcRequest {
+        id: "1".to_owned(),
+        method: "framkey_getStatus".to_owned(),
+        params: Value::Null,
+        origin: Some("https://example.test".to_owned()),
+    };
+
+    let mut state = NativeHostState::default();
+    let result = handle_request_result(&config, &mut state, &request).unwrap();
+
+    assert_eq!(result["device"]["kind"], "file");
+    assert_eq!(result["device"]["pathConfigured"], true);
+    assert!(result["device"].get("path").is_none());
+    assert!(!result.to_string().contains("private-vault.sav"));
+}
+
+#[test]
+fn config_validation_rejects_ambiguous_keychain_names_and_device_hints() {
     let mut config = NativeHostConfig {
         chain_id: "0x1".to_owned(),
         device: NativeDeviceConfig::File {
@@ -73,7 +133,18 @@ fn config_validation_rejects_blank_keychain_names() {
     assert!(config.validate().is_err());
 
     config.keychain_service = DEFAULT_KEYCHAIN_SERVICE.to_owned();
-    config.keychain_account = "\n".to_owned();
+    config.keychain_account = " default".to_owned();
+    assert!(config.validate().is_err());
+
+    config.keychain_account = "default\u{7f}".to_owned();
+    assert!(config.validate().is_err());
+
+    config.keychain_account = DEFAULT_KEYCHAIN_ACCOUNT.to_owned();
+    config.device = NativeDeviceConfig::GbxCart {
+        port: Some(" \t".to_owned()),
+        save_type: GbaSaveType::SramFram512Kbit,
+        expected_save_size: None,
+    };
     assert!(config.validate().is_err());
 }
 

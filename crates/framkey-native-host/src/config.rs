@@ -133,8 +133,18 @@ impl NativeHostConfig {
 
     pub(crate) fn validate(&self) -> Result<()> {
         validate_chain_id(&self.chain_id)?;
-        if self.keychain_service.trim().is_empty() || self.keychain_account.trim().is_empty() {
-            anyhow::bail!("native host Keychain service/account must not be blank");
+        validate_keychain_name("service", &self.keychain_service)?;
+        validate_keychain_name("account", &self.keychain_account)?;
+        match &self.device {
+            NativeDeviceConfig::File { path } if path.as_os_str().is_empty() => {
+                anyhow::bail!("native host file save-image path must not be blank");
+            }
+            NativeDeviceConfig::GbxCart {
+                port: Some(port), ..
+            } => {
+                validate_device_hint("GBxCart port", port)?;
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -157,7 +167,7 @@ impl NativeDeviceConfig {
         match self {
             Self::File { path } => json!({
                 "kind": "file",
-                "path": path.display().to_string(),
+                "pathConfigured": !path.as_os_str().is_empty(),
             }),
             Self::GbxCart {
                 port,
@@ -165,7 +175,7 @@ impl NativeDeviceConfig {
                 expected_save_size,
             } => json!({
                 "kind": "gbx_cart",
-                "port": port,
+                "portConfigured": port.is_some(),
                 "saveType": save_type_name(*save_type),
                 "expectedSaveSize": expected_save_size,
             }),
@@ -382,6 +392,32 @@ pub(crate) fn validate_chain_id(chain_id: &str) -> Result<()> {
     };
     if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         anyhow::bail!("chain id must be 0x-prefixed hex");
+    }
+    Ok(())
+}
+
+fn validate_keychain_name(label: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("native host Keychain {label} must not be blank");
+    }
+    if value.trim() != value {
+        anyhow::bail!("native host Keychain {label} must not have leading or trailing whitespace");
+    }
+    if value.chars().any(char::is_control) {
+        anyhow::bail!("native host Keychain {label} must not contain control characters");
+    }
+    Ok(())
+}
+
+fn validate_device_hint(label: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("native host {label} must not be blank");
+    }
+    if value.trim() != value {
+        anyhow::bail!("native host {label} must not have leading or trailing whitespace");
+    }
+    if value.chars().any(char::is_control) {
+        anyhow::bail!("native host {label} must not contain control characters");
     }
     Ok(())
 }

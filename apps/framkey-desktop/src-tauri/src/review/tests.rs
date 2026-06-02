@@ -698,13 +698,13 @@ fn allowed_transaction_review() -> TransactionReviewReport {
     );
     review.simulation.mode = SimulationMode::AlchemyRpc;
     review.simulation.status = SimulationStatus::ProviderSimulated;
-    review.simulation.raw_provider_response = Some(json!({
-        "id": 1,
-        "jsonrpc": "2.0",
-        "result": {
-            "changes": [],
-            "error": null
-        }
+    review.simulation.provider_evidence = Some(json!({
+        "provider": "fixture",
+        "httpStatus": 200,
+        "jsonRpcError": false,
+        "jsonRpcErrorCode": null,
+        "resultError": false,
+        "changeCount": 0
     }));
     review.policy = evaluate_transaction_policy(&review.simulation);
     review.risk = evaluate_transaction_risk(&review.simulation, &review.policy);

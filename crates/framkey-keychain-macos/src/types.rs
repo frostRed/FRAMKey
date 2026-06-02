@@ -30,9 +30,15 @@ impl MacKeychainItem {
                 "macOS Keychain account must not be blank",
             ));
         }
-        if self.service.contains('\0') || self.account.contains('\0') {
+        if self.service != self.service.trim() || self.account != self.account.trim() {
             return Err(FramkeyError::invalid_data(
-                "macOS Keychain service/account must not contain NUL bytes",
+                "macOS Keychain service/account must not have leading or trailing whitespace",
+            ));
+        }
+        if self.service.chars().any(char::is_control) || self.account.chars().any(char::is_control)
+        {
+            return Err(FramkeyError::invalid_data(
+                "macOS Keychain service/account must not contain control characters",
             ));
         }
         Ok(())

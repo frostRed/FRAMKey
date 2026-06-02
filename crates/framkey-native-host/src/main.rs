@@ -10,16 +10,17 @@ use framkey_ipc::{
 };
 
 use crate::config::NativeHostConfig;
-use crate::handler::handle_request;
+use crate::handler::{NativeHostState, handle_request};
 
 fn main() -> Result<()> {
     let config = NativeHostConfig::load()?;
+    let mut state = NativeHostState::default();
     let mut stdin = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
 
     while let Some(payload) = read_native_message(&mut stdin)? {
         let response = match serde_json::from_slice::<IpcRequest>(&payload) {
-            Ok(request) => handle_request(&config, request),
+            Ok(request) => handle_request(&config, &mut state, request),
             Err(error) => IpcResponse::error(
                 "invalid",
                 IpcErrorCode::UnsupportedMethod,

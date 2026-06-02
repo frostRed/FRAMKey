@@ -257,11 +257,11 @@ pub(crate) fn mark_provider_failed(
     report: &mut TransactionSimulationReport,
     code: impl Into<String>,
     message: impl Into<String>,
-    raw_provider_response: Option<Value>,
+    provider_evidence: Option<Value>,
 ) {
     report.status = SimulationStatus::ProviderFailed;
-    if let Some(raw) = raw_provider_response {
-        report.raw_provider_response = Some(raw);
+    if let Some(evidence) = provider_evidence {
+        report.provider_evidence = Some(evidence);
     }
     report
         .warnings

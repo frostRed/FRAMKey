@@ -32,6 +32,17 @@ mod tests {
     }
 
     #[test]
+    fn aead_box_decrypt_secret_returns_fixed_size_secret() {
+        let key = SecretBytes::new([7_u8; 32]);
+        let secret = [0xA5_u8; 32];
+        let boxed = AeadBox::encrypt_with_nonce(&key, [3_u8; 24], b"aad", &secret).unwrap();
+        let decrypted = boxed.decrypt_secret::<32>(&key, b"aad").unwrap();
+
+        assert_eq!(decrypted.expose(), &secret);
+        assert!(boxed.decrypt_secret::<31>(&key, b"aad").is_err());
+    }
+
+    #[test]
     fn aead_box_debug_redacts_sealed_material() {
         let key = SecretBytes::new([7_u8; 32]);
         let boxed = AeadBox::encrypt_with_nonce(&key, [3_u8; 24], b"aad", b"plaintext").unwrap();

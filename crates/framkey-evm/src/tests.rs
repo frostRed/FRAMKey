@@ -115,6 +115,28 @@ fn validates_transactions_without_signing_secret() {
 }
 
 #[test]
+fn sign_transaction_validates_request_before_private_key() {
+    let invalid_secret = SecretBytes::new([0_u8; 32]);
+    let error = sign_transaction(
+        &invalid_secret,
+        &EvmTransaction {
+            chain_id: 1,
+            nonce: "0x0".to_owned(),
+            gas_limit: "0x5208".to_owned(),
+            to: Some("not-an-address".to_owned()),
+            value: "0x0".to_owned(),
+            data: "0x".to_owned(),
+            gas_price: Some("0x3b9aca00".to_owned()),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("transaction to"));
+}
+
+#[test]
 fn signs_basic_eip1559_transaction() {
     let secret = SecretBytes::new(
         decode_hex_array::<32>("4c0883a69102937d6231471b5dbb6204fe5129617082792ae468d01a3f362318")
@@ -326,6 +348,23 @@ fn rejects_typed_data_uint_overflow() {
     });
 
     assert!(typed_data_v4_hash(&typed_data).is_err());
+}
+
+#[test]
+fn sign_typed_data_validates_request_before_private_key() {
+    let invalid_secret = SecretBytes::new([0_u8; 32]);
+    let malformed = serde_json::json!({
+        "domain": {},
+        "primaryType": "MissingType",
+        "types": {
+            "EIP712Domain": []
+        },
+        "message": {}
+    });
+
+    let error = sign_typed_data_v4(&invalid_secret, &malformed).unwrap_err();
+
+    assert!(error.to_string().contains("primaryType MissingType"));
 }
 
 #[test]

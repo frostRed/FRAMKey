@@ -20,7 +20,7 @@ pub fn evaluate_transaction_policy(
 
     let live_simulated = report.mode == SimulationMode::AlchemyRpc
         && report.status == SimulationStatus::ProviderSimulated
-        && report.raw_provider_response.is_some();
+        && report.provider_evidence.is_some();
     if !live_simulated {
         blockers.push(overrideable_policy_blocker(
             "live_simulation_required",
@@ -111,7 +111,7 @@ pub fn evaluate_transaction_impact(
     let approval_count = report.approvals.len();
     let live_simulated = report.mode == SimulationMode::AlchemyRpc
         && report.status == SimulationStatus::ProviderSimulated
-        && report.raw_provider_response.is_some();
+        && report.provider_evidence.is_some();
     let provider_asset_changes = live_simulated && (transfer_count > 0 || approval_count > 0);
 
     let mut items = Vec::new();

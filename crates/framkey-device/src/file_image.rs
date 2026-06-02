@@ -42,14 +42,16 @@ impl VaultDevice for FileImageDevice {
 
 #[cfg(unix)]
 fn open_save_image_for_write(path: &Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-    OpenOptions::new()
+    let file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
-        .open(path)
+        .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    Ok(file)
 }
 
 #[cfg(not(unix))]

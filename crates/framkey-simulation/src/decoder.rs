@@ -155,7 +155,7 @@ pub fn local_transaction_report(
         asset_transfers,
         approvals,
         warnings,
-        raw_provider_response: None,
+        provider_evidence: None,
     }
 }
 

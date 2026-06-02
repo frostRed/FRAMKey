@@ -138,9 +138,11 @@ mod imp {
         auth_state_hash: &[u8; 32],
         kek: &SecretBytes<32>,
     ) -> Result<()> {
-        let blob = keychain_blob(policy, auth_state_hash, kek);
-        set_generic_password_options(&blob, local_keychain_store_options(item))
-            .map_err(|error| map_security_error("store macOS Keychain KEK", error))
+        let mut blob = keychain_blob(policy, auth_state_hash, kek);
+        let result = set_generic_password_options(&blob, local_keychain_store_options(item))
+            .map_err(|error| map_security_error("store macOS Keychain KEK", error));
+        blob.fill(0);
+        result
     }
 
     fn keychain_blob(

@@ -7,7 +7,7 @@ use framkey_crypto::{SecretBytes, decode_hex_array, encode_hex, random_array};
 use framkey_evm::validate_private_key_bytes;
 use framkey_recovery::RecoveryBackupFile;
 
-use crate::types::{DekWrapper, VaultFile};
+use crate::types::{DekWrapper, VaultFile, validate_keychain_item_id};
 
 pub(crate) fn current_unix_timestamp() -> UnixTimestamp {
     let seconds = SystemTime::now()
@@ -133,17 +133,7 @@ pub(crate) fn hex_16(value: &str, label: &str) -> Result<[u8; 16]> {
 }
 
 pub(crate) fn validate_keychain_wrapper_binding(keychain_item_id: &str) -> Result<()> {
-    if keychain_item_id.trim().is_empty() {
-        return Err(FramkeyError::invalid_data(
-            "macOS Keychain item id must not be blank",
-        ));
-    }
-    if keychain_item_id.contains('\0') {
-        return Err(FramkeyError::invalid_data(
-            "macOS Keychain item id must not contain NUL bytes",
-        ));
-    }
-    Ok(())
+    validate_keychain_item_id(keychain_item_id)
 }
 
 pub(crate) fn wallet_type_name(wallet_type: WalletType) -> &'static str {

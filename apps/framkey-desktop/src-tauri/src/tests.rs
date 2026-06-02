@@ -144,6 +144,16 @@ fn dapp_compatibility_check_request_rejects_interactive_mode() {
 }
 
 #[test]
+fn signer_helper_stderr_summary_redacts_contents() {
+    let summary = signer_helper_stderr_summary(b"secret save image bytes and recovery material");
+
+    assert!(summary.contains("bytes redacted"));
+    assert!(!summary.contains("secret"));
+    assert!(!summary.contains("recovery"));
+    assert_eq!(signer_helper_stderr_summary(b""), "empty");
+}
+
+#[test]
 fn dapp_session_location_sanitizes_url_and_origin() {
     let location =
         dapp_session_location("https://app.uniswap.org/swap?secret=token#fragment").unwrap();

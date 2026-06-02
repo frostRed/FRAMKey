@@ -134,3 +134,82 @@ fn serializes_validate_recovery_files_request_kind() {
     assert_eq!(encoded["method"], "validate_recovery_files");
     assert_eq!(encoded["recovery_files"], serde_json::json!([]));
 }
+
+#[test]
+fn signer_helper_debug_redacts_sensitive_wire_material() {
+    let personal_request = SignerHelperRequest::PersonalSign(SignerPersonalSignRequest {
+        save_image: vec![0xAA; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],
+        keychain_service: "io.framkey.kek".to_owned(),
+        keychain_account: "default".to_owned(),
+        message: b"secret debug message".to_vec(),
+        expected_address: None,
+    });
+    let typed_data_request = SignerHelperRequest::SignTypedData(SignerSignTypedDataRequest {
+        save_image: vec![0xBB; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],
+        keychain_service: "io.framkey.kek".to_owned(),
+        keychain_account: "default".to_owned(),
+        typed_data: serde_json::json!({"secretField": "do-not-log"}),
+        expected_address: None,
+    });
+    let transaction_request = SignerHelperRequest::SignTransaction(SignerSignTransactionRequest {
+        save_image: vec![0xCC; MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES],
+        keychain_service: "io.framkey.kek".to_owned(),
+        keychain_account: "default".to_owned(),
+        expected_address: None,
+        transaction: SignerEvmTransaction {
+            chain_id: 1,
+            nonce: "0x0".to_owned(),
+            gas_limit: "0x5208".to_owned(),
+            to: Some("0x0000000000000000000000000000000000000002".to_owned()),
+            value: "0x0".to_owned(),
+            data: "0xdeadbeef".to_owned(),
+            gas_price: Some("0x1".to_owned()),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+        },
+    });
+    let response = SignerHelperResponse::ok(SignerHelperResult::SignTransaction(
+        SignerSignTransactionResponse {
+            keychain_service: "io.framkey.kek".to_owned(),
+            keychain_account: "default".to_owned(),
+            keychain_item_id: "io.framkey.kek:default".to_owned(),
+            keychain_access_policy: "local_auth".to_owned(),
+            device_id: "device".to_owned(),
+            kek_id: "kek".to_owned(),
+            metadata: fixture_metadata(),
+            address: "0x0000000000000000000000000000000000000001".to_owned(),
+            transaction_kind: "eip1559".to_owned(),
+            transaction_hash: "0xhash".to_owned(),
+            raw_transaction: "0xfeedface".to_owned(),
+        },
+    ));
+
+    let debug = format!(
+        "{personal_request:?}\n{typed_data_request:?}\n{transaction_request:?}\n{response:?}"
+    );
+
+    assert!(!debug.contains("170, 170"));
+    assert!(!debug.contains("187, 187"));
+    assert!(!debug.contains("204, 204"));
+    assert!(!debug.contains("115, 101, 99"));
+    assert!(!debug.contains("do-not-log"));
+    assert!(!debug.contains("0xdeadbeef"));
+    assert!(!debug.contains("0xfeedface"));
+    assert!(debug.contains("save_image_len"));
+    assert!(debug.contains("typed_data_json_len"));
+    assert!(debug.contains("data_len"));
+    assert!(debug.contains("raw_transaction_len"));
+}
+
+fn fixture_metadata() -> SignerVaultMetadata {
+    SignerVaultMetadata {
+        image_size: MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES,
+        slot_size: 4096,
+        wallet_id: "wallet".to_owned(),
+        generation: 1,
+        wallet_type: "evm_eoa_secp256k1".to_owned(),
+        active_slot_hash_valid: true,
+        active_slot_payload_hash_valid: true,
+        wallet_secret_hash: Some("wallet-secret-hash".to_owned()),
+    }
+}

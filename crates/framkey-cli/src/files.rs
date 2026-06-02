@@ -3,7 +3,20 @@ use std::{io::Write, path::Path};
 use anyhow::Result;
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+pub(crate) fn create_private_dir_all(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)
+        .map_err(|error| anyhow::anyhow!("failed to create {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to set private permissions on {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
 
 pub(crate) fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut options = std::fs::OpenOptions::new();
@@ -53,5 +66,20 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_private_dir_all_sets_owner_only_directory_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = test_path("dir-mode");
+        let _ = std::fs::remove_dir_all(&path);
+
+        create_private_dir_all(&path).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        let _ = std::fs::remove_dir_all(&path);
     }
 }

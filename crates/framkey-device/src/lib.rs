@@ -86,4 +86,31 @@ mod tests {
 
         std::fs::remove_file(path).unwrap();
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_image_device_tightens_existing_save_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = std::env::temp_dir().join(format!(
+            "framkey-device-existing-permissions-test-{}-{}.sav",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"world readable").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let mut device = FileImageDevice::new(&path);
+        device
+            .write_save_image(&SaveImage::new(b"owner only after overwrite".to_vec()))
+            .unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        std::fs::remove_file(path).unwrap();
+    }
 }

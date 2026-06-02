@@ -301,7 +301,7 @@ pub(crate) fn run_signer_helper(
             anyhow::bail!(
                 "signer helper timed out after {} ms waiting for macOS LocalAuthentication; stderr: {}",
                 SIGNER_HELPER_TIMEOUT.as_millis(),
-                String::from_utf8_lossy(&output.stderr)
+                signer_helper_stderr_summary(&output.stderr)
             );
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -310,14 +310,14 @@ pub(crate) fn run_signer_helper(
         anyhow::bail!(
             "signer helper exited with {} before returning JSON; stderr: {}",
             output.status,
-            String::from_utf8_lossy(&output.stderr)
+            signer_helper_stderr_summary(&output.stderr)
         );
     }
     let response: SignerHelperResponse =
         serde_json::from_slice(&output.stdout).map_err(|error| {
             anyhow::anyhow!(
                 "failed to parse signer helper response: {error}; stderr: {}",
-                String::from_utf8_lossy(&output.stderr)
+                signer_helper_stderr_summary(&output.stderr)
             )
         })?;
 
@@ -333,6 +333,14 @@ pub(crate) fn run_signer_helper(
     }
 
     Ok(response)
+}
+
+pub(crate) fn signer_helper_stderr_summary(stderr: &[u8]) -> String {
+    if stderr.is_empty() {
+        "empty".to_owned()
+    } else {
+        format!("{} bytes redacted", stderr.len())
+    }
 }
 
 pub(crate) fn signer_helper_command(helper: &SignerHelperConfig) -> Command {

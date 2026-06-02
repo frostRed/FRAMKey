@@ -14,8 +14,30 @@ use crate::{
     signer_helper::{helper_report, run_signer_helper},
 };
 
-pub(crate) fn handle_request(config: &NativeHostConfig, request: IpcRequest) -> IpcResponse {
-    match handle_request_result(config, &request) {
+#[derive(Debug, Default)]
+pub(crate) struct NativeHostState {
+    account: Option<NativeAccount>,
+}
+
+impl NativeHostState {
+    fn connected_addresses(&self) -> Vec<String> {
+        self.account
+            .as_ref()
+            .map(|account| vec![account.address.clone()])
+            .unwrap_or_default()
+    }
+
+    fn remember_account(&mut self, account: NativeAccount) {
+        self.account = Some(account);
+    }
+}
+
+pub(crate) fn handle_request(
+    config: &NativeHostConfig,
+    state: &mut NativeHostState,
+    request: IpcRequest,
+) -> IpcResponse {
+    match handle_request_result(config, state, &request) {
         Ok(result) => IpcResponse::Result {
             id: request.id,
             result,
@@ -29,6 +51,7 @@ pub(crate) fn handle_request(config: &NativeHostConfig, request: IpcRequest) -> 
 
 pub(crate) fn handle_request_result(
     config: &NativeHostConfig,
+    state: &mut NativeHostState,
     request: &IpcRequest,
 ) -> std::result::Result<Value, IpcError> {
     match request.method.as_str() {
@@ -36,16 +59,17 @@ pub(crate) fn handle_request_result(
         "framkey_getStatus" | "wallet_getCapabilities" => Ok(status_result(config)),
         "framkey_getAccount" => {
             let account = load_account(config).map_err(error_to_ipc)?;
-            Ok(account_result(config, account))
+            let result = account_result(config, &account);
+            state.remember_account(account);
+            Ok(result)
         }
         "eth_requestAccounts" => {
             let account = load_account(config).map_err(error_to_ipc)?;
-            Ok(json!([account.address]))
+            let addresses = vec![account.address.clone()];
+            state.remember_account(account);
+            Ok(json!(addresses))
         }
-        "eth_accounts" => {
-            let account = load_account(config).map_err(error_to_ipc)?;
-            Ok(json!([account.address]))
-        }
+        "eth_accounts" => Ok(json!(state.connected_addresses())),
         "eth_sendTransaction"
         | "eth_sign"
         | "eth_signTransaction"
@@ -90,7 +114,7 @@ fn status_result(config: &NativeHostConfig) -> Value {
     })
 }
 
-fn account_result(config: &NativeHostConfig, account: NativeAccount) -> Value {
+fn account_result(config: &NativeHostConfig, account: &NativeAccount) -> Value {
     json!({
         "address": account.address,
         "chainId": config.chain_id,

@@ -86,14 +86,19 @@ pub(crate) fn validate_sign_transaction_request(
     Ok(())
 }
 
+pub(crate) fn parse_expected_address(
+    expected: Option<&str>,
+) -> framkey_core::Result<Option<EvmAddress>> {
+    expected.map(str::parse).transpose()
+}
+
 pub(crate) fn validate_expected_address(
     actual: EvmAddress,
-    expected: Option<&str>,
+    expected: Option<EvmAddress>,
 ) -> framkey_core::Result<()> {
     let Some(expected) = expected else {
         return Ok(());
     };
-    let expected: EvmAddress = expected.parse()?;
     if actual != expected {
         return Err(FramkeyError::invalid_data(format!(
             "signing account mismatch: requested {expected}, vault {actual}"

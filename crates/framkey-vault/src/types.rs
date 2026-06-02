@@ -125,15 +125,20 @@ impl DekWrapper {
     }
 }
 
-fn validate_keychain_item_id(keychain_item_id: &str) -> Result<()> {
+pub(crate) fn validate_keychain_item_id(keychain_item_id: &str) -> Result<()> {
     if keychain_item_id.trim().is_empty() {
         return Err(FramkeyError::invalid_data(
             "macOS Keychain item id must not be blank",
         ));
     }
-    if keychain_item_id.contains('\0') {
+    if keychain_item_id.trim() != keychain_item_id {
         return Err(FramkeyError::invalid_data(
-            "macOS Keychain item id must not contain NUL bytes",
+            "macOS Keychain item id must not have leading or trailing whitespace",
+        ));
+    }
+    if keychain_item_id.chars().any(char::is_control) {
+        return Err(FramkeyError::invalid_data(
+            "macOS Keychain item id must not contain control characters",
         ));
     }
     Ok(())
@@ -277,11 +282,15 @@ pub struct KeychainEncryptedVaultImage {
 
 impl fmt::Debug for KeychainEncryptedVaultImage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let recovery_backup_file_count = self
+            .recovery_backup_pack
+            .as_ref()
+            .map(|pack| pack.files.len());
         formatter
             .debug_struct("KeychainEncryptedVaultImage")
             .field("save_image_len", &self.save_image.len())
             .field("metadata", &self.metadata)
-            .field("recovery_backup_pack", &self.recovery_backup_pack)
+            .field("recovery_backup_file_count", &recovery_backup_file_count)
             .finish()
     }
 }

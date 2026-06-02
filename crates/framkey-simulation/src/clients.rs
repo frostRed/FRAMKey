@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use serde_json::{Value, json};
 
@@ -33,11 +33,22 @@ impl TransactionSimulationClient for LocalDecoderSimulationClient {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AlchemyRpcSimulationConfig {
     pub endpoint_url: String,
     pub timeout_ms: u64,
     pub default_gas: String,
+}
+
+impl fmt::Debug for AlchemyRpcSimulationConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AlchemyRpcSimulationConfig")
+            .field("endpoint_url", &"<redacted>")
+            .field("timeout_ms", &self.timeout_ms)
+            .field("default_gas", &self.default_gas)
+            .finish()
+    }
 }
 
 impl AlchemyRpcSimulationConfig {
@@ -186,8 +197,7 @@ impl TransactionSimulationClient for AlchemyRpcSimulationClient {
             return report;
         }
 
-        report.raw_provider_response =
-            Some(alchemy_response_evidence(&response_body, status.as_u16()));
+        report.provider_evidence = Some(alchemy_response_evidence(&response_body, status.as_u16()));
         report.status = SimulationStatus::ProviderSimulated;
         report
     }

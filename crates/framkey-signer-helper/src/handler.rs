@@ -20,9 +20,9 @@ use crate::{
     metadata::{encrypted_metadata_to_ipc, metadata_to_ipc},
     recovery::validate_recovery_files_drill,
     validation::{
-        transaction_kind_name, validate_expected_address, validate_personal_sign_message,
-        validate_recovery_files, validate_save_image_size, validate_sign_transaction_request,
-        validate_typed_data_request,
+        parse_expected_address, transaction_kind_name, validate_expected_address,
+        validate_personal_sign_message, validate_recovery_files, validate_save_image_size,
+        validate_sign_transaction_request, validate_typed_data_request,
     },
 };
 
@@ -140,6 +140,7 @@ pub(crate) fn run() -> Result<()> {
         SignerHelperRequest::PersonalSign(request) => {
             validate_save_image_size(request.save_image.len())?;
             validate_personal_sign_message(&request.message)?;
+            let expected_address = parse_expected_address(request.expected_address.as_deref())?;
             let item = MacKeychainItem::new(request.keychain_service, request.keychain_account);
             let keychain = SystemKeychain;
             let loaded = keychain.load_existing_kek(&item)?;
@@ -155,7 +156,7 @@ pub(crate) fn run() -> Result<()> {
                         ));
                     }
                     let address = address_from_secret(wallet_secret)?;
-                    validate_expected_address(address, request.expected_address.as_deref())?;
+                    validate_expected_address(address, expected_address)?;
                     personal_sign(wallet_secret, &request.message)
                 },
             )?;
@@ -178,6 +179,7 @@ pub(crate) fn run() -> Result<()> {
         SignerHelperRequest::SignTypedData(request) => {
             validate_save_image_size(request.save_image.len())?;
             validate_typed_data_request(&request.typed_data)?;
+            let expected_address = parse_expected_address(request.expected_address.as_deref())?;
             let item = MacKeychainItem::new(request.keychain_service, request.keychain_account);
             let keychain = SystemKeychain;
             let loaded = keychain.load_existing_kek(&item)?;
@@ -193,7 +195,7 @@ pub(crate) fn run() -> Result<()> {
                         ));
                     }
                     let address = address_from_secret(wallet_secret)?;
-                    validate_expected_address(address, request.expected_address.as_deref())?;
+                    validate_expected_address(address, expected_address)?;
                     sign_typed_data_v4(wallet_secret, &request.typed_data)
                 },
             )?;
@@ -216,6 +218,7 @@ pub(crate) fn run() -> Result<()> {
         SignerHelperRequest::SignTransaction(request) => {
             validate_save_image_size(request.save_image.len())?;
             validate_sign_transaction_request(&request.transaction)?;
+            let expected_address = parse_expected_address(request.expected_address.as_deref())?;
             let item = MacKeychainItem::new(request.keychain_service, request.keychain_account);
             let keychain = SystemKeychain;
             let loaded = keychain.load_existing_kek(&item)?;
@@ -242,7 +245,7 @@ pub(crate) fn run() -> Result<()> {
                         ));
                     }
                     let address = address_from_secret(wallet_secret)?;
-                    validate_expected_address(address, request.expected_address.as_deref())?;
+                    validate_expected_address(address, expected_address)?;
                     sign_transaction(wallet_secret, &transaction)
                 },
             )?;

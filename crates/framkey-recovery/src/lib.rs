@@ -14,7 +14,7 @@ pub use constants::{
     RECOVERY_BACKUP_SHARE_FORMAT, RECOVERY_ROOT_KEY_BYTES,
 };
 pub use policy::{RecoveryGroupKind, RecoveryGroupPolicy, RecoveryPolicy};
-pub use shares::reconstruct_recovery_root_key;
+pub use shares::{reconstruct_recovery_root_key, reconstruct_recovery_root_key_candidates};
 
 #[cfg(test)]
 mod tests;

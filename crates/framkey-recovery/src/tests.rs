@@ -148,3 +148,33 @@ fn duplicate_member_shares_are_rejected() {
             .contains("duplicate recovery group member")
     );
 }
+
+#[test]
+fn root_key_candidates_include_valid_pair_when_one_satisfied_group_is_bad() {
+    let root_key = [0x42_u8; RECOVERY_ROOT_KEY_BYTES];
+    let pack = RecoveryBackupPack::standard(
+        [0x11; 16],
+        7,
+        [0x22; 16],
+        [0x33; 16],
+        1234,
+        &root_key,
+        RecoveryBackupEntropy {
+            group_polynomial_coefficients: [0x55; RECOVERY_ROOT_KEY_BYTES],
+            cloud_member_pad: [0xAA; RECOVERY_ROOT_KEY_BYTES],
+        },
+    );
+    let mut bad_local = pack.files[2].clone();
+    bad_local.share_hex.replace_range(0..2, "00");
+    let files = vec![
+        pack.files[0].clone(),
+        pack.files[1].clone(),
+        bad_local,
+        pack.files[3].clone(),
+    ];
+
+    let candidates = reconstruct_recovery_root_key_candidates(&files).unwrap();
+
+    assert_eq!(candidates.len(), 3);
+    assert!(candidates.contains(&root_key));
+}

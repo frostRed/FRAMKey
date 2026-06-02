@@ -1,6 +1,5 @@
 use framkey_core::{FramkeyError, Generation, PolicyId, Result, WalletId, WalletType};
 use framkey_crypto::{AeadBox, SecretBytes, encode_hex, random_array};
-use zeroize::Zeroize;
 
 use crate::{
     constants::{VAULT_FORMAT_VERSION, VAULT_MAGIC},
@@ -120,22 +119,13 @@ pub fn open_dev_encrypted_save_image(
         .ok_or_else(|| FramkeyError::invalid_data("matching dev/test DEK wrapper not found"))?;
 
     let wrapper_aad = dev_dek_wrapper_aad(vault.wallet_id, vault.generation, expected_key_id);
-    let mut dek_plaintext = encrypted_dek.decrypt(dev_kek, &wrapper_aad)?;
-    let dek = SecretBytes::<32>::from_slice(&dek_plaintext)?;
-    dek_plaintext.zeroize();
+    let dek = encrypted_dek.decrypt_secret::<32>(dev_kek, &wrapper_aad)?;
 
     let secret_aad = wallet_secret_aad(vault.wallet_id, vault.generation, vault.wallet_type);
-    let mut wallet_secret = vault.encrypted_wallet_secret.decrypt(&dek, &secret_aad)?;
-    if wallet_secret.len() != 32 {
-        wallet_secret.zeroize();
-        return Err(FramkeyError::invalid_data(format!(
-            "wallet secret must be 32 bytes, got {}",
-            wallet_secret.len()
-        )));
-    }
-
-    let wallet_secret_hash = encode_hex(blake3::hash(&wallet_secret).as_bytes());
-    wallet_secret.zeroize();
+    let wallet_secret = vault
+        .encrypted_wallet_secret
+        .decrypt_secret::<32>(&dek, &secret_aad)?;
+    let wallet_secret_hash = encode_hex(blake3::hash(wallet_secret.expose()).as_bytes());
 
     let active_slot_payload_hash_valid = inspection
         .slots

@@ -6,6 +6,7 @@ use chacha20poly1305::{
 };
 use framkey_core::{FramkeyError, Result};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use crate::{SecretBytes, random_array};
 
@@ -87,6 +88,18 @@ impl AeadBox {
                 },
             )
             .map_err(|_| FramkeyError::invalid_data("AEAD decryption failed"))
+    }
+
+    /// Decrypt fixed-size secret material and wipe the intermediate plaintext buffer after copying.
+    pub fn decrypt_secret<const N: usize>(
+        &self,
+        key: &SecretBytes<32>,
+        aad: &[u8],
+    ) -> Result<SecretBytes<N>> {
+        let mut plaintext = self.decrypt(key, aad)?;
+        let secret = SecretBytes::from_slice(&plaintext);
+        plaintext.zeroize();
+        secret
     }
 }
 

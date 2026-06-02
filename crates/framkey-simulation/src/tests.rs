@@ -878,13 +878,13 @@ fn risk_summary_marks_live_simulated_request_low() {
     );
     review.simulation.mode = SimulationMode::AlchemyRpc;
     review.simulation.status = SimulationStatus::ProviderSimulated;
-    review.simulation.raw_provider_response = Some(json!({
-        "id": 1,
-        "jsonrpc": "2.0",
-        "result": {
-            "changes": [],
-            "error": null
-        }
+    review.simulation.provider_evidence = Some(json!({
+        "provider": "fixture",
+        "httpStatus": 200,
+        "jsonRpcError": false,
+        "jsonRpcErrorCode": null,
+        "resultError": false,
+        "changeCount": 0
     }));
     review.policy = evaluate_transaction_policy(&review.simulation);
     review.risk = evaluate_transaction_risk(&review.simulation, &review.policy);
@@ -937,7 +937,7 @@ fn simulation_client_trait_is_swappable() {
         ) -> TransactionSimulationReport {
             let mut report =
                 local_transaction_report(request.method, request.params, request.default_chain_id);
-            report.raw_provider_response = Some(json!({"fixture": true}));
+            report.provider_evidence = Some(json!({"fixture": true}));
             report
         }
     }
@@ -952,7 +952,7 @@ fn simulation_client_trait_is_swappable() {
     );
 
     assert_eq!(
-        review.simulation.raw_provider_response,
+        review.simulation.provider_evidence,
         Some(json!({"fixture": true}))
     );
     assert_eq!(
@@ -969,6 +969,54 @@ fn simulation_client_trait_is_swappable() {
     );
     assert_eq!(review.risk.level, TransactionRiskLevel::Caution);
     assert_eq!(review.risk.action, TransactionRiskAction::HighRiskApproval);
+}
+
+#[test]
+fn provider_evidence_serializes_without_raw_response_name_and_accepts_legacy_alias() {
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([{"to": "0x000000000000000000000000000000000000000b", "data": "0x"}]),
+        "0x1",
+    );
+    review.simulation.provider_evidence = Some(json!({
+        "provider": "fixture",
+        "changeCount": 0,
+    }));
+
+    let encoded = serde_json::to_value(&review.simulation).unwrap();
+    assert!(encoded.get("providerEvidence").is_some());
+    assert!(encoded.get("rawProviderResponse").is_none());
+
+    let mut legacy = encoded.as_object().unwrap().clone();
+    let evidence = legacy.remove("providerEvidence").unwrap();
+    legacy.insert("rawProviderResponse".to_owned(), evidence);
+    let decoded: TransactionSimulationReport =
+        serde_json::from_value(Value::Object(legacy)).unwrap();
+
+    assert_eq!(
+        decoded.provider_evidence,
+        Some(json!({
+            "provider": "fixture",
+            "changeCount": 0,
+        }))
+    );
+}
+
+#[test]
+fn alchemy_rpc_debug_redacts_endpoint_url() {
+    let config = AlchemyRpcSimulationConfig {
+        endpoint_url: "https://eth-mainnet.g.alchemy.com/v2/secret-alchemy-token".to_owned(),
+        timeout_ms: 1_000,
+        default_gas: "0x7a1200".to_owned(),
+    };
+    let client = AlchemyRpcSimulationClient::new(config.clone());
+
+    let config_debug = format!("{config:?}");
+    let client_debug = format!("{client:?}");
+
+    assert!(config_debug.contains("<redacted>"));
+    assert!(!config_debug.contains("secret-alchemy-token"));
+    assert!(!client_debug.contains("secret-alchemy-token"));
 }
 
 #[test]
@@ -1033,7 +1081,7 @@ fn alchemy_rpc_adapter_posts_json_rpc_payload() {
         SimulationStatus::ProviderSimulated
     );
     assert_eq!(
-        review.simulation.raw_provider_response,
+        review.simulation.provider_evidence,
         Some(json!({
             "provider": "alchemy_simulateAssetChanges",
             "httpStatus": 200,
@@ -1043,8 +1091,7 @@ fn alchemy_rpc_adapter_posts_json_rpc_payload() {
             "changeCount": 1,
         }))
     );
-    let provider_evidence =
-        serde_json::to_string(&review.simulation.raw_provider_response).unwrap();
+    let provider_evidence = serde_json::to_string(&review.simulation.provider_evidence).unwrap();
     assert!(!provider_evidence.contains("USDC"));
     assert!(!provider_evidence.contains("USD Coin"));
     assert_eq!(review.simulation.asset_transfers.len(), 1);
@@ -1121,7 +1168,7 @@ fn alchemy_rpc_adapter_fails_closed_on_rpc_error() {
 
     assert_eq!(review.simulation.status, SimulationStatus::ProviderFailed);
     assert_eq!(
-        review.simulation.raw_provider_response,
+        review.simulation.provider_evidence,
         Some(json!({
             "provider": "alchemy_simulateAssetChanges",
             "httpStatus": 200,
@@ -1131,8 +1178,7 @@ fn alchemy_rpc_adapter_fails_closed_on_rpc_error() {
             "changeCount": null,
         }))
     );
-    let provider_evidence =
-        serde_json::to_string(&review.simulation.raw_provider_response).unwrap();
+    let provider_evidence = serde_json::to_string(&review.simulation.provider_evidence).unwrap();
     assert!(!provider_evidence.contains("simulation failed"));
     assert!(
         review
@@ -1252,13 +1298,13 @@ fn trust_item(
 fn mark_live_simulated(review: &mut TransactionReviewReport) {
     review.simulation.mode = SimulationMode::AlchemyRpc;
     review.simulation.status = SimulationStatus::ProviderSimulated;
-    review.simulation.raw_provider_response = Some(json!({
-        "id": 1,
-        "jsonrpc": "2.0",
-        "result": {
-            "changes": [],
-            "error": null
-        }
+    review.simulation.provider_evidence = Some(json!({
+        "provider": "fixture",
+        "httpStatus": 200,
+        "jsonRpcError": false,
+        "jsonRpcErrorCode": null,
+        "resultError": false,
+        "changeCount": 0
     }));
     review.policy = evaluate_transaction_policy(&review.simulation);
     review.risk = evaluate_transaction_risk(&review.simulation, &review.policy);

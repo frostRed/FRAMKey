@@ -16,8 +16,8 @@ pub fn sign_typed_data_v4(
     secret: &SecretBytes<32>,
     typed_data: &Value,
 ) -> Result<EvmTypedDataSignature> {
-    let signing_key = signing_key_from_secret(secret.expose())?;
     let digest = typed_data_v4_hash(typed_data)?;
+    let signing_key = signing_key_from_secret(secret.expose())?;
     let (signature, recovery_id) = signing_key
         .sign_prehash_recoverable(&digest)
         .map_err(|_| FramkeyError::invalid_data("EVM typed-data signing failed"))?;

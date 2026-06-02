@@ -1,7 +1,8 @@
 use framkey_core::{FramkeyError, Generation, PolicyId, Result, WalletId, WalletType};
 use framkey_crypto::{AeadBox, SecretBytes, encode_hex, random_array};
 use framkey_recovery::{
-    RecoveryBackupEntropy, RecoveryBackupFile, RecoveryBackupPack, reconstruct_recovery_root_key,
+    RecoveryBackupEntropy, RecoveryBackupFile, RecoveryBackupPack,
+    reconstruct_recovery_root_key_candidates,
 };
 use zeroize::Zeroize;
 
@@ -223,7 +224,6 @@ pub fn rewrap_keychain_vault_with_recovery(
     }
 
     validate_recovery_files_for_vault(&vault, recovery_files)?;
-    let recovery_root_key = SecretBytes::new(reconstruct_recovery_root_key(recovery_files)?);
     let recovery_policy_id = PolicyId(hex_16(&recovery_files[0].policy_id, "policy id")?);
     let recovery_encrypted_dek = vault
         .dek_wrappers
@@ -239,9 +239,25 @@ pub fn rewrap_keychain_vault_with_recovery(
 
     let recovery_aad =
         recovery_dek_wrapper_aad(vault.wallet_id, vault.generation, recovery_policy_id);
-    let mut dek_plaintext = recovery_encrypted_dek.decrypt(&recovery_root_key, &recovery_aad)?;
-    let dek = SecretBytes::<32>::from_slice(&dek_plaintext)?;
-    dek_plaintext.zeroize();
+    let mut recovery_root_key_candidates =
+        reconstruct_recovery_root_key_candidates(recovery_files)?;
+    let mut dek = None;
+    for candidate in &mut recovery_root_key_candidates {
+        let recovery_root_key = SecretBytes::new(*candidate);
+        candidate.zeroize();
+        if let Ok(decrypted_dek) =
+            recovery_encrypted_dek.decrypt_secret::<32>(&recovery_root_key, &recovery_aad)
+        {
+            dek = Some(decrypted_dek);
+            break;
+        }
+    }
+    recovery_root_key_candidates.zeroize();
+    let dek = dek.ok_or_else(|| {
+        FramkeyError::invalid_data(
+            "recovery DEK wrapper could not be decrypted with supplied recovery files",
+        )
+    })?;
 
     let keychain_aad = keychain_dek_wrapper_aad(
         vault.wallet_id,
@@ -347,19 +363,12 @@ pub fn with_keychain_wallet_secret<R>(
         device_id,
         keychain_item_id,
     );
-    let mut dek_plaintext = encrypted_dek.decrypt(keychain_kek, &wrapper_aad)?;
-    let dek = SecretBytes::<32>::from_slice(&dek_plaintext)?;
-    dek_plaintext.zeroize();
+    let dek = encrypted_dek.decrypt_secret::<32>(keychain_kek, &wrapper_aad)?;
 
     let secret_aad = wallet_secret_aad(vault.wallet_id, vault.generation, vault.wallet_type);
-    let mut wallet_secret_plaintext = vault.encrypted_wallet_secret.decrypt(&dek, &secret_aad)?;
-    if wallet_secret_plaintext.len() != 32 {
-        wallet_secret_plaintext.zeroize();
-        return Err(FramkeyError::invalid_data(format!(
-            "wallet secret must be 32 bytes, got {}",
-            wallet_secret_plaintext.len()
-        )));
-    }
+    let wallet_secret = vault
+        .encrypted_wallet_secret
+        .decrypt_secret::<32>(&dek, &secret_aad)?;
 
     let active_slot_payload_hash_valid = inspection
         .slots
@@ -367,9 +376,6 @@ pub fn with_keychain_wallet_secret<R>(
         .find(|slot| slot.slot == inspection.active_slot)
         .map(|slot| slot.payload_hash_valid)
         .unwrap_or(false);
-
-    let wallet_secret = SecretBytes::<32>::from_slice(&wallet_secret_plaintext)?;
-    wallet_secret_plaintext.zeroize();
 
     let metadata = KeychainVaultMetadata {
         image_size: image.len(),

@@ -102,11 +102,11 @@ fn keychain_encrypted_save_image_opens_with_matching_binding() {
 }
 
 #[test]
-fn encrypted_vault_image_debug_redacts_save_image_bytes() {
+fn encrypted_vault_image_debug_redacts_save_image_and_recovery_material() {
     let kek = SecretBytes::new([0xC3; 32]);
     let device_id = [0x11; 16];
     let item_id = "io.framkey.kek:debug-fixture";
-    let built = build_keychain_encrypted_save_image(
+    let built = build_keychain_encrypted_save_image_with_recovery(
         DEFAULT_FRAM_SAVE_IMAGE_SIZE,
         Generation(4),
         item_id,
@@ -117,8 +117,11 @@ fn encrypted_vault_image_debug_redacts_save_image_bytes() {
 
     let debug = format!("{built:?}");
     assert!(debug.contains("save_image_len"));
+    assert!(debug.contains("recovery_backup_file_count"));
     assert!(!debug.contains("save_image: ["));
     assert!(!debug.contains(&format!("{:?}", built.save_image)));
+    let share_hex = &built.recovery_backup_pack.as_ref().unwrap().files[0].share_hex;
+    assert!(!debug.contains(share_hex));
 }
 
 #[test]
@@ -185,7 +188,7 @@ fn keychain_vault_with_recovery_pack_wraps_same_dek() {
 }
 
 #[test]
-fn vault_validation_rejects_blank_keychain_wrapper_binding() {
+fn vault_validation_rejects_ambiguous_keychain_wrapper_binding() {
     let kek = SecretBytes::new([0xC3; 32]);
     let device_id = [0x33; 16];
     let item_id = "io.framkey.kek:blank-wrapper-fixture";
@@ -199,17 +202,33 @@ fn vault_validation_rejects_blank_keychain_wrapper_binding() {
     .unwrap();
     let payload = active_slot_payload(&built.save_image).unwrap();
     let mut vault: VaultFile = serde_json::from_slice(payload).unwrap();
-    for wrapper in &mut vault.dek_wrappers {
-        if let DekWrapper::MacKeychain {
-            keychain_item_id, ..
-        } = wrapper
-        {
-            *keychain_item_id = " \t".to_owned();
+    for invalid in [
+        (" \t", "must not be blank"),
+        (
+            " io.framkey.kek:blank-wrapper-fixture",
+            "leading or trailing whitespace",
+        ),
+        (
+            "io.framkey.kek:blank-wrapper-fixture\n",
+            "leading or trailing whitespace",
+        ),
+        (
+            "io.framkey.kek:blank-wrapper\u{7f}-fixture",
+            "control characters",
+        ),
+    ] {
+        for wrapper in &mut vault.dek_wrappers {
+            if let DekWrapper::MacKeychain {
+                keychain_item_id, ..
+            } = wrapper
+            {
+                *keychain_item_id = invalid.0.to_owned();
+            }
         }
-    }
 
-    let error = vault.validate().unwrap_err();
-    assert!(error.to_string().contains("must not be blank"));
+        let error = vault.validate().unwrap_err();
+        assert!(error.to_string().contains(invalid.1));
+    }
 }
 
 #[test]
@@ -292,6 +311,51 @@ fn recovery_rewrap_binds_vault_to_new_keychain_without_wallet_secret() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn recovery_rewrap_tries_valid_group_pair_when_another_group_is_corrupted() {
+    let old_kek = SecretBytes::new([0xC3; 32]);
+    let old_device_id = [0x33; 16];
+    let old_item_id = "io.framkey.kek:old-corrupt-recovery-fixture";
+    let built = build_keychain_encrypted_save_image_with_recovery(
+        DEFAULT_FRAM_SAVE_IMAGE_SIZE,
+        Generation(8),
+        old_item_id,
+        old_device_id,
+        &old_kek,
+    )
+    .unwrap();
+    let backup_pack = built.recovery_backup_pack.as_ref().unwrap();
+    let mut corrupted_local = backup_pack.files[2].clone();
+    corrupted_local.share_hex.replace_range(0..2, "00");
+    let recovery_files = vec![
+        backup_pack.files[0].clone(),
+        backup_pack.files[1].clone(),
+        corrupted_local,
+        backup_pack.files[3].clone(),
+    ];
+    let new_kek = SecretBytes::new([0xA5; 32]);
+    let new_device_id = [0x44; 16];
+    let new_item_id = "io.framkey.kek:new-corrupt-recovery-fixture";
+
+    let recovered = rewrap_keychain_vault_with_recovery(
+        &built.save_image,
+        &recovery_files,
+        new_item_id,
+        new_device_id,
+        &new_kek,
+    )
+    .unwrap();
+    let opened = open_keychain_encrypted_save_image(
+        &recovered.save_image,
+        new_item_id,
+        new_device_id,
+        &new_kek,
+    )
+    .unwrap();
+
+    assert_eq!(opened.wallet_secret_hash, built.metadata.wallet_secret_hash);
 }
 
 #[test]

@@ -30,7 +30,9 @@ pub struct TransactionSimulationReport {
     pub asset_transfers: Vec<AssetTransfer>,
     pub approvals: Vec<ApprovalChange>,
     pub warnings: Vec<SimulationWarning>,
-    pub raw_provider_response: Option<Value>,
+    // Sanitized provider metadata only; never store the full RPC response body here.
+    #[serde(default, alias = "rawProviderResponse")]
+    pub provider_evidence: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

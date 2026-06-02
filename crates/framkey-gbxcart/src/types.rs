@@ -117,5 +117,13 @@ fn ascii_field(bytes: &[u8]) -> String {
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).trim().to_owned()
+    bytes[..end]
+        .iter()
+        .map(|byte| match *byte {
+            b' '..=b'~' => char::from(*byte),
+            _ => '?',
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }

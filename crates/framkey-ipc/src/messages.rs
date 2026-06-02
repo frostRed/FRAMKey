@@ -1,3 +1,5 @@
+use std::fmt;
+
 use framkey_recovery::{RecoveryBackupFile, RecoveryBackupPack};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -76,7 +78,7 @@ pub struct SignerBuildKeychainVaultRequest {
     pub recovery_backups: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerRecoverKeychainVaultRequest {
     pub save_image: Vec<u8>,
     pub keychain_service: String,
@@ -84,19 +86,19 @@ pub struct SignerRecoverKeychainVaultRequest {
     pub recovery_files: Vec<RecoveryBackupFile>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerValidateRecoveryFilesRequest {
     pub recovery_files: Vec<RecoveryBackupFile>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerOpenKeychainVaultRequest {
     pub save_image: Vec<u8>,
     pub keychain_service: String,
     pub keychain_account: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerPersonalSignRequest {
     pub save_image: Vec<u8>,
     pub keychain_service: String,
@@ -106,7 +108,7 @@ pub struct SignerPersonalSignRequest {
     pub expected_address: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerSignTypedDataRequest {
     pub save_image: Vec<u8>,
     pub keychain_service: String,
@@ -116,7 +118,7 @@ pub struct SignerSignTypedDataRequest {
     pub expected_address: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerSignTransactionRequest {
     pub save_image: Vec<u8>,
     pub keychain_service: String,
@@ -126,7 +128,7 @@ pub struct SignerSignTransactionRequest {
     pub expected_address: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignerEvmTransaction {
     pub chain_id: u64,
@@ -178,7 +180,7 @@ pub enum SignerHelperResult {
     SignTransaction(SignerSignTransactionResponse),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerBuildKeychainVaultResponse {
     pub save_image: Vec<u8>,
     pub keychain_service: String,
@@ -193,7 +195,7 @@ pub struct SignerBuildKeychainVaultResponse {
     pub recovery_backup_pack: Option<RecoveryBackupPack>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerRecoverKeychainVaultResponse {
     pub save_image: Vec<u8>,
     pub keychain_service: String,
@@ -232,7 +234,7 @@ pub struct SignerOpenKeychainVaultResponse {
     pub address: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerPersonalSignResponse {
     pub keychain_service: String,
     pub keychain_account: String,
@@ -246,7 +248,7 @@ pub struct SignerPersonalSignResponse {
     pub signature: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerSignTypedDataResponse {
     pub keychain_service: String,
     pub keychain_account: String,
@@ -260,7 +262,7 @@ pub struct SignerSignTypedDataResponse {
     pub signature: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerSignTransactionResponse {
     pub keychain_service: String,
     pub keychain_account: String,
@@ -273,6 +275,196 @@ pub struct SignerSignTransactionResponse {
     pub transaction_kind: String,
     pub transaction_hash: String,
     pub raw_transaction: String,
+}
+
+impl fmt::Debug for SignerRecoverKeychainVaultRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerRecoverKeychainVaultRequest")
+            .field("save_image_len", &self.save_image.len())
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("recovery_file_count", &self.recovery_files.len())
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerValidateRecoveryFilesRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerValidateRecoveryFilesRequest")
+            .field("recovery_file_count", &self.recovery_files.len())
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerOpenKeychainVaultRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerOpenKeychainVaultRequest")
+            .field("save_image_len", &self.save_image.len())
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerPersonalSignRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerPersonalSignRequest")
+            .field("save_image_len", &self.save_image.len())
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("message_len", &self.message.len())
+            .field("expected_address", &self.expected_address)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerSignTypedDataRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerSignTypedDataRequest")
+            .field("save_image_len", &self.save_image.len())
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("typed_data_json_len", &json_len(&self.typed_data))
+            .field("expected_address", &self.expected_address)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerSignTransactionRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerSignTransactionRequest")
+            .field("save_image_len", &self.save_image.len())
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("transaction", &self.transaction)
+            .field("expected_address", &self.expected_address)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerEvmTransaction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerEvmTransaction")
+            .field("chain_id", &self.chain_id)
+            .field("nonce", &self.nonce)
+            .field("gas_limit", &self.gas_limit)
+            .field("to", &self.to)
+            .field("value", &self.value)
+            .field("data_len", &self.data.len())
+            .field("gas_price", &self.gas_price)
+            .field("max_fee_per_gas", &self.max_fee_per_gas)
+            .field("max_priority_fee_per_gas", &self.max_priority_fee_per_gas)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerBuildKeychainVaultResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerBuildKeychainVaultResponse")
+            .field("save_image_len", &self.save_image.len())
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("keychain_item_id", &self.keychain_item_id)
+            .field("keychain_access_policy", &self.keychain_access_policy)
+            .field("device_id", &self.device_id)
+            .field("kek_id", &self.kek_id)
+            .field("created_keychain_kek", &self.created_keychain_kek)
+            .field("metadata", &self.metadata)
+            .field(
+                "recovery_backup_file_count",
+                &self
+                    .recovery_backup_pack
+                    .as_ref()
+                    .map(|pack| pack.files.len())
+                    .unwrap_or(0),
+            )
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerRecoverKeychainVaultResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerRecoverKeychainVaultResponse")
+            .field("save_image_len", &self.save_image.len())
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("keychain_item_id", &self.keychain_item_id)
+            .field("keychain_access_policy", &self.keychain_access_policy)
+            .field("device_id", &self.device_id)
+            .field("kek_id", &self.kek_id)
+            .field("created_keychain_kek", &self.created_keychain_kek)
+            .field("metadata", &self.metadata)
+            .field("recovery_share_file_count", &self.recovery_share_file_count)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerPersonalSignResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerPersonalSignResponse")
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("keychain_item_id", &self.keychain_item_id)
+            .field("keychain_access_policy", &self.keychain_access_policy)
+            .field("device_id", &self.device_id)
+            .field("kek_id", &self.kek_id)
+            .field("metadata", &self.metadata)
+            .field("address", &self.address)
+            .field("message_hash", &self.message_hash)
+            .field("signature_len", &self.signature.len())
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerSignTypedDataResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerSignTypedDataResponse")
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("keychain_item_id", &self.keychain_item_id)
+            .field("keychain_access_policy", &self.keychain_access_policy)
+            .field("device_id", &self.device_id)
+            .field("kek_id", &self.kek_id)
+            .field("metadata", &self.metadata)
+            .field("address", &self.address)
+            .field("typed_data_hash", &self.typed_data_hash)
+            .field("signature_len", &self.signature.len())
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerSignTransactionResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerSignTransactionResponse")
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("keychain_item_id", &self.keychain_item_id)
+            .field("keychain_access_policy", &self.keychain_access_policy)
+            .field("device_id", &self.device_id)
+            .field("kek_id", &self.kek_id)
+            .field("metadata", &self.metadata)
+            .field("address", &self.address)
+            .field("transaction_kind", &self.transaction_kind)
+            .field("transaction_hash", &self.transaction_hash)
+            .field("raw_transaction_len", &self.raw_transaction.len())
+            .finish()
+    }
+}
+
+fn json_len(value: &Value) -> usize {
+    serde_json::to_vec(value).map_or(0, |bytes| bytes.len())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

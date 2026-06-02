@@ -2,8 +2,9 @@ use crate::{
     io::classify_error,
     recovery::validate_recovery_files_drill,
     validation::{
-        validate_expected_address, validate_personal_sign_message, validate_recovery_files,
-        validate_save_image_size, validate_sign_transaction_request, validate_typed_data_request,
+        parse_expected_address, validate_expected_address, validate_personal_sign_message,
+        validate_recovery_files, validate_save_image_size, validate_sign_transaction_request,
+        validate_typed_data_request,
     },
 };
 use framkey_evm::EvmAddress;
@@ -145,10 +146,17 @@ fn rejects_expected_address_mismatch_before_signing() {
     let actual: EvmAddress = "0x0000000000000000000000000000000000000001"
         .parse()
         .unwrap();
-    let error =
-        validate_expected_address(actual, Some("0x0000000000000000000000000000000000000002"))
-            .unwrap_err();
+    let expected =
+        parse_expected_address(Some("0x0000000000000000000000000000000000000002")).unwrap();
+    let error = validate_expected_address(actual, expected).unwrap_err();
     assert!(error.to_string().contains("account mismatch"));
+}
+
+#[test]
+fn rejects_malformed_expected_address_before_signing() {
+    let error =
+        parse_expected_address(Some("0000000000000000000000000000000000000002")).unwrap_err();
+    assert!(error.to_string().contains("0x-prefixed"));
 }
 
 #[test]
@@ -156,7 +164,9 @@ fn accepts_matching_expected_address() {
     let actual: EvmAddress = "0x0000000000000000000000000000000000000001"
         .parse()
         .unwrap();
-    validate_expected_address(actual, Some("0x0000000000000000000000000000000000000001")).unwrap();
+    let expected =
+        parse_expected_address(Some("0x0000000000000000000000000000000000000001")).unwrap();
+    validate_expected_address(actual, expected).unwrap();
 }
 
 #[test]

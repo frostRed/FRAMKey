@@ -12,9 +12,19 @@ fn item_binding_ids_are_stable_and_distinct() {
 }
 
 #[test]
-fn item_validation_rejects_empty_or_nul_values() {
+fn item_validation_rejects_ambiguous_or_control_values() {
     assert!(MacKeychainItem::new("", "default").validate().is_err());
     assert!(MacKeychainItem::new(" \t", "default").validate().is_err());
+    assert!(
+        MacKeychainItem::new(" io.framkey.kek", "default")
+            .validate()
+            .is_err()
+    );
+    assert!(
+        MacKeychainItem::new("io.framkey.kek ", "default")
+            .validate()
+            .is_err()
+    );
     assert!(
         MacKeychainItem::new("io.framkey.kek", "")
             .validate()
@@ -27,6 +37,11 @@ fn item_validation_rejects_empty_or_nul_values() {
     );
     assert!(
         MacKeychainItem::new("io.framkey.kek", "bad\0account")
+            .validate()
+            .is_err()
+    );
+    assert!(
+        MacKeychainItem::new("io.framkey.kek", "bad\naccount")
             .validate()
             .is_err()
     );

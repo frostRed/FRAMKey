@@ -14,6 +14,15 @@ use crate::{
 pub fn reconstruct_recovery_root_key(
     files: &[RecoveryBackupFile],
 ) -> Result<[u8; RECOVERY_ROOT_KEY_BYTES]> {
+    reconstruct_recovery_root_key_candidates(files)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| FramkeyError::invalid_data("not enough satisfied recovery groups"))
+}
+
+pub fn reconstruct_recovery_root_key_candidates(
+    files: &[RecoveryBackupFile],
+) -> Result<Vec<[u8; RECOVERY_ROOT_KEY_BYTES]>> {
     if files.is_empty() {
         return Err(FramkeyError::invalid_data(
             "no recovery backup files supplied",
@@ -45,7 +54,21 @@ pub fn reconstruct_recovery_root_key(
         ));
     }
 
-    let selected = &group_shares[..usize::from(group_threshold)];
+    let mut candidates = Vec::new();
+    for left in 0..group_shares.len() {
+        for right in (left + 1)..group_shares.len() {
+            candidates.push(interpolate_root_key(&[
+                group_shares[left],
+                group_shares[right],
+            ])?);
+        }
+    }
+    Ok(candidates)
+}
+
+fn interpolate_root_key(
+    selected: &[(u8, [u8; RECOVERY_ROOT_KEY_BYTES])],
+) -> Result<[u8; RECOVERY_ROOT_KEY_BYTES]> {
     let mut root = [0_u8; RECOVERY_ROOT_KEY_BYTES];
     for byte_index in 0..RECOVERY_ROOT_KEY_BYTES {
         let points = selected

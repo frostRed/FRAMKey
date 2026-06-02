@@ -61,6 +61,27 @@ fn gba_header_parser_extracts_fields_and_validates_checksum() {
 }
 
 #[test]
+fn gba_header_parser_sanitizes_non_printable_label_bytes() {
+    let mut header = vec![0_u8; GBA_HEADER_SIZE];
+    header[0xA0..0xAC].copy_from_slice(b"SAFE\x1bTITLE!!");
+    header[0xAC..0xB0].copy_from_slice(b"A8\nJ");
+    header[0xB0..0xB2].copy_from_slice(b"0\t");
+    header[0xB2] = 0x96;
+    header[0xBC] = 0;
+    header[0xBD] = header[0xA0..0xBD]
+        .iter()
+        .fold(0_u8, |acc, byte| acc.wrapping_sub(*byte))
+        .wrapping_sub(0x19);
+
+    let parsed = GbaHeader::parse(&header).unwrap();
+
+    assert_eq!(parsed.title, "SAFE?TITLE!!");
+    assert_eq!(parsed.game_code, "A8?J");
+    assert_eq!(parsed.maker_code, "0?");
+    assert!(parsed.header_checksum_valid);
+}
+
+#[test]
 fn explicit_port_hint_skips_port_enumeration() {
     assert_eq!(
         candidate_ports(Some("/dev/cu.usbserial-test")).unwrap(),

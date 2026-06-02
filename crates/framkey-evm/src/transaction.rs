@@ -20,8 +20,8 @@ pub fn sign_transaction(
     secret: &SecretBytes<32>,
     transaction: &EvmTransaction,
 ) -> Result<EvmSignedTransaction> {
-    let signing_key = signing_key_from_secret(secret.expose())?;
     let parsed = ParsedTransaction::parse(transaction)?;
+    let signing_key = signing_key_from_secret(secret.expose())?;
     let (kind, signed_payload) = parsed.signing_payload(&signing_key)?;
     let transaction_hash = keccak256(&signed_payload);
 
