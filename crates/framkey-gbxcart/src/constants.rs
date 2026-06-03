@@ -14,7 +14,6 @@ pub(crate) const CMD_QUERY_FW_INFO: u8 = 0xA1;
 pub(crate) const CMD_SET_MODE_AGB: u8 = 0xA2;
 pub(crate) const CMD_SET_VOLTAGE_3_3V: u8 = 0xA4;
 pub(crate) const CMD_SET_VARIABLE: u8 = 0xA6;
-pub(crate) const CMD_SET_ADDR_AS_INPUTS: u8 = 0xA8;
 pub(crate) const CMD_DISABLE_PULLUPS: u8 = 0xAC;
 pub(crate) const CMD_AGB_CART_READ: u8 = 0xC1;
 pub(crate) const CMD_AGB_CART_WRITE: u8 = 0xC2;

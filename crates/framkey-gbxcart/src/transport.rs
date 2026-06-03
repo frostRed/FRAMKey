@@ -134,7 +134,20 @@ impl VaultDevice for GbxCartDevice {
             Ok(())
         })();
         session.cleanup_best_effort();
-        result
+        drop(session);
+        result?;
+
+        let mut verify_session = self.connect()?;
+        let durable_readback = verify_session.read_save_image(save_type);
+        verify_session.cleanup_best_effort();
+        let durable_readback = durable_readback?;
+        if durable_readback != image.as_bytes() {
+            return Err(FramkeyError::invalid_data(
+                "GBxCart write completed but fresh-session readback verification failed",
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -571,7 +584,9 @@ impl GbxCartSession {
     }
 
     fn cleanup_best_effort(&mut self) {
-        let _ = self.write_byte(CMD_SET_ADDR_AS_INPUTS);
+        // FlashGBX does not release address pins after AGB SRAM/FRAM transfers.
+        // On modified AGB cartridges this cleanup must not become another bus
+        // event after write verification has already passed.
         let _ = clear_port(self.port.as_mut());
     }
 }

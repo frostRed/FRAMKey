@@ -1,6 +1,6 @@
 # Vault Format
 
-The wallet vault fields are still a Rust type skeleton. The save image has a first test wire format so hardware read/write behavior can be validated without storing real wallet secrets.
+The wallet vault payload is a JSON `VaultFile` stored inside a fixed-size GBA save image. The save image format is intentionally non-compatible with the original two-slot test layout.
 
 ## Principles
 
@@ -8,7 +8,8 @@ The wallet vault fields are still a Rust type skeleton. The save image has a fir
 - Store DEK wrappers, never plaintext DEK.
 - Keep device storage independent from wallet semantics.
 - Use generations for write ordering and rollback detection.
-- Use a two-slot save image layout before writing to real cartridges.
+- Use redundant superblocks plus Reed-Solomon shards so bounded media corruption can be detected and reconstructed before wallet payload parsing.
+- Treat Reed-Solomon reconstruction as storage repair only; payload BLAKE3 and `VaultFile` validation still decide whether a vault is trusted.
 
 ## Vault Fields
 
@@ -31,72 +32,85 @@ VaultFile
 
 ```text
 Save Image
-  Super Header
-  Slot A
-  Slot B
-  Padding
+  Superblock copy 0, 1024 bytes
+  Superblock copy 1, 1024 bytes
+  Superblock copy 2, 1024 bytes
+  Superblock copy 3, 1024 bytes
+  Interleaved Reed-Solomon shard region
+  Optional trailing padding
 ```
 
 The intended write sequence is:
 
-1. Read current save image.
-2. Identify active slot.
-3. Build next-generation vault.
-4. Write inactive slot.
-5. Read back and verify.
-6. Mark new slot active.
+1. Build the next-generation `VaultFile` payload.
+2. Split payload bytes across 16 data shards.
+3. Generate 8 Reed-Solomon parity shards.
+4. Hash every full shard and hash the plaintext payload.
+5. Write four hashed superblock copies.
+6. Interleave shard bytes into the save image.
+7. Write the full image and verify by reading it back.
 
-If GBxCart requires full-image writes, FRAMKey should still model slots inside that image and verify after write.
+GBxCart writes are full-image writes. FRAMKey verifies same-session readback and then opens a fresh GBxCart session for a second readback before reporting write success.
 
-## Test Save Image Wire Format
+## Save Image Wire Format
 
-The current hardware smoke-test image is exactly 64 KiB by default:
+The current image is 64 KiB by default:
 
 ```text
-0x0000..0x007f  super header, 128 bytes
-0x0080..        slot A, 32704 bytes
-...             slot B, 32704 bytes
+0x0000..0x03ff  superblock copy 0
+0x0400..0x07ff  superblock copy 1
+0x0800..0x0bff  superblock copy 2
+0x0c00..0x0fff  superblock copy 3
+0x1000..        interleaved shard bytes
 ```
 
-Super header fields:
+For a 64 KiB image, `(65536 - 4096) / 24 = 2560`, so each shard is 2560 bytes and the payload capacity is `16 * 2560 = 40960` bytes.
+
+Superblock fields:
 
 ```text
 0x00  8 bytes   "FRKSAVE\0"
-0x08  u16 le    format version = 1
-0x0a  u16 le    header length = 128
+0x08  u16 le    format version = 2
+0x0a  u16 le    superblock length = 1024
 0x0c  u32 le    image size
-0x10  u32 le    slot size
-0x14  u8        active slot, 0 = A, 1 = B
-0x18  u64 le    latest generation
-0x20  32 bytes  BLAKE3 hash of the active slot region
+0x10  u32 le    header length = 4096
+0x14  u64 le    generation
+0x1c  u32 le    payload length
+0x20  u8        data shard count = 16
+0x21  u8        parity shard count = 8
+0x22  u8        total shard count = 24
+0x23  u8        superblock copy index
+0x24  u32 le    shard size
+0x28  u32 le    payload capacity
+0x30  32 bytes  BLAKE3 hash of payload bytes
+0x50  768 bytes BLAKE3 hashes of all 24 full shards
+0x3c0 32 bytes  BLAKE3 hash of superblock bytes 0x000..0x3bf
 ```
 
-Slot fields:
+Shard bytes are stored interleaved, not contiguously:
 
 ```text
-0x00  8 bytes   "FRKSLOT\0"
-0x08  u16 le    format version = 1
-0x0a  u8        slot index, 0 = A, 1 = B
-0x0c  u64 le    generation
-0x14  u32 le    payload length
-0x18  32 bytes  BLAKE3 hash of payload bytes
-0x40  bytes     payload, then 0xff padding
+for byte_index in 0..shard_size:
+  for shard_index in 0..24:
+    image[4096 + byte_index * 24 + shard_index] = shard[shard_index][byte_index]
 ```
 
-The CLI can build and inspect this non-secret test image:
+On read, FRAMKey scans all four superblocks and uses any valid copy. It deinterleaves shards, checks each shard hash, treats hash failures as erasures, reconstructs with Reed-Solomon when at least 16 shards remain, and finally checks the payload hash before parsing `VaultFile`.
+
+The CLI can build and inspect a non-secret test image:
 
 ```bash
 cargo run -p framkey-cli -- vault build-test-image --out framkey-test-vault.sav --generation 1
 cargo run -p framkey-cli -- vault inspect-image --path framkey-test-vault.sav
 ```
 
-Pass `--image-size 32768` only when building an explicit 32 KiB compatibility fixture.
+Pass `--image-size 32768` only when building an explicit 32 KiB save-size fixture.
 
-This format is for hardware smoke testing. It is not the final encrypted wallet vault format.
+This format is the current save container for test, dev, and Keychain encrypted vault payloads.
 
 ## macOS Keychain Encrypted Vault
 
-The Keychain encrypted vault reuses the same 64 KiB save image and two-slot layout. The active slot payload is JSON containing a `VaultFile` with:
+The Keychain encrypted vault uses the same Reed-Solomon save image container. The reconstructed payload is JSON containing a `VaultFile` with:
 
 - `encrypted_wallet_secret`: a generated 32-byte EVM secp256k1 test private key encrypted with a random DEK.
 - `dek_wrappers`: one `mac_keychain` wrapper that encrypts the DEK with a 32-byte KEK stored in macOS Keychain.
@@ -130,7 +144,7 @@ The CLI recovers the signer address from the returned `personal_sign` signature 
 
 ## Dev/Test Encrypted Vault
 
-The dev/test encrypted vault reuses the same 64 KiB save image and two-slot layout. The active slot payload is JSON containing a `VaultFile` with:
+The dev/test encrypted vault uses the same Reed-Solomon save image container. The reconstructed payload is JSON containing a `VaultFile` with:
 
 - `encrypted_wallet_secret`: a generated 32-byte EVM secp256k1 test private key encrypted with a random DEK.
 - `dek_wrappers`: one `dev_test` wrapper that encrypts the DEK with a caller-provided 32-byte dev KEK.

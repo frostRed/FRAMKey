@@ -11,27 +11,55 @@ fn test_save_image_builds_and_inspects() {
     let inspection = inspect_save_image(&image).unwrap();
 
     assert_eq!(inspection.image_size, DEFAULT_FRAM_SAVE_IMAGE_SIZE);
-    assert_eq!(inspection.slot_size, 32704);
-    assert_eq!(inspection.active_slot, SaveSlot::A);
-    assert_eq!(inspection.latest_generation, 7);
-    assert!(inspection.active_slot_hash_valid);
-    assert_eq!(inspection.slots[0].generation, 7);
-    assert!(inspection.slots[0].payload_hash_valid);
-    assert!(inspection.slots[0].payload_preview.contains("redacted"));
-    assert!(!inspection.slots[0].payload_preview.contains("fixture"));
+    assert_eq!(inspection.header_len, SAVE_IMAGE_HEADER_LEN);
+    assert_eq!(inspection.format_version, SAVE_IMAGE_FORMAT_VERSION);
+    assert_eq!(inspection.generation, 7);
+    assert_eq!(inspection.data_shards, SAVE_RS_DATA_SHARDS);
+    assert_eq!(inspection.parity_shards, SAVE_RS_PARITY_SHARDS);
+    assert_eq!(inspection.shard_size, 2560);
+    assert_eq!(inspection.valid_shard_count, SAVE_RS_TOTAL_SHARDS);
+    assert_eq!(inspection.recovered_shard_count, 0);
+    assert!(inspection.payload_hash_valid);
+    assert!(inspection.superblocks.iter().all(|copy| copy.valid));
+    assert!(inspection.shards.iter().all(|shard| shard.hash_valid));
 }
 
 #[test]
-fn inspection_detects_payload_corruption() {
+fn save_image_recovers_single_superblock_and_shard_corruption() {
+    let mut image =
+        build_test_save_image(DEFAULT_FRAM_SAVE_IMAGE_SIZE, Generation(1), "fixture").unwrap();
+    let expected_payload = save_image_payload(&image).unwrap();
+    let layout = SaveImageLayout::new(image.len()).unwrap();
+    image[0] ^= 0x01;
+    let shard_offset = layout.shard_byte_offset(0, 0).unwrap();
+    image[shard_offset] ^= 0x01;
+
+    let inspection = inspect_save_image(&image).unwrap();
+    assert_eq!(
+        inspection
+            .superblocks
+            .iter()
+            .filter(|copy| copy.valid)
+            .count(),
+        SAVE_SUPERBLOCK_COPIES - 1
+    );
+    assert_eq!(inspection.valid_shard_count, SAVE_RS_TOTAL_SHARDS - 1);
+    assert_eq!(inspection.recovered_shard_count, 1);
+    assert_eq!(save_image_payload(&image).unwrap(), expected_payload);
+}
+
+#[test]
+fn save_image_rejects_more_corrupt_shards_than_parity_can_recover() {
     let mut image =
         build_test_save_image(DEFAULT_FRAM_SAVE_IMAGE_SIZE, Generation(1), "fixture").unwrap();
     let layout = SaveImageLayout::new(image.len()).unwrap();
-    let payload_offset = layout.slot_offset(SaveSlot::A) + SAVE_SLOT_HEADER_LEN;
-    image[payload_offset] ^= 0x01;
+    for shard_index in 0..=SAVE_RS_PARITY_SHARDS {
+        let offset = layout.shard_byte_offset(shard_index, 0).unwrap();
+        image[offset] ^= 0x01;
+    }
 
-    let inspection = inspect_save_image(&image).unwrap();
-    assert!(!inspection.active_slot_hash_valid);
-    assert!(!inspection.slots[0].payload_hash_valid);
+    let error = inspect_save_image(&image).unwrap_err().to_string();
+    assert!(error.contains("valid Reed-Solomon shards"));
 }
 
 #[test]
@@ -48,13 +76,15 @@ fn dev_encrypted_save_image_opens_with_matching_kek() {
     let opened = open_dev_encrypted_save_image(&built.save_image, &kek).unwrap();
 
     assert_eq!(opened.image_size, DEFAULT_FRAM_SAVE_IMAGE_SIZE);
-    assert_eq!(opened.slot_size, 32704);
+    assert_eq!(opened.shard_size, 2560);
+    assert_eq!(opened.data_shards, SAVE_RS_DATA_SHARDS);
+    assert_eq!(opened.parity_shards, SAVE_RS_PARITY_SHARDS);
     assert_eq!(opened.generation, 3);
     assert_eq!(opened.dev_wrapper_label, "fixture");
     assert_eq!(opened.wallet_id, built.metadata.wallet_id);
     assert_eq!(opened.wallet_secret_hash, built.metadata.wallet_secret_hash);
-    assert!(opened.active_slot_hash_valid);
-    assert!(opened.active_slot_payload_hash_valid);
+    assert!(opened.payload_hash_valid);
+    assert_eq!(opened.recovered_shard_count, 0);
 
     let wrong_kek = SecretBytes::new([0x5A; 32]);
     assert!(open_dev_encrypted_save_image(&built.save_image, &wrong_kek).is_err());
@@ -78,14 +108,16 @@ fn keychain_encrypted_save_image_opens_with_matching_binding() {
         open_keychain_encrypted_save_image(&built.save_image, item_id, device_id, &kek).unwrap();
 
     assert_eq!(opened.image_size, DEFAULT_FRAM_SAVE_IMAGE_SIZE);
-    assert_eq!(opened.slot_size, 32704);
+    assert_eq!(opened.shard_size, 2560);
+    assert_eq!(opened.data_shards, SAVE_RS_DATA_SHARDS);
+    assert_eq!(opened.parity_shards, SAVE_RS_PARITY_SHARDS);
     assert_eq!(opened.generation, 4);
     assert_eq!(opened.keychain_item_id, item_id);
     assert_eq!(opened.device_id, encode_hex(&device_id));
     assert_eq!(opened.wallet_id, built.metadata.wallet_id);
     assert_eq!(opened.wallet_secret_hash, built.metadata.wallet_secret_hash);
-    assert!(opened.active_slot_hash_valid);
-    assert!(opened.active_slot_payload_hash_valid);
+    assert!(opened.payload_hash_valid);
+    assert_eq!(opened.recovered_shard_count, 0);
 
     let wrong_kek = SecretBytes::new([0x5A; 32]);
     assert!(
@@ -149,8 +181,8 @@ fn keychain_vault_with_recovery_pack_wraps_same_dek() {
     let recovery_root_key =
         SecretBytes::new(framkey_recovery::reconstruct_recovery_root_key(&recovery_files).unwrap());
 
-    let payload = active_slot_payload(&built.save_image).unwrap();
-    let vault: VaultFile = serde_json::from_slice(payload).unwrap();
+    let payload = save_image_payload(&built.save_image).unwrap();
+    let vault: VaultFile = serde_json::from_slice(&payload).unwrap();
     assert_eq!(
         vault.recovery_policy.label,
         "standard 2-of-3 grouped recovery"
@@ -200,8 +232,8 @@ fn vault_validation_rejects_ambiguous_keychain_wrapper_binding() {
         &kek,
     )
     .unwrap();
-    let payload = active_slot_payload(&built.save_image).unwrap();
-    let mut vault: VaultFile = serde_json::from_slice(payload).unwrap();
+    let payload = save_image_payload(&built.save_image).unwrap();
+    let mut vault: VaultFile = serde_json::from_slice(&payload).unwrap();
     for invalid in [
         (" \t", "must not be blank"),
         (
@@ -244,8 +276,8 @@ fn vault_validation_rejects_inconsistent_recovery_policy() {
         &kek,
     )
     .unwrap();
-    let payload = active_slot_payload(&built.save_image).unwrap();
-    let mut vault: VaultFile = serde_json::from_slice(payload).unwrap();
+    let payload = save_image_payload(&built.save_image).unwrap();
+    let mut vault: VaultFile = serde_json::from_slice(&payload).unwrap();
     vault.recovery_policy.policy_id = PolicyId::ZERO;
 
     let error = vault.validate().unwrap_err();
@@ -289,8 +321,8 @@ fn recovery_rewrap_binds_vault_to_new_keychain_without_wallet_secret() {
     assert_eq!(recovered.metadata.wallet_id, built.metadata.wallet_id);
     assert_eq!(recovered.metadata.keychain_item_id, target_item_id);
     assert_eq!(recovered.metadata.device_id, encode_hex(&target_device_id));
-    assert!(recovered.metadata.active_slot_hash_valid);
-    assert!(recovered.metadata.active_slot_payload_hash_valid);
+    assert!(recovered.metadata.payload_hash_valid);
+    assert_eq!(recovered.metadata.recovered_shard_count, 0);
 
     let opened = open_keychain_encrypted_save_image(
         &recovered.save_image,

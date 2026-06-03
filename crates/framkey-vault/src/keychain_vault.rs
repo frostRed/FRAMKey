@@ -8,11 +8,11 @@ use zeroize::Zeroize;
 
 use crate::{
     constants::{VAULT_FORMAT_VERSION, VAULT_MAGIC},
-    save_image::{active_slot_payload, build_save_image_with_payload, inspect_save_image},
+    save_image::{build_save_image_with_payload, inspect_save_image, save_image_payload},
     types::{
         DekWrapper, KeychainEncryptedVaultImage, KeychainEncryptedVaultMetadata,
         KeychainVaultMetadata, RecoveryPolicyDescriptor, RecoveryRewrappedKeychainVaultImage,
-        SaveSlot, VaultFile,
+        VaultFile,
     },
     util::{
         current_unix_timestamp, hex_16, keychain_dek_wrapper_aad, random_wallet_secret,
@@ -143,26 +143,23 @@ fn build_keychain_encrypted_save_image_inner(
 
     let payload = serde_json::to_vec_pretty(&vault)
         .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
-    let save_image = build_save_image_with_payload(image_size, SaveSlot::A, generation, &payload)?;
+    let save_image = build_save_image_with_payload(image_size, generation, &payload)?;
     let inspection = inspect_save_image(&save_image)?;
 
     Ok(KeychainEncryptedVaultImage {
         metadata: KeychainEncryptedVaultMetadata {
             image_size: save_image.len(),
-            slot_size: inspection.slot_size,
+            shard_size: inspection.shard_size,
+            data_shards: inspection.data_shards,
+            parity_shards: inspection.parity_shards,
             wallet_id: encode_hex(&wallet_id.0),
             generation: generation.0,
             wallet_type,
             keychain_item_id: keychain_item_id.to_owned(),
             device_id: encode_hex(&device_id),
             wallet_secret_hash: encode_hex(blake3::hash(wallet_secret.expose()).as_bytes()),
-            active_slot_hash_valid: inspection.active_slot_hash_valid,
-            active_slot_payload_hash_valid: inspection
-                .slots
-                .iter()
-                .find(|slot| slot.slot == SaveSlot::A)
-                .map(|slot| slot.payload_hash_valid)
-                .unwrap_or(false),
+            payload_hash_valid: inspection.payload_hash_valid,
+            recovered_shard_count: inspection.recovered_shard_count,
         },
         save_image,
         recovery_backup_pack: recovery.map(|(_policy_id, _encrypted_dek, backup_pack)| backup_pack),
@@ -185,15 +182,17 @@ pub fn open_keychain_encrypted_save_image(
 
     Ok(KeychainEncryptedVaultMetadata {
         image_size: metadata.image_size,
-        slot_size: metadata.slot_size,
+        shard_size: metadata.shard_size,
+        data_shards: metadata.data_shards,
+        parity_shards: metadata.parity_shards,
         wallet_id: metadata.wallet_id,
         generation: metadata.generation,
         wallet_type: metadata.wallet_type,
         keychain_item_id: metadata.keychain_item_id,
         device_id: metadata.device_id,
         wallet_secret_hash,
-        active_slot_hash_valid: metadata.active_slot_hash_valid,
-        active_slot_payload_hash_valid: metadata.active_slot_payload_hash_valid,
+        payload_hash_valid: metadata.payload_hash_valid,
+        recovered_shard_count: metadata.recovered_shard_count,
     })
 }
 
@@ -207,19 +206,16 @@ pub fn rewrap_keychain_vault_with_recovery(
     validate_keychain_wrapper_binding(keychain_item_id)?;
 
     let inspection = inspect_save_image(image)?;
-    if !inspection.active_slot_hash_valid {
-        return Err(FramkeyError::invalid_data("active slot hash is invalid"));
-    }
 
-    let payload = active_slot_payload(image)?;
-    let mut vault: VaultFile = serde_json::from_slice(payload)
+    let payload = save_image_payload(image)?;
+    let mut vault: VaultFile = serde_json::from_slice(&payload)
         .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
     vault.validate()?;
 
-    if vault.generation.0 != inspection.latest_generation {
+    if vault.generation.0 != inspection.generation {
         return Err(FramkeyError::invalid_data(format!(
             "vault generation {} does not match save header generation {}",
-            vault.generation.0, inspection.latest_generation
+            vault.generation.0, inspection.generation
         )));
     }
 
@@ -288,28 +284,23 @@ pub fn rewrap_keychain_vault_with_recovery(
 
     let payload = serde_json::to_vec_pretty(&vault)
         .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
-    let save_image =
-        build_save_image_with_payload(image.len(), SaveSlot::A, vault.generation, &payload)?;
+    let save_image = build_save_image_with_payload(image.len(), vault.generation, &payload)?;
     let inspection = inspect_save_image(&save_image)?;
-    let active_slot_payload_hash_valid = inspection
-        .slots
-        .iter()
-        .find(|slot| slot.slot == SaveSlot::A)
-        .map(|slot| slot.payload_hash_valid)
-        .unwrap_or(false);
 
     Ok(RecoveryRewrappedKeychainVaultImage {
         save_image,
         metadata: KeychainVaultMetadata {
             image_size: image.len(),
-            slot_size: inspection.slot_size,
+            shard_size: inspection.shard_size,
+            data_shards: inspection.data_shards,
+            parity_shards: inspection.parity_shards,
             wallet_id: encode_hex(&vault.wallet_id.0),
             generation: vault.generation.0,
             wallet_type: vault.wallet_type,
             keychain_item_id: keychain_item_id.to_owned(),
             device_id: encode_hex(&device_id),
-            active_slot_hash_valid: inspection.active_slot_hash_valid,
-            active_slot_payload_hash_valid,
+            payload_hash_valid: inspection.payload_hash_valid,
+            recovered_shard_count: inspection.recovered_shard_count,
         },
     })
 }
@@ -324,19 +315,16 @@ pub fn with_keychain_wallet_secret<R>(
     validate_keychain_wrapper_binding(keychain_item_id)?;
 
     let inspection = inspect_save_image(image)?;
-    if !inspection.active_slot_hash_valid {
-        return Err(FramkeyError::invalid_data("active slot hash is invalid"));
-    }
 
-    let payload = active_slot_payload(image)?;
-    let vault: VaultFile = serde_json::from_slice(payload)
+    let payload = save_image_payload(image)?;
+    let vault: VaultFile = serde_json::from_slice(&payload)
         .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
     vault.validate()?;
 
-    if vault.generation.0 != inspection.latest_generation {
+    if vault.generation.0 != inspection.generation {
         return Err(FramkeyError::invalid_data(format!(
             "vault generation {} does not match save header generation {}",
-            vault.generation.0, inspection.latest_generation
+            vault.generation.0, inspection.generation
         )));
     }
 
@@ -370,23 +358,18 @@ pub fn with_keychain_wallet_secret<R>(
         .encrypted_wallet_secret
         .decrypt_secret::<32>(&dek, &secret_aad)?;
 
-    let active_slot_payload_hash_valid = inspection
-        .slots
-        .iter()
-        .find(|slot| slot.slot == inspection.active_slot)
-        .map(|slot| slot.payload_hash_valid)
-        .unwrap_or(false);
-
     let metadata = KeychainVaultMetadata {
         image_size: image.len(),
-        slot_size: inspection.slot_size,
+        shard_size: inspection.shard_size,
+        data_shards: inspection.data_shards,
+        parity_shards: inspection.parity_shards,
         wallet_id: encode_hex(&vault.wallet_id.0),
         generation: vault.generation.0,
         wallet_type: vault.wallet_type,
         keychain_item_id: keychain_item_id.to_owned(),
         device_id: encode_hex(&device_id),
-        active_slot_hash_valid: inspection.active_slot_hash_valid,
-        active_slot_payload_hash_valid,
+        payload_hash_valid: inspection.payload_hash_valid,
+        recovered_shard_count: inspection.recovered_shard_count,
     };
     let result = use_secret(&metadata, &wallet_secret)?;
 

@@ -1,6 +1,6 @@
 use framkey_core::{FramkeyError, Generation, Result};
 
-use crate::{SaveSlot, save_image::build_save_image_with_payload, types::TestVaultPayload};
+use crate::{save_image::build_save_image_with_payload, types::TestVaultPayload};
 
 pub fn build_test_save_image(
     image_size: usize,
@@ -16,5 +16,5 @@ pub fn build_test_save_image(
     let payload = serde_json::to_vec_pretty(&payload)
         .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
 
-    build_save_image_with_payload(image_size, SaveSlot::A, generation, &payload)
+    build_save_image_with_payload(image_size, generation, &payload)
 }

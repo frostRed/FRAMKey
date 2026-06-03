@@ -20,6 +20,7 @@ framkey-gbxcart = { path = "../../../crates/framkey-gbxcart" }
 framkey-ipc = { path = "../../../crates/framkey-ipc" }
 framkey-recovery = { path = "../../../crates/framkey-recovery" }
 framkey-simulation = { path = "../../../crates/framkey-simulation" }
+framkey-vault = { path = "../../../crates/framkey-vault" }
 getrandom.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -519,11 +519,13 @@ fn json_len(value: &Value) -> usize {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SignerVaultMetadata {
     pub image_size: usize,
-    pub slot_size: usize,
+    pub shard_size: usize,
+    pub data_shards: usize,
+    pub parity_shards: usize,
     pub wallet_id: String,
     pub generation: u64,
     pub wallet_type: String,
-    pub active_slot_hash_valid: bool,
-    pub active_slot_payload_hash_valid: bool,
+    pub payload_hash_valid: bool,
+    pub recovered_shard_count: usize,
     pub wallet_secret_hash: Option<String>,
 }

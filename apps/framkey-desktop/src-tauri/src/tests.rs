@@ -2918,6 +2918,22 @@ fn vault_image_size_rejects_eeprom_targets() {
 }
 
 #[test]
+fn read_configured_save_image_rejects_invalid_vault_before_helper() {
+    let path = unique_test_path("invalid-vault-before-helper.sav");
+    fs::write(&path, vec![0_u8; GbaSaveType::SramFram512Kbit.save_size()]).unwrap();
+    let mut config = fixture_config();
+    config.device = DeviceConfig::File { path: path.clone() };
+    config.wallet = DesktopWalletConfig::KeychainVault;
+
+    let error = read_configured_save_image(&config).unwrap_err();
+    let error_chain = format!("{error:#}");
+
+    assert!(error_chain.contains("configured save image"));
+    assert!(error_chain.contains("no valid FRAMKey Reed-Solomon superblock found"));
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn writes_recovery_backup_pack_without_printing_share_bytes() {
     let dir = std::env::temp_dir().join(format!(
         "framkey-desktop-recovery-pack-{}-{}",

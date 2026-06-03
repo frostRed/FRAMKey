@@ -7,12 +7,14 @@ pub(crate) fn encrypted_metadata_to_ipc(
 ) -> SignerVaultMetadata {
     SignerVaultMetadata {
         image_size: metadata.image_size,
-        slot_size: metadata.slot_size,
+        shard_size: metadata.shard_size,
+        data_shards: metadata.data_shards,
+        parity_shards: metadata.parity_shards,
         wallet_id: metadata.wallet_id,
         generation: metadata.generation,
         wallet_type: wallet_type_name(metadata.wallet_type).to_owned(),
-        active_slot_hash_valid: metadata.active_slot_hash_valid,
-        active_slot_payload_hash_valid: metadata.active_slot_payload_hash_valid,
+        payload_hash_valid: metadata.payload_hash_valid,
+        recovered_shard_count: metadata.recovered_shard_count,
         wallet_secret_hash: Some(metadata.wallet_secret_hash),
     }
 }
@@ -23,12 +25,14 @@ pub(crate) fn metadata_to_ipc(
 ) -> SignerVaultMetadata {
     SignerVaultMetadata {
         image_size: metadata.image_size,
-        slot_size: metadata.slot_size,
+        shard_size: metadata.shard_size,
+        data_shards: metadata.data_shards,
+        parity_shards: metadata.parity_shards,
         wallet_id: metadata.wallet_id,
         generation: metadata.generation,
         wallet_type: wallet_type_name(metadata.wallet_type).to_owned(),
-        active_slot_hash_valid: metadata.active_slot_hash_valid,
-        active_slot_payload_hash_valid: metadata.active_slot_payload_hash_valid,
+        payload_hash_valid: metadata.payload_hash_valid,
+        recovered_shard_count: metadata.recovered_shard_count,
         wallet_secret_hash,
     }
 }

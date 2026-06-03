@@ -1,322 +1,524 @@
 use framkey_core::{FramkeyError, Generation, Result};
+use reed_solomon_erasure::galois_8::ReedSolomon;
 
 use crate::{
     constants::{
-        SAVE_IMAGE_FORMAT_VERSION, SAVE_IMAGE_HEADER_LEN, SAVE_MAGIC, SAVE_SLOT_HEADER_LEN,
-        SAVE_SLOT_MAGIC,
+        SAVE_IMAGE_FORMAT_VERSION, SAVE_IMAGE_HEADER_LEN, SAVE_MAGIC, SAVE_RS_DATA_SHARDS,
+        SAVE_RS_PARITY_SHARDS, SAVE_RS_TOTAL_SHARDS, SAVE_SUPERBLOCK_COPIES, SAVE_SUPERBLOCK_LEN,
     },
-    types::{SaveImageInspection, SaveSlot, SaveSlotInspection},
+    types::{SaveImageInspection, SaveShardInspection, SaveSuperblockInspection},
 };
+
+const SUPERBLOCK_PAYLOAD_HASH_OFFSET: usize = 48;
+const SUPERBLOCK_SHARD_HASHES_OFFSET: usize = 80;
+const SUPERBLOCK_HASHED_LEN: usize = 960;
+const SUPERBLOCK_HASH_OFFSET: usize = 960;
+const HASH_LEN: usize = 32;
 
 pub fn build_save_image_with_payload(
     image_size: usize,
-    active_slot: SaveSlot,
     generation: Generation,
     payload: &[u8],
 ) -> Result<Vec<u8>> {
     let layout = SaveImageLayout::new(image_size)?;
-    if payload.len() > layout.slot_payload_capacity() {
+    if payload.len() > layout.payload_capacity() {
         return Err(FramkeyError::invalid_data(format!(
-            "payload length {} exceeds slot payload capacity {}",
+            "payload length {} exceeds Reed-Solomon payload capacity {}",
             payload.len(),
-            layout.slot_payload_capacity()
+            layout.payload_capacity()
         )));
     }
 
     let mut image = vec![0xFF; image_size];
-    write_slot(&mut image, &layout, SaveSlot::A, generation, payload)?;
-    write_slot(&mut image, &layout, SaveSlot::B, Generation(0), &[])?;
-    write_header(&mut image, &layout, active_slot, generation)?;
+    let mut shards = build_data_shards(&layout, payload);
+    shards.extend((0..SAVE_RS_PARITY_SHARDS).map(|_| vec![0_u8; layout.shard_size]));
+    reed_solomon()?.encode(&mut shards).map_err(|error| {
+        FramkeyError::invalid_data(format!("Reed-Solomon encode failed: {error}"))
+    })?;
+
+    let shard_hashes = shard_hashes(&shards)?;
+    write_interleaved_shards(&mut image, &layout, &shards)?;
+    write_superblocks(
+        &mut image,
+        &layout,
+        generation,
+        payload.len(),
+        *blake3::hash(payload).as_bytes(),
+        &shard_hashes,
+    )?;
+
     Ok(image)
 }
 
 pub fn inspect_save_image(image: &[u8]) -> Result<SaveImageInspection> {
-    let header = ParsedSaveHeader::parse(image)?;
-    let layout = SaveImageLayout::new(header.image_size)?;
-    if header.header_len != SAVE_IMAGE_HEADER_LEN {
-        return Err(FramkeyError::unsupported(format!(
-            "save image header length {}",
-            header.header_len
-        )));
-    }
-    if header.slot_size != layout.slot_size {
-        return Err(FramkeyError::invalid_data(format!(
-            "slot size mismatch: header says {}, layout says {}",
-            header.slot_size, layout.slot_size
-        )));
-    }
-
-    let active_slot_bytes = slot_region(image, &layout, header.active_slot)?;
-    let active_slot_hash = blake3::hash(active_slot_bytes);
-    let slots = [SaveSlot::A, SaveSlot::B]
-        .into_iter()
-        .map(|slot| inspect_slot(image, &layout, slot))
-        .collect::<Result<Vec<_>>>()?;
+    let recovered = recover_save_image(image)?;
 
     Ok(SaveImageInspection {
         image_size: image.len(),
-        header_len: header.header_len,
-        slot_size: layout.slot_size,
-        active_slot: header.active_slot,
-        latest_generation: header.latest_generation.0,
-        active_slot_hash: hash_to_hex(active_slot_hash.as_bytes()),
-        active_slot_hash_valid: active_slot_hash.as_bytes() == &header.active_slot_hash,
-        slots,
+        header_len: SAVE_IMAGE_HEADER_LEN,
+        format_version: SAVE_IMAGE_FORMAT_VERSION,
+        generation: recovered.superblock.generation.0,
+        payload_len: recovered.payload.len(),
+        payload_hash: hash_to_hex(blake3::hash(&recovered.payload).as_bytes()),
+        payload_hash_valid: true,
+        data_shards: SAVE_RS_DATA_SHARDS,
+        parity_shards: SAVE_RS_PARITY_SHARDS,
+        shard_size: recovered.layout.shard_size,
+        valid_shard_count: recovered.valid_shard_count,
+        recovered_shard_count: recovered.recovered_shard_count,
+        superblocks: recovered.superblock_inspections,
+        shards: recovered.shard_inspections,
     })
 }
 
-pub fn active_slot_payload(image: &[u8]) -> Result<&[u8]> {
-    let header = ParsedSaveHeader::parse(image)?;
-    let layout = SaveImageLayout::new(header.image_size)?;
-    let slot_bytes = slot_region(image, &layout, header.active_slot)?;
-    let parsed = parse_slot_payload(slot_bytes, &layout, header.active_slot)?;
-    let actual_payload_hash = blake3::hash(parsed.payload);
-    if actual_payload_hash.as_bytes() != &parsed.expected_payload_hash {
-        return Err(FramkeyError::invalid_data(
-            "active slot payload hash is invalid",
-        ));
-    }
-
-    Ok(parsed.payload)
+pub fn save_image_payload(image: &[u8]) -> Result<Vec<u8>> {
+    Ok(recover_save_image(image)?.payload)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SaveImageLayout {
     image_size: usize,
-    slot_size: usize,
+    shard_size: usize,
 }
 
 impl SaveImageLayout {
     pub(crate) fn new(image_size: usize) -> Result<Self> {
-        if image_size < SAVE_IMAGE_HEADER_LEN + (SAVE_SLOT_HEADER_LEN * 2) {
+        if image_size < SAVE_IMAGE_HEADER_LEN + SAVE_RS_TOTAL_SHARDS {
             return Err(FramkeyError::invalid_data(format!(
-                "save image size {image_size} is too small"
+                "save image size {image_size} is too small for FRAMKey Reed-Solomon layout"
             )));
         }
 
-        let slot_area = image_size - SAVE_IMAGE_HEADER_LEN;
-        if !slot_area.is_multiple_of(2) {
+        let shard_region_len = image_size - SAVE_IMAGE_HEADER_LEN;
+        let shard_size = shard_region_len / SAVE_RS_TOTAL_SHARDS;
+        if shard_size == 0 {
             return Err(FramkeyError::invalid_data(
-                "save image slot area must divide evenly into two slots",
-            ));
-        }
-
-        let slot_size = slot_area / 2;
-        if slot_size < SAVE_SLOT_HEADER_LEN {
-            return Err(FramkeyError::invalid_data(
-                "save image slot is smaller than slot header",
+                "save image shard size must be greater than zero",
             ));
         }
 
         Ok(Self {
             image_size,
-            slot_size,
+            shard_size,
         })
     }
 
-    fn slot_payload_capacity(self) -> usize {
-        self.slot_size - SAVE_SLOT_HEADER_LEN
+    fn payload_capacity(self) -> usize {
+        self.shard_size * SAVE_RS_DATA_SHARDS
     }
 
-    pub(crate) fn slot_offset(self, slot: SaveSlot) -> usize {
-        SAVE_IMAGE_HEADER_LEN + (slot.index() as usize * self.slot_size)
+    pub(crate) fn shard_byte_offset(self, shard_index: usize, byte_index: usize) -> Result<usize> {
+        if shard_index >= SAVE_RS_TOTAL_SHARDS {
+            return Err(FramkeyError::invalid_data(format!(
+                "shard index {shard_index} outside Reed-Solomon layout"
+            )));
+        }
+        if byte_index >= self.shard_size {
+            return Err(FramkeyError::invalid_data(format!(
+                "shard byte index {byte_index} outside Reed-Solomon layout"
+            )));
+        }
+
+        Ok(SAVE_IMAGE_HEADER_LEN + (byte_index * SAVE_RS_TOTAL_SHARDS) + shard_index)
+    }
+
+    fn encoded_shard_region_len(self) -> usize {
+        self.shard_size * SAVE_RS_TOTAL_SHARDS
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedSaveHeader {
-    header_len: usize,
+struct ParsedSuperblock {
+    copy_index: usize,
     image_size: usize,
-    slot_size: usize,
-    active_slot: SaveSlot,
-    latest_generation: Generation,
-    active_slot_hash: [u8; 32],
-}
-
-impl ParsedSaveHeader {
-    fn parse(image: &[u8]) -> Result<Self> {
-        if image.len() < SAVE_IMAGE_HEADER_LEN {
-            return Err(FramkeyError::invalid_data(
-                "save image is too small for FRAMKey header",
-            ));
-        }
-
-        if image[0..8] != SAVE_MAGIC {
-            return Err(FramkeyError::invalid_data("save image magic mismatch"));
-        }
-
-        let version = read_u16_le(image, 8)?;
-        if version != SAVE_IMAGE_FORMAT_VERSION {
-            return Err(FramkeyError::unsupported(format!(
-                "save image format version {version}"
-            )));
-        }
-
-        let header_len = read_u16_le(image, 10)? as usize;
-        let image_size = read_u32_le(image, 12)? as usize;
-        if image_size != image.len() {
-            return Err(FramkeyError::invalid_data(format!(
-                "save image size mismatch: header says {image_size}, actual {}",
-                image.len()
-            )));
-        }
-
-        let slot_size = read_u32_le(image, 16)? as usize;
-        let active_slot = SaveSlot::from_index(image[20])?;
-        let latest_generation = Generation(read_u64_le(image, 24)?);
-        let mut active_slot_hash = [0_u8; 32];
-        active_slot_hash.copy_from_slice(&image[32..64]);
-
-        Ok(Self {
-            header_len,
-            image_size,
-            slot_size,
-            active_slot,
-            latest_generation,
-            active_slot_hash,
-        })
-    }
-}
-
-fn write_header(
-    image: &mut [u8],
-    layout: &SaveImageLayout,
-    active_slot: SaveSlot,
-    latest_generation: Generation,
-) -> Result<()> {
-    let active_slot_hash = blake3::hash(slot_region(image, layout, active_slot)?);
-
-    let mut header = [0_u8; SAVE_IMAGE_HEADER_LEN];
-    header[0..8].copy_from_slice(&SAVE_MAGIC);
-    header[8..10].copy_from_slice(&SAVE_IMAGE_FORMAT_VERSION.to_le_bytes());
-    header[10..12].copy_from_slice(&(SAVE_IMAGE_HEADER_LEN as u16).to_le_bytes());
-    header[12..16].copy_from_slice(&(layout.image_size as u32).to_le_bytes());
-    header[16..20].copy_from_slice(&(layout.slot_size as u32).to_le_bytes());
-    header[20] = active_slot.index();
-    header[24..32].copy_from_slice(&latest_generation.0.to_le_bytes());
-    header[32..64].copy_from_slice(active_slot_hash.as_bytes());
-
-    image[..SAVE_IMAGE_HEADER_LEN].copy_from_slice(&header);
-    Ok(())
-}
-
-fn write_slot(
-    image: &mut [u8],
-    layout: &SaveImageLayout,
-    slot: SaveSlot,
     generation: Generation,
-    payload: &[u8],
-) -> Result<()> {
-    if payload.len() > layout.slot_payload_capacity() {
-        return Err(FramkeyError::invalid_data("slot payload is too large"));
-    }
-
-    let slot_offset = layout.slot_offset(slot);
-    let slot_end = slot_offset + layout.slot_size;
-    image[slot_offset..slot_end].fill(0xFF);
-
-    let payload_hash = blake3::hash(payload);
-    let mut header = [0_u8; SAVE_SLOT_HEADER_LEN];
-    header[0..8].copy_from_slice(&SAVE_SLOT_MAGIC);
-    header[8..10].copy_from_slice(&SAVE_IMAGE_FORMAT_VERSION.to_le_bytes());
-    header[10] = slot.index();
-    header[12..20].copy_from_slice(&generation.0.to_le_bytes());
-    header[20..24].copy_from_slice(&(payload.len() as u32).to_le_bytes());
-    header[24..56].copy_from_slice(payload_hash.as_bytes());
-
-    image[slot_offset..slot_offset + SAVE_SLOT_HEADER_LEN].copy_from_slice(&header);
-    let payload_offset = slot_offset + SAVE_SLOT_HEADER_LEN;
-    image[payload_offset..payload_offset + payload.len()].copy_from_slice(payload);
-    Ok(())
+    payload_len: usize,
+    payload_hash: [u8; HASH_LEN],
+    shard_hashes: [[u8; HASH_LEN]; SAVE_RS_TOTAL_SHARDS],
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ParsedSlotPayload<'a> {
-    generation: u64,
-    payload: &'a [u8],
-    expected_payload_hash: [u8; 32],
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecoveredSaveImage {
+    layout: SaveImageLayout,
+    superblock: ParsedSuperblock,
+    payload: Vec<u8>,
+    valid_shard_count: usize,
+    recovered_shard_count: usize,
+    superblock_inspections: Vec<SaveSuperblockInspection>,
+    shard_inspections: Vec<SaveShardInspection>,
 }
 
-fn parse_slot_payload<'a>(
-    slot_bytes: &'a [u8],
-    layout: &SaveImageLayout,
-    slot: SaveSlot,
-) -> Result<ParsedSlotPayload<'a>> {
-    if slot_bytes[0..8] != SAVE_SLOT_MAGIC {
+fn build_data_shards(layout: &SaveImageLayout, payload: &[u8]) -> Vec<Vec<u8>> {
+    let mut payload_region = vec![0_u8; layout.payload_capacity()];
+    payload_region[..payload.len()].copy_from_slice(payload);
+    payload_region
+        .chunks_exact(layout.shard_size)
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+fn recover_save_image(image: &[u8]) -> Result<RecoveredSaveImage> {
+    let layout = SaveImageLayout::new(image.len())?;
+    let (superblock, superblock_inspections) = parse_superblocks(image, &layout)?;
+    let raw_shards = read_interleaved_shards(image, &layout)?;
+
+    let mut shard_inspections = Vec::with_capacity(SAVE_RS_TOTAL_SHARDS);
+    let mut shards = Vec::with_capacity(SAVE_RS_TOTAL_SHARDS);
+    let mut valid_shard_count = 0_usize;
+    for (index, shard) in raw_shards.into_iter().enumerate() {
+        let actual_hash = blake3::hash(&shard);
+        let hash_valid = actual_hash.as_bytes() == &superblock.shard_hashes[index];
+        if hash_valid {
+            valid_shard_count += 1;
+            shards.push(Some(shard));
+        } else {
+            shards.push(None);
+        }
+        shard_inspections.push(SaveShardInspection {
+            shard_index: index,
+            is_data_shard: index < SAVE_RS_DATA_SHARDS,
+            hash: hash_to_hex(actual_hash.as_bytes()),
+            hash_valid,
+            recovered: false,
+        });
+    }
+
+    if valid_shard_count < SAVE_RS_DATA_SHARDS {
         return Err(FramkeyError::invalid_data(format!(
-            "slot {:?} magic mismatch",
-            slot
+            "only {valid_shard_count} valid Reed-Solomon shards remain; need at least {SAVE_RS_DATA_SHARDS}"
         )));
     }
 
-    let version = read_u16_le(slot_bytes, 8)?;
-    if version != SAVE_IMAGE_FORMAT_VERSION {
-        return Err(FramkeyError::unsupported(format!(
-            "slot {:?} format version {version}",
-            slot
-        )));
+    reed_solomon()?.reconstruct(&mut shards).map_err(|error| {
+        FramkeyError::invalid_data(format!("Reed-Solomon reconstruction failed: {error}"))
+    })?;
+    let recovered_shard_count = SAVE_RS_TOTAL_SHARDS - valid_shard_count;
+
+    let shards = shards
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| FramkeyError::invalid_data("Reed-Solomon reconstruction left holes"))?;
+    for (index, shard) in shards.iter().enumerate() {
+        let actual_hash = blake3::hash(shard);
+        if actual_hash.as_bytes() != &superblock.shard_hashes[index] {
+            return Err(FramkeyError::invalid_data(format!(
+                "reconstructed shard {index} hash mismatch"
+            )));
+        }
+        if !shard_inspections[index].hash_valid {
+            shard_inspections[index].hash = hash_to_hex(actual_hash.as_bytes());
+            shard_inspections[index].hash_valid = true;
+            shard_inspections[index].recovered = true;
+        }
     }
 
-    let parsed_slot = SaveSlot::from_index(slot_bytes[10])?;
-    if parsed_slot != slot {
-        return Err(FramkeyError::invalid_data(format!(
-            "slot index mismatch: expected {:?}, found {:?}",
-            slot, parsed_slot
-        )));
+    let payload = payload_from_shards(&superblock, &layout, &shards)?;
+    let payload_hash = blake3::hash(&payload);
+    if payload_hash.as_bytes() != &superblock.payload_hash {
+        return Err(FramkeyError::invalid_data(
+            "reconstructed save payload hash mismatch",
+        ));
     }
 
-    let generation = read_u64_le(slot_bytes, 12)?;
-    let payload_len = read_u32_le(slot_bytes, 20)? as usize;
-    if payload_len > layout.slot_payload_capacity() {
-        return Err(FramkeyError::invalid_data(format!(
-            "slot {:?} payload length {payload_len} exceeds capacity {}",
-            slot,
-            layout.slot_payload_capacity()
-        )));
-    }
-
-    let mut expected_payload_hash = [0_u8; 32];
-    expected_payload_hash.copy_from_slice(&slot_bytes[24..56]);
-    let payload_start = SAVE_SLOT_HEADER_LEN;
-    let payload_end = payload_start + payload_len;
-    let payload = &slot_bytes[payload_start..payload_end];
-
-    Ok(ParsedSlotPayload {
-        generation,
+    Ok(RecoveredSaveImage {
+        layout,
+        superblock,
         payload,
-        expected_payload_hash,
+        valid_shard_count,
+        recovered_shard_count,
+        superblock_inspections,
+        shard_inspections,
     })
 }
 
-fn inspect_slot(
+fn write_interleaved_shards(
+    image: &mut [u8],
+    layout: &SaveImageLayout,
+    shards: &[Vec<u8>],
+) -> Result<()> {
+    if shards.len() != SAVE_RS_TOTAL_SHARDS {
+        return Err(FramkeyError::invalid_data(format!(
+            "expected {SAVE_RS_TOTAL_SHARDS} shards, found {}",
+            shards.len()
+        )));
+    }
+    for shard in shards {
+        if shard.len() != layout.shard_size {
+            return Err(FramkeyError::invalid_data(format!(
+                "shard length {} does not match layout shard size {}",
+                shard.len(),
+                layout.shard_size
+            )));
+        }
+    }
+
+    for byte_index in 0..layout.shard_size {
+        for shard_index in 0..SAVE_RS_TOTAL_SHARDS {
+            let offset = layout.shard_byte_offset(shard_index, byte_index)?;
+            image[offset] = shards[shard_index][byte_index];
+        }
+    }
+
+    Ok(())
+}
+
+fn read_interleaved_shards(image: &[u8], layout: &SaveImageLayout) -> Result<Vec<Vec<u8>>> {
+    let end = SAVE_IMAGE_HEADER_LEN + layout.encoded_shard_region_len();
+    if end > image.len() {
+        return Err(FramkeyError::invalid_data(
+            "interleaved shard region is outside save image",
+        ));
+    }
+
+    let mut shards = vec![vec![0_u8; layout.shard_size]; SAVE_RS_TOTAL_SHARDS];
+    for byte_index in 0..layout.shard_size {
+        for (shard_index, shard) in shards.iter_mut().enumerate() {
+            let offset = layout.shard_byte_offset(shard_index, byte_index)?;
+            shard[byte_index] = image[offset];
+        }
+    }
+    Ok(shards)
+}
+
+fn write_superblocks(
+    image: &mut [u8],
+    layout: &SaveImageLayout,
+    generation: Generation,
+    payload_len: usize,
+    payload_hash: [u8; HASH_LEN],
+    shard_hashes: &[[u8; HASH_LEN]; SAVE_RS_TOTAL_SHARDS],
+) -> Result<()> {
+    for copy_index in 0..SAVE_SUPERBLOCK_COPIES {
+        let mut block = [0_u8; SAVE_SUPERBLOCK_LEN];
+        block[0..8].copy_from_slice(&SAVE_MAGIC);
+        block[8..10].copy_from_slice(&SAVE_IMAGE_FORMAT_VERSION.to_le_bytes());
+        block[10..12].copy_from_slice(&(SAVE_SUPERBLOCK_LEN as u16).to_le_bytes());
+        block[12..16].copy_from_slice(&(layout.image_size as u32).to_le_bytes());
+        block[16..20].copy_from_slice(&(SAVE_IMAGE_HEADER_LEN as u32).to_le_bytes());
+        block[20..28].copy_from_slice(&generation.0.to_le_bytes());
+        block[28..32].copy_from_slice(&(payload_len as u32).to_le_bytes());
+        block[32] = SAVE_RS_DATA_SHARDS as u8;
+        block[33] = SAVE_RS_PARITY_SHARDS as u8;
+        block[34] = SAVE_RS_TOTAL_SHARDS as u8;
+        block[35] = copy_index as u8;
+        block[36..40].copy_from_slice(&(layout.shard_size as u32).to_le_bytes());
+        block[40..44].copy_from_slice(&(layout.payload_capacity() as u32).to_le_bytes());
+        block[SUPERBLOCK_PAYLOAD_HASH_OFFSET..SUPERBLOCK_PAYLOAD_HASH_OFFSET + HASH_LEN]
+            .copy_from_slice(&payload_hash);
+        for (index, hash) in shard_hashes.iter().enumerate() {
+            let start = SUPERBLOCK_SHARD_HASHES_OFFSET + (index * HASH_LEN);
+            block[start..start + HASH_LEN].copy_from_slice(hash);
+        }
+        let header_hash = blake3::hash(&block[..SUPERBLOCK_HASHED_LEN]);
+        block[SUPERBLOCK_HASH_OFFSET..SUPERBLOCK_HASH_OFFSET + HASH_LEN]
+            .copy_from_slice(header_hash.as_bytes());
+
+        let start = copy_index * SAVE_SUPERBLOCK_LEN;
+        let end = start + SAVE_SUPERBLOCK_LEN;
+        image[start..end].copy_from_slice(&block);
+    }
+
+    Ok(())
+}
+
+fn parse_superblocks(
     image: &[u8],
     layout: &SaveImageLayout,
-    slot: SaveSlot,
-) -> Result<SaveSlotInspection> {
-    let slot_bytes = slot_region(image, layout, slot)?;
-    let parsed = parse_slot_payload(slot_bytes, layout, slot)?;
-    let actual_payload_hash = blake3::hash(parsed.payload);
+) -> Result<(ParsedSuperblock, Vec<SaveSuperblockInspection>)> {
+    if image.len() < SAVE_IMAGE_HEADER_LEN {
+        return Err(FramkeyError::invalid_data(
+            "save image is too small for FRAMKey Reed-Solomon header",
+        ));
+    }
 
-    Ok(SaveSlotInspection {
-        slot,
-        generation: parsed.generation,
-        payload_len: parsed.payload.len(),
-        payload_hash: hash_to_hex(actual_payload_hash.as_bytes()),
-        payload_hash_valid: actual_payload_hash.as_bytes() == &parsed.expected_payload_hash,
-        payload_preview: redacted_payload_preview(parsed.payload.len()),
+    let mut parsed = Vec::new();
+    let mut inspections = Vec::with_capacity(SAVE_SUPERBLOCK_COPIES);
+    for copy_index in 0..SAVE_SUPERBLOCK_COPIES {
+        let start = copy_index * SAVE_SUPERBLOCK_LEN;
+        let end = start + SAVE_SUPERBLOCK_LEN;
+        match parse_superblock(copy_index, &image[start..end], layout) {
+            Ok(superblock) => {
+                inspections.push(SaveSuperblockInspection {
+                    copy_index,
+                    valid: true,
+                    generation: Some(superblock.generation.0),
+                    error: None,
+                });
+                parsed.push(superblock);
+            }
+            Err(error) => inspections.push(SaveSuperblockInspection {
+                copy_index,
+                valid: false,
+                generation: None,
+                error: Some(error.to_string()),
+            }),
+        }
+    }
+
+    parsed
+        .into_iter()
+        .max_by_key(|superblock| {
+            (
+                superblock.generation.0,
+                std::cmp::Reverse(superblock.copy_index),
+            )
+        })
+        .map(|superblock| (superblock, inspections))
+        .ok_or_else(|| FramkeyError::invalid_data("no valid FRAMKey Reed-Solomon superblock found"))
+}
+
+fn parse_superblock(
+    copy_index: usize,
+    block: &[u8],
+    layout: &SaveImageLayout,
+) -> Result<ParsedSuperblock> {
+    if block.len() != SAVE_SUPERBLOCK_LEN {
+        return Err(FramkeyError::invalid_data("superblock length mismatch"));
+    }
+    if block[0..8] != SAVE_MAGIC {
+        return Err(FramkeyError::invalid_data("save image magic mismatch"));
+    }
+
+    let version = read_u16_le(block, 8)?;
+    if version != SAVE_IMAGE_FORMAT_VERSION {
+        return Err(FramkeyError::unsupported(format!(
+            "save image format version {version}"
+        )));
+    }
+    let superblock_len = read_u16_le(block, 10)? as usize;
+    if superblock_len != SAVE_SUPERBLOCK_LEN {
+        return Err(FramkeyError::invalid_data(format!(
+            "superblock length {superblock_len} does not match expected {SAVE_SUPERBLOCK_LEN}"
+        )));
+    }
+    let image_size = read_u32_le(block, 12)? as usize;
+    if image_size != layout.image_size {
+        return Err(FramkeyError::invalid_data(format!(
+            "save image size mismatch: superblock says {image_size}, actual {}",
+            layout.image_size
+        )));
+    }
+    let header_len = read_u32_le(block, 16)? as usize;
+    if header_len != SAVE_IMAGE_HEADER_LEN {
+        return Err(FramkeyError::invalid_data(format!(
+            "save image header length {header_len} does not match expected {SAVE_IMAGE_HEADER_LEN}"
+        )));
+    }
+    let generation = Generation(read_u64_le(block, 20)?);
+    let payload_len = read_u32_le(block, 28)? as usize;
+    if payload_len > layout.payload_capacity() {
+        return Err(FramkeyError::invalid_data(format!(
+            "payload length {payload_len} exceeds Reed-Solomon payload capacity {}",
+            layout.payload_capacity()
+        )));
+    }
+    validate_shard_counts(block[32], block[33], block[34])?;
+    let block_copy_index = block[35] as usize;
+    if block_copy_index != copy_index {
+        return Err(FramkeyError::invalid_data(format!(
+            "superblock copy index mismatch: expected {copy_index}, found {block_copy_index}"
+        )));
+    }
+    let shard_size = read_u32_le(block, 36)? as usize;
+    if shard_size != layout.shard_size {
+        return Err(FramkeyError::invalid_data(format!(
+            "shard size mismatch: superblock says {shard_size}, layout says {}",
+            layout.shard_size
+        )));
+    }
+    let payload_capacity = read_u32_le(block, 40)? as usize;
+    if payload_capacity != layout.payload_capacity() {
+        return Err(FramkeyError::invalid_data(format!(
+            "payload capacity mismatch: superblock says {payload_capacity}, layout says {}",
+            layout.payload_capacity()
+        )));
+    }
+
+    let expected_header_hash = blake3::hash(&block[..SUPERBLOCK_HASHED_LEN]);
+    let actual_header_hash = read_hash(block, SUPERBLOCK_HASH_OFFSET, "superblock hash")?;
+    if expected_header_hash.as_bytes() != &actual_header_hash {
+        return Err(FramkeyError::invalid_data("superblock hash mismatch"));
+    }
+
+    let payload_hash = read_hash(block, SUPERBLOCK_PAYLOAD_HASH_OFFSET, "payload hash")?;
+    let mut shard_hashes = [[0_u8; HASH_LEN]; SAVE_RS_TOTAL_SHARDS];
+    for (index, hash) in shard_hashes.iter_mut().enumerate() {
+        let start = SUPERBLOCK_SHARD_HASHES_OFFSET + (index * HASH_LEN);
+        *hash = read_hash(block, start, "shard hash")?;
+    }
+
+    Ok(ParsedSuperblock {
+        copy_index,
+        image_size,
+        generation,
+        payload_len,
+        payload_hash,
+        shard_hashes,
     })
 }
 
-fn redacted_payload_preview(payload_len: usize) -> String {
-    format!("<redacted {payload_len} bytes>")
+fn validate_shard_counts(data_shards: u8, parity_shards: u8, total_shards: u8) -> Result<()> {
+    if data_shards as usize != SAVE_RS_DATA_SHARDS
+        || parity_shards as usize != SAVE_RS_PARITY_SHARDS
+        || total_shards as usize != SAVE_RS_TOTAL_SHARDS
+    {
+        return Err(FramkeyError::unsupported(format!(
+            "save image Reed-Solomon layout {data_shards}+{parity_shards}={total_shards}"
+        )));
+    }
+    Ok(())
 }
 
-fn slot_region<'a>(image: &'a [u8], layout: &SaveImageLayout, slot: SaveSlot) -> Result<&'a [u8]> {
-    let start = layout.slot_offset(slot);
-    let end = start + layout.slot_size;
-    image
-        .get(start..end)
-        .ok_or_else(|| FramkeyError::invalid_data("slot region is outside save image"))
+fn payload_from_shards(
+    superblock: &ParsedSuperblock,
+    layout: &SaveImageLayout,
+    shards: &[Vec<u8>],
+) -> Result<Vec<u8>> {
+    if shards.len() < SAVE_RS_DATA_SHARDS {
+        return Err(FramkeyError::invalid_data(
+            "Reed-Solomon data shards are missing",
+        ));
+    }
+    let mut payload_region = Vec::with_capacity(layout.payload_capacity());
+    for shard in &shards[..SAVE_RS_DATA_SHARDS] {
+        if shard.len() != layout.shard_size {
+            return Err(FramkeyError::invalid_data(
+                "Reed-Solomon shard size mismatch",
+            ));
+        }
+        payload_region.extend_from_slice(shard);
+    }
+    Ok(payload_region[..superblock.payload_len].to_vec())
+}
+
+fn shard_hashes(shards: &[Vec<u8>]) -> Result<[[u8; HASH_LEN]; SAVE_RS_TOTAL_SHARDS]> {
+    if shards.len() != SAVE_RS_TOTAL_SHARDS {
+        return Err(FramkeyError::invalid_data(format!(
+            "expected {SAVE_RS_TOTAL_SHARDS} Reed-Solomon shards, found {}",
+            shards.len()
+        )));
+    }
+
+    let mut hashes = [[0_u8; HASH_LEN]; SAVE_RS_TOTAL_SHARDS];
+    for (index, shard) in shards.iter().enumerate() {
+        hashes[index] = *blake3::hash(shard).as_bytes();
+    }
+    Ok(hashes)
+}
+
+fn reed_solomon() -> Result<ReedSolomon> {
+    ReedSolomon::new(SAVE_RS_DATA_SHARDS, SAVE_RS_PARITY_SHARDS).map_err(|error| {
+        FramkeyError::invalid_data(format!("Reed-Solomon layout is invalid: {error}"))
+    })
+}
+
+fn read_hash(bytes: &[u8], offset: usize, field: &str) -> Result<[u8; HASH_LEN]> {
+    let bytes = bytes
+        .get(offset..offset + HASH_LEN)
+        .ok_or_else(|| FramkeyError::invalid_data(format!("{field} outside buffer")))?;
+    let mut hash = [0_u8; HASH_LEN];
+    hash.copy_from_slice(bytes);
+    Ok(hash)
 }
 
 fn read_u16_le(bytes: &[u8], offset: usize) -> Result<u16> {
@@ -342,11 +544,6 @@ fn read_u64_le(bytes: &[u8], offset: usize) -> Result<u64> {
     ]))
 }
 
-fn hash_to_hex(hash: &[u8; 32]) -> String {
-    let mut output = String::with_capacity(64);
-    for byte in hash {
-        use std::fmt::Write as _;
-        write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
-    }
-    output
+fn hash_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

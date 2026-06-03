@@ -222,12 +222,14 @@ fn signer_helper_debug_redacts_sensitive_wire_material() {
 fn fixture_metadata() -> SignerVaultMetadata {
     SignerVaultMetadata {
         image_size: MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES,
-        slot_size: 4096,
+        shard_size: 1194,
+        data_shards: 16,
+        parity_shards: 8,
         wallet_id: "wallet".to_owned(),
         generation: 1,
         wallet_type: "evm_eoa_secp256k1".to_owned(),
-        active_slot_hash_valid: true,
-        active_slot_payload_hash_valid: true,
+        payload_hash_valid: true,
+        recovered_shard_count: 0,
         wallet_secret_hash: Some("wallet-secret-hash".to_owned()),
     }
 }

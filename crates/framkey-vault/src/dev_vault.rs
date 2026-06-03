@@ -3,10 +3,10 @@ use framkey_crypto::{AeadBox, SecretBytes, encode_hex, random_array};
 
 use crate::{
     constants::{VAULT_FORMAT_VERSION, VAULT_MAGIC},
-    save_image::{active_slot_payload, build_save_image_with_payload, inspect_save_image},
+    save_image::{build_save_image_with_payload, inspect_save_image, save_image_payload},
     types::{
         DekWrapper, DevEncryptedVaultImage, DevEncryptedVaultMetadata, RecoveryPolicyDescriptor,
-        SaveSlot, VaultFile,
+        VaultFile,
     },
     util::{
         current_unix_timestamp, dev_dek_wrapper_aad, dev_kek_id, random_wallet_secret,
@@ -58,26 +58,23 @@ pub fn build_dev_encrypted_save_image(
 
     let payload = serde_json::to_vec_pretty(&vault)
         .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
-    let save_image = build_save_image_with_payload(image_size, SaveSlot::A, generation, &payload)?;
+    let save_image = build_save_image_with_payload(image_size, generation, &payload)?;
     let inspection = inspect_save_image(&save_image)?;
 
     Ok(DevEncryptedVaultImage {
         metadata: DevEncryptedVaultMetadata {
             image_size: save_image.len(),
-            slot_size: inspection.slot_size,
+            shard_size: inspection.shard_size,
+            data_shards: inspection.data_shards,
+            parity_shards: inspection.parity_shards,
             wallet_id: encode_hex(&wallet_id.0),
             generation: generation.0,
             wallet_type,
             dev_wrapper_label: label.to_owned(),
             dev_key_id: encode_hex(&dev_key_id),
             wallet_secret_hash: encode_hex(blake3::hash(wallet_secret.expose()).as_bytes()),
-            active_slot_hash_valid: inspection.active_slot_hash_valid,
-            active_slot_payload_hash_valid: inspection
-                .slots
-                .iter()
-                .find(|slot| slot.slot == SaveSlot::A)
-                .map(|slot| slot.payload_hash_valid)
-                .unwrap_or(false),
+            payload_hash_valid: inspection.payload_hash_valid,
+            recovered_shard_count: inspection.recovered_shard_count,
         },
         save_image,
     })
@@ -88,19 +85,16 @@ pub fn open_dev_encrypted_save_image(
     dev_kek: &SecretBytes<32>,
 ) -> Result<DevEncryptedVaultMetadata> {
     let inspection = inspect_save_image(image)?;
-    if !inspection.active_slot_hash_valid {
-        return Err(FramkeyError::invalid_data("active slot hash is invalid"));
-    }
 
-    let payload = active_slot_payload(image)?;
-    let vault: VaultFile = serde_json::from_slice(payload)
+    let payload = save_image_payload(image)?;
+    let vault: VaultFile = serde_json::from_slice(&payload)
         .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
     vault.validate()?;
 
-    if vault.generation.0 != inspection.latest_generation {
+    if vault.generation.0 != inspection.generation {
         return Err(FramkeyError::invalid_data(format!(
             "vault generation {} does not match save header generation {}",
-            vault.generation.0, inspection.latest_generation
+            vault.generation.0, inspection.generation
         )));
     }
 
@@ -127,23 +121,18 @@ pub fn open_dev_encrypted_save_image(
         .decrypt_secret::<32>(&dek, &secret_aad)?;
     let wallet_secret_hash = encode_hex(blake3::hash(wallet_secret.expose()).as_bytes());
 
-    let active_slot_payload_hash_valid = inspection
-        .slots
-        .iter()
-        .find(|slot| slot.slot == inspection.active_slot)
-        .map(|slot| slot.payload_hash_valid)
-        .unwrap_or(false);
-
     Ok(DevEncryptedVaultMetadata {
         image_size: image.len(),
-        slot_size: inspection.slot_size,
+        shard_size: inspection.shard_size,
+        data_shards: inspection.data_shards,
+        parity_shards: inspection.parity_shards,
         wallet_id: encode_hex(&vault.wallet_id.0),
         generation: vault.generation.0,
         wallet_type: vault.wallet_type,
         dev_wrapper_label: label.clone(),
         dev_key_id: encode_hex(&expected_key_id),
         wallet_secret_hash,
-        active_slot_hash_valid: inspection.active_slot_hash_valid,
-        active_slot_payload_hash_valid,
+        payload_hash_valid: inspection.payload_hash_valid,
+        recovered_shard_count: inspection.recovered_shard_count,
     })
 }

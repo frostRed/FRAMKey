@@ -151,61 +151,38 @@ pub struct RecoveryPolicyDescriptor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SaveImageHeader {
-    pub magic: [u8; 8],
-    pub format_version: u16,
-    pub active_slot: SaveSlot,
-    pub latest_generation: Generation,
-    pub save_image_size: u32,
-    pub checksum: [u8; 32],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SaveSlot {
-    A,
-    B,
-}
-
-impl SaveSlot {
-    pub(crate) fn index(self) -> u8 {
-        match self {
-            Self::A => 0,
-            Self::B => 1,
-        }
-    }
-
-    pub(crate) fn from_index(index: u8) -> Result<Self> {
-        match index {
-            0 => Ok(Self::A),
-            1 => Ok(Self::B),
-            _ => Err(FramkeyError::invalid_data(format!(
-                "invalid save slot index {index}"
-            ))),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SaveImageInspection {
     pub image_size: usize,
     pub header_len: usize,
-    pub slot_size: usize,
-    pub active_slot: SaveSlot,
-    pub latest_generation: u64,
-    pub active_slot_hash: String,
-    pub active_slot_hash_valid: bool,
-    pub slots: Vec<SaveSlotInspection>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SaveSlotInspection {
-    pub slot: SaveSlot,
+    pub format_version: u16,
     pub generation: u64,
     pub payload_len: usize,
     pub payload_hash: String,
     pub payload_hash_valid: bool,
-    pub payload_preview: String,
+    pub data_shards: usize,
+    pub parity_shards: usize,
+    pub shard_size: usize,
+    pub valid_shard_count: usize,
+    pub recovered_shard_count: usize,
+    pub superblocks: Vec<SaveSuperblockInspection>,
+    pub shards: Vec<SaveShardInspection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveSuperblockInspection {
+    pub copy_index: usize,
+    pub valid: bool,
+    pub generation: Option<u64>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveShardInspection {
+    pub shard_index: usize,
+    pub is_data_shard: bool,
+    pub hash: String,
+    pub hash_valid: bool,
+    pub recovered: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,15 +196,17 @@ pub(crate) struct TestVaultPayload<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DevEncryptedVaultMetadata {
     pub image_size: usize,
-    pub slot_size: usize,
+    pub shard_size: usize,
+    pub data_shards: usize,
+    pub parity_shards: usize,
     pub wallet_id: String,
     pub generation: u64,
     pub wallet_type: WalletType,
     pub dev_wrapper_label: String,
     pub dev_key_id: String,
     pub wallet_secret_hash: String,
-    pub active_slot_hash_valid: bool,
-    pub active_slot_payload_hash_valid: bool,
+    pub payload_hash_valid: bool,
+    pub recovered_shard_count: usize,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -249,28 +228,32 @@ impl fmt::Debug for DevEncryptedVaultImage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeychainEncryptedVaultMetadata {
     pub image_size: usize,
-    pub slot_size: usize,
+    pub shard_size: usize,
+    pub data_shards: usize,
+    pub parity_shards: usize,
     pub wallet_id: String,
     pub generation: u64,
     pub wallet_type: WalletType,
     pub keychain_item_id: String,
     pub device_id: String,
     pub wallet_secret_hash: String,
-    pub active_slot_hash_valid: bool,
-    pub active_slot_payload_hash_valid: bool,
+    pub payload_hash_valid: bool,
+    pub recovered_shard_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeychainVaultMetadata {
     pub image_size: usize,
-    pub slot_size: usize,
+    pub shard_size: usize,
+    pub data_shards: usize,
+    pub parity_shards: usize,
     pub wallet_id: String,
     pub generation: u64,
     pub wallet_type: WalletType,
     pub keychain_item_id: String,
     pub device_id: String,
-    pub active_slot_hash_valid: bool,
-    pub active_slot_payload_hash_valid: bool,
+    pub payload_hash_valid: bool,
+    pub recovered_shard_count: usize,
 }
 
 #[derive(Clone, PartialEq, Eq)]

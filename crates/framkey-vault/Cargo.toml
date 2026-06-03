@@ -13,6 +13,7 @@ framkey-core = { path = "../framkey-core" }
 framkey-crypto = { path = "../framkey-crypto" }
 framkey-evm = { path = "../framkey-evm" }
 framkey-recovery = { path = "../framkey-recovery" }
+reed-solomon-erasure.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 zeroize.workspace = true

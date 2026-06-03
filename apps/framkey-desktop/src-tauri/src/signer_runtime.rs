@@ -30,6 +30,7 @@ use framkey_recovery::{
     RecoveryBackupBundle, RecoveryBackupFile, RecoveryBackupPack, parse_recovery_backup_bundle,
     recovery_backup_file_name,
 };
+use framkey_vault::inspect_save_image;
 use serde_json::{Value, json};
 
 pub(crate) fn load_keychain_account(config: &DesktopConfig) -> Result<DesktopAccount> {
@@ -79,7 +80,14 @@ pub(crate) fn load_keychain_account(config: &DesktopConfig) -> Result<DesktopAcc
 
 pub(crate) fn read_configured_save_image(config: &DesktopConfig) -> Result<Vec<u8>> {
     let device = config.device.open_device();
-    Ok(device.read_save_image()?.as_bytes().to_vec())
+    let save_image = device.read_save_image()?.as_bytes().to_vec();
+    inspect_save_image(&save_image).with_context(|| {
+        format!(
+            "configured save image from {} is not a valid FRAMKey vault image",
+            config.device.describe()
+        )
+    })?;
+    Ok(save_image)
 }
 
 pub(crate) fn write_configured_save_image(config: &DesktopConfig, image: &SaveImage) -> Result<()> {
