@@ -1,3 +1,113 @@
+# GBxCart Save Durability
+
+Status: completed
+
+## Goal
+
+Fix the Connect-time `save image magic mismatch` from first principles by replacing the single-header/two-slot save format with a non-compatible Reed-Solomon-protected save image, and by making GBxCart save writes prove byte-stable persistence across the device boundary.
+
+## Scope
+
+- Replace the old A/B slot format with one v2 RS shard set; no v1 compatibility.
+- Split the vault payload into data shards, add Reed-Solomon parity shards, store per-shard hashes, and interleave shard bytes across the GBA save image.
+- Treat the GBA save image as invalid before helper/LocalAuthentication if the v2 shard set cannot be reconstructed and verified.
+- Align AGB cleanup behavior with the upstream FlashGBX boundary: do not send the address-pin release command after AGB SRAM/FRAM operations.
+- After GBxCart writes, perform a fresh-session readback verification so write success means more than same-session immediate echo/readback.
+- Keep any repair of the currently corrupted card as an explicit operator action, not an automatic parser fallback.
+
+## Invariants
+
+- Do not loosen the core FRAMKey vault payload validation rules.
+- Do not preserve v1 save-image compatibility.
+- Do not treat Reed-Solomon reconstruction alone as authenticity; reconstructed payloads still need hash and VaultFile validation.
+- Do not silently rewrite a configured vault device during Connect/open/sign.
+- Do not print or persist wallet secret, KEK, DEK, recovery root key, recovery shares, or plaintext private key material.
+
+## Likely Files
+
+- `crates/framkey-gbxcart/src/transport.rs`
+- `crates/framkey-vault/src/save_image.rs`
+- `crates/framkey-vault/src/constants.rs`
+- `crates/framkey-vault/src/types.rs`
+- `crates/framkey-ipc/src/messages.rs`
+- `crates/framkey-signer-helper/src/metadata.rs`
+- `apps/framkey-desktop/src-tauri/src/signer_runtime.rs`
+- `apps/framkey-desktop/src-tauri/src/tests.rs`
+- `docs/vault-format.md`
+- `Cargo.toml`
+- `PLANS.md`
+
+## Verification
+
+- `cargo fmt --all -- --check`
+- `cargo check -p framkey-vault`
+- `cargo check -p framkey-gbxcart`
+- `cargo check -p framkey-desktop`
+- `cargo check -p framkey-signer-helper`
+- `cargo check -p framkey-cli`
+- `cargo nextest run -p framkey-vault`
+- `cargo nextest run -p framkey-ipc -p framkey-signer-helper`
+- `cargo nextest run -p framkey-desktop read_configured_save_image_rejects_invalid_vault_before_helper`
+- `cargo nextest run -p framkey-gbxcart`
+- `git diff --check`
+- Manual GBxCart read evidence was captured before any card repair write; no card repair write was performed.
+
+## Main Risks
+
+- Reed-Solomon parity can recover bounded byte/shard corruption but cannot recover a cartridge/game ROM rewriting most of the save area.
+- v1.3 GBxCart cannot automatically power-cycle the cartridge, so fresh-session verification is still weaker than physical unplug/replug or v1.4 power-cycle verification.
+- The current card already has at least a byte-level header corruption; repairing it should require an explicit write after preserving the current readout artifact.
+
+# DeFi and Activity Workspace Productization
+
+Status: completed
+
+## Goal
+
+Make the DeFi and Activity workspaces feel like a consumer wallet dApp cockpit instead of a diagnostic console, especially after a DeFi app requests connection, signatures, token approvals, transactions, or broadcast/receipt follow-up.
+
+This continuation raises the bar from "clearer console" to a consumer-ready DeFi usage flow: start from wallet readiness, choose an app, connect only when the wallet is actually ready, promote the current approval in plain language, and keep low-level provider/debug surfaces in System.
+
+## Scope
+
+- Rework the trusted DeFi tab layout around current app, wallet access, next action, pending approval, and latest outcome.
+- Rework the Activity tab around recent outcome, pending receipt state, failed/retry guidance, and transaction history.
+- Add a first-screen DeFi journey surface that tells ordinary users what is ready, what to do next, and what FRAMKey will still protect.
+- Make Home route users toward the next sensible wallet action instead of exposing device/system terminology first.
+- Rewrite primary approval titles, button labels, and badges toward user intent and consequence while preserving access to technical details.
+- Keep app launch, connection management, review queue, and recent transaction status visible in the DeFi flow.
+- Make review cards lead with user intent and consequence, while moving raw method/params detail behind secondary affordances.
+- Keep compatibility checks, provider events, raw command output, and low-level readiness detail in System.
+
+## Invariants
+
+- Do not change signing, transaction, Permit, account-grant, network-switch, or watch-asset authorization policy.
+- Do not grant untrusted dApps filesystem, Keychain, GBxCart, signer-helper, recovery, backup, or secret access.
+- Do not log or expose raw params, calldata, signatures, RPC URLs, Alchemy tokens, wallet secret, KEK, DEK, RRK, or recovery shares.
+- Request Review must remain visible across workspaces so pending approvals are not hidden.
+
+## Likely Files
+
+- `apps/framkey-desktop/ui/index.html`
+- `apps/framkey-desktop/ui/main.js`
+- `apps/framkey-desktop/ui/styles.css`
+- `README.md`
+- `docs/tauri-defi-browser.md`
+
+## Verification
+
+- `node --check apps/framkey-desktop/ui/main.js`
+- `cargo fmt --all -- --check`
+- `cargo check -p framkey-desktop`
+- Runtime UI smoke in mock/local-simulation mode if the app can be started cleanly.
+
+## Main Risks
+
+- Over-simplifying approvals could hide critical risk details; the design must surface action, risk, counterparty, and impact before technical details.
+- Sharing transaction outcome information between DeFi and Activity may duplicate content, so DeFi should show the latest actionable outcome while Activity remains the deeper history page.
+- The tabs should improve the DeFi user journey without making System diagnostics harder to reach during development.
+- Visual polish should not turn into a wholesale app rewrite unless a layout issue blocks the consumer flow.
+
 # Keychain Helper Authorization
 
 Status: active
