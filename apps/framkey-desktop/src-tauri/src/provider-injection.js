@@ -87,7 +87,6 @@
     rdns: "dev.framkey",
   };
   const PROVIDER_SMOKE_TIMEOUT_MS = 30_000;
-  const PROVIDER_SMOKE_MESSAGE_HEX = "0x4652414d4b65792072656d6f746520736d6f6b65";
   const PROVIDER_SMOKE_TX_TO = "0x0000000000000000000000000000000000000001";
   const PROVIDER_SMOKE_PERMIT_TOKEN = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
   const PROVIDER_SMOKE_PERMIT2_CONTRACT = "0x000000000022d473030f116ddee9f6b43ac78ba3";
@@ -622,7 +621,7 @@
       const account = connectedAccounts[0] ?? provider.selectedAddress;
       if (account) {
         await providerSmokeRequest(provider, "personal_sign", [
-          PROVIDER_SMOKE_MESSAGE_HEX,
+          providerSmokeSiweMessage(account, provider.chainId),
           account,
         ]);
         await providerSmokeRequest(provider, "eth_signTypedData_v4", [
@@ -693,6 +692,52 @@
         sigDeadline: deadline,
       },
     };
+  }
+
+  function providerSmokeSiweMessage(account, chainIdHex) {
+    const origin = providerSmokeOrigin();
+    const domain = providerSmokeAuthority(origin);
+    const chainId = decimalChainId(chainIdHex) ?? "1";
+    const issuedAt = providerSmokeTimestamp(Date.now());
+    const expirationTime = providerSmokeTimestamp(Date.now() + 5 * 60_000);
+    const nonce = `FRAMKey${Math.floor(Date.now() / 1000).toString(36)}`;
+    return [
+      `${domain} wants you to sign in with your Ethereum account:`,
+      account,
+      "",
+      "FRAMKey remote smoke",
+      "",
+      `URI: ${origin}`,
+      "Version: 1",
+      `Chain ID: ${chainId}`,
+      `Nonce: ${nonce}`,
+      `Issued At: ${issuedAt}`,
+      `Expiration Time: ${expirationTime}`,
+    ].join("\n");
+  }
+
+  function providerSmokeTimestamp(ms) {
+    return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+  }
+
+  function providerSmokeOrigin() {
+    const origin = window.location?.origin;
+    if (typeof origin === "string" && origin && origin !== "null") {
+      return origin;
+    }
+    const href = window.location?.href;
+    if (typeof href === "string") {
+      const match = href.match(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]+)/);
+      if (match) {
+        return match[1];
+      }
+    }
+    return "framkey://local-dapp";
+  }
+
+  function providerSmokeAuthority(origin) {
+    const withoutScheme = String(origin).replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, "");
+    return withoutScheme.split(/[/?#]/, 1)[0] || "local-dapp";
   }
 
   function normalizeChainIdHex(chainIdHex) {

@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    decoder::{is_max_u256, looks_like_eth_address, overrideable_policy_blocker, policy_blocker},
+    decoder::{is_max_u256, looks_like_eth_address, policy_blocker},
     model::{
         ApprovalChange, AssetTransfer, PolicyBlocker, SimulationMode, SimulationStatus,
         TokenAmount, TransactionImpactItem, TransactionImpactKind, TransactionImpactSummary,
@@ -17,23 +17,16 @@ use crate::{
 };
 
 const MAX_SWAP_DEADLINE_SECONDS_FROM_NOW: u64 = 24 * 60 * 60;
+const MAX_PERMIT_DEADLINE_SECONDS_FROM_NOW: u64 = 90 * 24 * 60 * 60;
+const MAX_PERMIT2_EXPIRATION_SECONDS_FROM_NOW: u64 = 90 * 24 * 60 * 60;
 const AAVE_BLOCK_HEALTH_FACTOR_WAD: &str = "1200000000000000000";
-const AAVE_SAFE_HEALTH_FACTOR_WAD: &str = "1500000000000000000";
+const AAVE_CONSERVATIVE_HEALTH_FACTOR_WAD: &str = "2000000000000000000";
+const MAX_U160_DECIMAL: &str = "1461501637330902918203684832716283019655932542975";
 
 pub fn evaluate_transaction_policy(
     report: &TransactionSimulationReport,
 ) -> TransactionPolicyEvaluation {
     let mut blockers = Vec::new();
-
-    let live_simulated = report.mode == SimulationMode::AlchemyRpc
-        && report.status == SimulationStatus::ProviderSimulated
-        && report.provider_evidence.is_some();
-    if !live_simulated {
-        blockers.push(overrideable_policy_blocker(
-            "live_simulation_required",
-            "transaction signing has no live third-party simulation result",
-        ));
-    }
 
     if report.status == SimulationStatus::InvalidRequest {
         blockers.push(policy_blocker(
@@ -53,7 +46,7 @@ pub fn evaluate_transaction_policy(
         .iter()
         .any(|warning| warning.code == "unknown_function_selector")
     {
-        blockers.push(overrideable_policy_blocker(
+        blockers.push(policy_blocker(
             "unknown_calldata",
             "transaction calldata is not covered by the local decoder",
         ));
@@ -61,9 +54,19 @@ pub fn evaluate_transaction_policy(
     if report
         .warnings
         .iter()
+        .any(|warning| warning.code == "empty_transaction")
+    {
+        blockers.push(policy_blocker(
+            "empty_transaction",
+            "transaction has no native value and no supported calldata",
+        ));
+    }
+    if report
+        .warnings
+        .iter()
         .any(|warning| warning.code == "unlimited_token_approval")
     {
-        blockers.push(overrideable_policy_blocker(
+        blockers.push(policy_blocker(
             "high_risk_unlimited_approval",
             "token approval grants the maximum uint256 allowance",
         ));
@@ -73,7 +76,7 @@ pub fn evaluate_transaction_policy(
         .iter()
         .any(|warning| warning.code == "operator_approval_for_all")
     {
-        blockers.push(overrideable_policy_blocker(
+        blockers.push(policy_blocker(
             "high_risk_operator_approval",
             "operator approval grants transfer authority for all matching tokens",
         ));
@@ -83,12 +86,13 @@ pub fn evaluate_transaction_policy(
         .iter()
         .any(|approval| unknown_active_approval_authority(&report.chain_id, approval))
     {
-        blockers.push(overrideable_policy_blocker(
+        blockers.push(policy_blocker(
             "unknown_approval_authority",
             "approval grants token authority to an unrecognized spender or operator",
         ));
     }
     add_protocol_semantic_blockers(report, &mut blockers);
+    add_supported_operation_blocker(report, &mut blockers);
 
     let has_blocking = blockers.iter().any(|blocker| !blocker.overrideable);
     let has_overrideable = blockers.iter().any(|blocker| blocker.overrideable);
@@ -120,21 +124,39 @@ fn add_protocol_semantic_blockers(
     };
     match call.standard.as_str() {
         "uniswap_universal_router" => {
+            add_protocol_counterparty_blocker(report, blockers, "Uniswap");
             add_universal_router_blockers(report, blockers);
         }
-        "multicall" => push_overrideable_blocker(
+        "multicall" => push_policy_blocker(
             blockers,
             "multicall_semantics_incomplete",
             "multicall nested calls are not fully decoded locally",
         ),
         "uniswap_v2_router" | "uniswap_v3_swap_router" => {
+            add_protocol_counterparty_blocker(report, blockers, "Uniswap");
             add_uniswap_swap_blockers(report, blockers);
         }
         "aave_v3_pool" => {
+            add_protocol_counterparty_blocker(report, blockers, "Aave");
             add_aave_blockers(report, blockers);
         }
         _ => {}
     }
+}
+
+fn add_protocol_counterparty_blocker(
+    report: &TransactionSimulationReport,
+    blockers: &mut Vec<PolicyBlocker>,
+    protocol: &str,
+) {
+    if transaction_counterparty_matches_protocol(report, protocol) {
+        return;
+    }
+    push_policy_blocker(
+        blockers,
+        "unknown_protocol_counterparty",
+        "protocol transaction target is not in the curated counterparty registry",
+    );
 }
 
 fn add_universal_router_blockers(
@@ -148,12 +170,13 @@ fn add_universal_router_blockers(
         .and_then(parse_decimal_usize)
         .is_some_and(|count| count > 0)
     {
-        push_overrideable_blocker(
+        push_policy_blocker(
             blockers,
             "universal_router_semantics_incomplete",
             "Universal Router contains commands the local decoder does not fully support",
         );
     }
+    add_universal_router_permit2_blockers(report, blockers);
     add_uniswap_swap_blockers(report, blockers);
 }
 
@@ -164,40 +187,49 @@ fn add_uniswap_swap_blockers(
     let Some(call) = &report.decoded_call else {
         return;
     };
+    let contains_swap = uniswap_call_contains_swap(call);
     if decoded_args(call, "amountOutMin")
         .chain(decoded_args(call, "amountOutMinimum"))
         .any(|amount| amount == "0")
     {
-        push_overrideable_blocker(
+        push_policy_blocker(
             blockers,
             "uniswap_zero_slippage_floor",
             "Uniswap swap has a zero minimum output amount",
         );
     }
 
-    if let Some(deadline) = decoded_arg(call, "deadline") {
-        match parse_decimal_u64(deadline) {
-            Some(deadline) => {
-                let now = current_unix_seconds();
-                if deadline <= now {
-                    push_overrideable_blocker(
-                        blockers,
-                        "swap_deadline_expired",
-                        "swap deadline is expired",
-                    );
-                } else if deadline.saturating_sub(now) > MAX_SWAP_DEADLINE_SECONDS_FROM_NOW {
-                    push_overrideable_blocker(
-                        blockers,
-                        "swap_deadline_too_far",
-                        "swap deadline is too far in the future for ordinary approval",
-                    );
+    if contains_swap {
+        if let Some(deadline) = decoded_arg(call, "deadline") {
+            match parse_decimal_u64(deadline) {
+                Some(deadline) => {
+                    let now = current_unix_seconds();
+                    if deadline <= now {
+                        push_policy_blocker(
+                            blockers,
+                            "swap_deadline_expired",
+                            "swap deadline is expired",
+                        );
+                    } else if deadline.saturating_sub(now) > MAX_SWAP_DEADLINE_SECONDS_FROM_NOW {
+                        push_policy_blocker(
+                            blockers,
+                            "swap_deadline_too_far",
+                            "swap deadline is too far in the future for ordinary approval",
+                        );
+                    }
                 }
+                None => push_policy_blocker(
+                    blockers,
+                    "swap_deadline_invalid",
+                    "swap deadline is not a valid unix timestamp",
+                ),
             }
-            None => push_overrideable_blocker(
+        } else {
+            push_policy_blocker(
                 blockers,
-                "swap_deadline_invalid",
-                "swap deadline is not a valid unix timestamp",
-            ),
+                "swap_deadline_missing",
+                "Uniswap swap must include a bounded deadline",
+            );
         }
     }
 
@@ -209,11 +241,105 @@ fn add_uniswap_swap_blockers(
                 looks_like_eth_address(recipient) && !from.eq_ignore_ascii_case(recipient)
             })
     {
-        push_overrideable_blocker(
+        push_policy_blocker(
             blockers,
             "swap_third_party_recipient",
             "swap output recipient differs from the signing account",
         );
+    }
+}
+
+fn add_universal_router_permit2_blockers(
+    report: &TransactionSimulationReport,
+    blockers: &mut Vec<PolicyBlocker>,
+) {
+    let Some(call) = &report.decoded_call else {
+        return;
+    };
+    let Some(permit_count) = decoded_arg(call, "permit2PermitCount").and_then(parse_decimal_usize)
+    else {
+        return;
+    };
+    if permit_count == 0 {
+        return;
+    }
+
+    let amounts = decoded_args(call, "permit2Amount").collect::<Vec<_>>();
+    let expirations = decoded_args(call, "permit2Expiration").collect::<Vec<_>>();
+    let sig_deadlines = decoded_args(call, "permit2SigDeadline").collect::<Vec<_>>();
+    if amounts.len() < permit_count
+        || expirations.len() < permit_count
+        || sig_deadlines.len() < permit_count
+    {
+        push_policy_blocker(
+            blockers,
+            "universal_router_permit2_semantics_incomplete",
+            "Universal Router Permit2 permit command is not fully decoded",
+        );
+        return;
+    }
+
+    if amounts.iter().take(permit_count).any(|amount| {
+        compare_decimal_strings(amount, MAX_U160_DECIMAL)
+            .is_some_and(|ordering| ordering != Ordering::Less)
+    }) {
+        push_policy_blocker(
+            blockers,
+            "universal_router_permit2_unbounded_amount",
+            "Universal Router Permit2 amount must be below the maximum uint160 allowance",
+        );
+    }
+
+    for expiration in expirations.into_iter().take(permit_count) {
+        add_bounded_unix_deadline_blocker(
+            blockers,
+            expiration,
+            "universal_router_permit2_expiration_invalid",
+            "Universal Router Permit2 allowance expiration must be a valid future unix timestamp",
+            MAX_PERMIT2_EXPIRATION_SECONDS_FROM_NOW,
+        );
+    }
+    for sig_deadline in sig_deadlines.into_iter().take(permit_count) {
+        add_bounded_unix_deadline_blocker(
+            blockers,
+            sig_deadline,
+            "universal_router_permit2_sig_deadline_invalid",
+            "Universal Router Permit2 signature deadline must be a valid future unix timestamp",
+            MAX_PERMIT_DEADLINE_SECONDS_FROM_NOW,
+        );
+    }
+}
+
+fn add_bounded_unix_deadline_blocker(
+    blockers: &mut Vec<PolicyBlocker>,
+    value: &str,
+    invalid_code: &str,
+    invalid_message: &str,
+    max_seconds_from_now: u64,
+) {
+    let Some(deadline) = parse_decimal_u64(value) else {
+        push_policy_blocker(blockers, invalid_code, invalid_message);
+        return;
+    };
+    let now = current_unix_seconds();
+    if deadline <= now {
+        push_policy_blocker(blockers, invalid_code, invalid_message);
+    } else if deadline.saturating_sub(now) > max_seconds_from_now {
+        push_policy_blocker(
+            blockers,
+            "universal_router_permit2_deadline_too_far",
+            "Universal Router Permit2 deadline or expiration is too far in the future for ordinary approval",
+        );
+    }
+}
+
+fn uniswap_call_contains_swap(call: &crate::model::DecodedCall) -> bool {
+    match call.standard.as_str() {
+        "uniswap_v2_router" | "uniswap_v3_swap_router" => true,
+        "uniswap_universal_router" => decoded_arg(call, "swapCount")
+            .and_then(parse_decimal_usize)
+            .is_some_and(|count| count > 0),
+        _ => false,
     }
 }
 
@@ -227,7 +353,7 @@ fn add_aave_blockers(report: &TransactionSimulationReport, blockers: &mut Vec<Po
         && looks_like_eth_address(on_behalf_of)
         && !from.eq_ignore_ascii_case(on_behalf_of)
     {
-        push_overrideable_blocker(
+        push_policy_blocker(
             blockers,
             "aave_third_party_account",
             "Aave request acts on behalf of an account different from the signer",
@@ -240,7 +366,7 @@ fn add_aave_blockers(report: &TransactionSimulationReport, blockers: &mut Vec<Po
         && looks_like_eth_address(to)
         && !from.eq_ignore_ascii_case(to)
     {
-        push_overrideable_blocker(
+        push_policy_blocker(
             blockers,
             "aave_third_party_withdraw_recipient",
             "Aave withdraw sends assets to an account different from the signer",
@@ -248,25 +374,28 @@ fn add_aave_blockers(report: &TransactionSimulationReport, blockers: &mut Vec<Po
     }
 
     match call.function.as_str() {
-        "borrow(address,uint256,uint256,uint16,address)" => add_aave_health_factor_blocker(
+        "borrow(address,uint256,uint256,uint16,address)" => add_aave_risk_evidence_blocker(
             report,
             blockers,
             "aave_borrow_health_factor_unknown",
             "Aave borrow requires account health-factor evidence",
+            false,
         ),
-        "withdraw(address,uint256,address)" => add_aave_health_factor_blocker(
+        "withdraw(address,uint256,address)" => add_aave_risk_evidence_blocker(
             report,
             blockers,
             "aave_withdraw_health_factor_unknown",
             "Aave withdraw requires account health-factor evidence",
+            true,
         ),
         "setUserUseReserveAsCollateral(address,bool)" => {
             if decoded_arg(call, "useAsCollateral") == Some("false") {
-                add_aave_health_factor_blocker(
+                add_aave_risk_evidence_blocker(
                     report,
                     blockers,
                     "aave_collateral_disable_risk",
                     "disabling Aave collateral requires account health-factor evidence",
+                    true,
                 );
             }
         }
@@ -274,24 +403,26 @@ fn add_aave_blockers(report: &TransactionSimulationReport, blockers: &mut Vec<Po
     }
 }
 
-fn add_aave_health_factor_blocker(
+fn add_aave_risk_evidence_blocker(
     report: &TransactionSimulationReport,
     blockers: &mut Vec<PolicyBlocker>,
     unknown_code: &str,
     unknown_message: &str,
+    no_debt_is_safe: bool,
 ) {
-    match aave_health_factor_evidence(report) {
-        AaveHealthFactorEvidence::Healthy => push_overrideable_blocker(
+    match aave_risk_evidence(report, no_debt_is_safe) {
+        AaveRiskEvidence::Conservative => {}
+        AaveRiskEvidence::DryRunMissing => push_policy_blocker(
             blockers,
-            "aave_post_transaction_health_factor_unknown",
-            "Aave current health-factor evidence does not prove post-transaction account safety",
+            "aave_transaction_dry_run_missing",
+            "Aave risk-changing action requires a successful eth_call dry run of the exact transaction",
         ),
-        AaveHealthFactorEvidence::Caution => push_overrideable_blocker(
+        AaveRiskEvidence::Caution => push_policy_blocker(
             blockers,
             "aave_health_factor_caution",
-            "Aave account health factor is below the ordinary-approval threshold",
+            "Aave current health factor is below the conservative approval threshold",
         ),
-        AaveHealthFactorEvidence::Unsafe => {
+        AaveRiskEvidence::Unsafe => {
             if blockers
                 .iter()
                 .any(|blocker| blocker.code == "aave_health_factor_liquidation_risk")
@@ -303,50 +434,179 @@ fn add_aave_health_factor_blocker(
                 "Aave account health factor is too close to liquidation for signing",
             ));
         }
-        AaveHealthFactorEvidence::Missing => {
-            push_overrideable_blocker(blockers, unknown_code, unknown_message);
+        AaveRiskEvidence::Missing => {
+            push_policy_blocker(blockers, unknown_code, unknown_message);
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AaveHealthFactorEvidence {
-    Healthy,
+enum AaveRiskEvidence {
+    Conservative,
+    DryRunMissing,
     Caution,
     Unsafe,
     Missing,
 }
 
-fn aave_health_factor_evidence(report: &TransactionSimulationReport) -> AaveHealthFactorEvidence {
-    let Some(health_factor) = report
+fn aave_risk_evidence(
+    report: &TransactionSimulationReport,
+    no_debt_is_safe: bool,
+) -> AaveRiskEvidence {
+    let Some(aave) = report
         .protocol_evidence
         .as_ref()
         .and_then(|evidence| evidence.get("aave"))
         .and_then(|aave| {
             (aave.get("status").and_then(serde_json::Value::as_str) == Some("ok")).then_some(aave)
         })
-        .and_then(|aave| aave.get("healthFactor").and_then(serde_json::Value::as_str))
     else {
-        return AaveHealthFactorEvidence::Missing;
+        return AaveRiskEvidence::Missing;
     };
-    if compare_decimal_strings(health_factor, AAVE_BLOCK_HEALTH_FACTOR_WAD)
-        .is_some_and(|ordering| ordering == Ordering::Less)
-    {
-        return AaveHealthFactorEvidence::Unsafe;
+
+    let total_debt_base = aave
+        .get("totalDebtBase")
+        .and_then(serde_json::Value::as_str);
+    if no_debt_is_safe && total_debt_base == Some("0") {
+        return if aave_transaction_dry_run_ok(aave) {
+            AaveRiskEvidence::Conservative
+        } else {
+            AaveRiskEvidence::DryRunMissing
+        };
     }
-    if compare_decimal_strings(health_factor, AAVE_SAFE_HEALTH_FACTOR_WAD)
-        .is_some_and(|ordering| ordering == Ordering::Less)
-    {
-        return AaveHealthFactorEvidence::Caution;
+
+    let Some(health_factor) = aave.get("healthFactor").and_then(serde_json::Value::as_str) else {
+        return AaveRiskEvidence::Missing;
+    };
+    let Some(block_threshold_ordering) =
+        compare_decimal_strings(health_factor, AAVE_BLOCK_HEALTH_FACTOR_WAD)
+    else {
+        return AaveRiskEvidence::Missing;
+    };
+    if block_threshold_ordering == Ordering::Less {
+        return AaveRiskEvidence::Unsafe;
     }
-    AaveHealthFactorEvidence::Healthy
+    if !aave_transaction_dry_run_ok(aave) {
+        return AaveRiskEvidence::DryRunMissing;
+    }
+    let Some(conservative_threshold_ordering) =
+        compare_decimal_strings(health_factor, AAVE_CONSERVATIVE_HEALTH_FACTOR_WAD)
+    else {
+        return AaveRiskEvidence::Missing;
+    };
+    if conservative_threshold_ordering == Ordering::Less {
+        return AaveRiskEvidence::Caution;
+    }
+    AaveRiskEvidence::Conservative
 }
 
-fn push_overrideable_blocker(blockers: &mut Vec<PolicyBlocker>, code: &str, message: &str) {
+fn aave_transaction_dry_run_ok(aave: &serde_json::Value) -> bool {
+    aave.get("transactionDryRun")
+        .and_then(|dry_run| dry_run.get("status"))
+        .and_then(serde_json::Value::as_str)
+        == Some("ok")
+}
+
+fn add_supported_operation_blocker(
+    report: &TransactionSimulationReport,
+    blockers: &mut Vec<PolicyBlocker>,
+) {
+    if report.status == SimulationStatus::InvalidRequest
+        || report.status == SimulationStatus::ProviderFailed
+        || supported_transaction_intent(report)
+    {
+        return;
+    }
+    push_policy_blocker(
+        blockers,
+        "unsupported_transaction_intent",
+        "transaction is outside FRAMKey's transfer, Uniswap, and Aave allowlist",
+    );
+}
+
+fn supported_transaction_intent(report: &TransactionSimulationReport) -> bool {
+    is_native_transfer(report)
+        || is_erc20_transfer(report)
+        || is_known_protocol_approval(report)
+        || is_curated_protocol_call(report, "Uniswap")
+        || is_curated_protocol_call(report, "Aave")
+}
+
+fn is_native_transfer(report: &TransactionSimulationReport) -> bool {
+    report.native_value.is_some()
+        && report.decoded_call.is_none()
+        && report.transaction.selector.is_none()
+        && report.transaction.data_bytes.unwrap_or(0) == 0
+        && report.asset_transfers.is_empty()
+        && report.approvals.is_empty()
+}
+
+fn is_erc20_transfer(report: &TransactionSimulationReport) -> bool {
+    let Some(call) = &report.decoded_call else {
+        return false;
+    };
+    call.standard == "erc20"
+        && call.function == "transfer(address,uint256)"
+        && report.native_value.is_none()
+        && report.approvals.is_empty()
+        && report.asset_transfers.len() == 1
+}
+
+fn is_known_protocol_approval(report: &TransactionSimulationReport) -> bool {
+    let Some(call) = &report.decoded_call else {
+        return false;
+    };
+    if call.standard != "erc20" || call.function != "approve(address,uint256)" {
+        return false;
+    }
+    let [approval] = report.approvals.as_slice() else {
+        return false;
+    };
+    let Some(spender) = approval.spender.as_deref() else {
+        return false;
+    };
+    known_counterparty(&report.chain_id, spender)
+        .is_some_and(|known| matches!(known.protocol, "Uniswap" | "Aave"))
+}
+
+fn is_curated_protocol_call(report: &TransactionSimulationReport, protocol: &str) -> bool {
+    let Some(call) = &report.decoded_call else {
+        return false;
+    };
+    let standard_matches = match protocol {
+        "Uniswap" => matches!(
+            call.standard.as_str(),
+            "uniswap_v2_router" | "uniswap_v3_swap_router" | "uniswap_universal_router"
+        ),
+        "Aave" => call.standard == "aave_v3_pool",
+        _ => false,
+    };
+    standard_matches && transaction_counterparty_matches_protocol(report, protocol)
+}
+
+fn transaction_counterparty_matches_protocol(
+    report: &TransactionSimulationReport,
+    protocol: &str,
+) -> bool {
+    report
+        .transaction
+        .to
+        .as_deref()
+        .or_else(|| {
+            report
+                .decoded_call
+                .as_ref()
+                .and_then(|call| call.contract.as_deref())
+        })
+        .and_then(|address| known_counterparty(&report.chain_id, address))
+        .is_some_and(|known| known.protocol == protocol)
+}
+
+fn push_policy_blocker(blockers: &mut Vec<PolicyBlocker>, code: &str, message: &str) {
     if blockers.iter().any(|blocker| blocker.code == code) {
         return;
     }
-    blockers.push(overrideable_policy_blocker(code, message));
+    blockers.push(policy_blocker(code, message));
 }
 
 fn decoded_arg<'a>(call: &'a crate::model::DecodedCall, name: &str) -> Option<&'a str> {
@@ -857,12 +1117,24 @@ pub fn evaluate_transaction_risk(
     if let Some(reason) = protocol_intent_reason(report) {
         reasons.push(reason);
     }
-    if policy.can_sign {
+    let live_simulated = report.mode == SimulationMode::AlchemyRpc
+        && report.status == SimulationStatus::ProviderSimulated
+        && report.provider_evidence.is_some();
+    if live_simulated {
         reasons.push(TransactionRiskReason {
             source: "simulation".to_owned(),
             code: "live_simulation_present".to_owned(),
             title: "Live simulation present".to_owned(),
             message: "a live transaction simulation result is attached".to_owned(),
+            severity: WarningSeverity::Info,
+        });
+    } else if policy.can_sign {
+        reasons.push(TransactionRiskReason {
+            source: "policy".to_owned(),
+            code: "local_allowlist_match".to_owned(),
+            title: "Local allowlist match".to_owned(),
+            message: "local decoder matched a supported transfer or curated protocol action"
+                .to_owned(),
             severity: WarningSeverity::Info,
         });
     }
@@ -880,22 +1152,31 @@ pub fn evaluate_transaction_risk(
         matches!(
             blocker.code.as_str(),
             "unknown_calldata"
+                | "empty_transaction"
                 | "high_risk_unlimited_approval"
                 | "high_risk_operator_approval"
                 | "unknown_approval_authority"
+                | "unknown_protocol_counterparty"
+                | "unsupported_transaction_intent"
                 | "universal_router_semantics_incomplete"
                 | "multicall_semantics_incomplete"
                 | "uniswap_zero_slippage_floor"
                 | "swap_deadline_expired"
                 | "swap_deadline_too_far"
                 | "swap_deadline_invalid"
+                | "swap_deadline_missing"
                 | "swap_third_party_recipient"
+                | "universal_router_permit2_semantics_incomplete"
+                | "universal_router_permit2_unbounded_amount"
+                | "universal_router_permit2_expiration_invalid"
+                | "universal_router_permit2_sig_deadline_invalid"
+                | "universal_router_permit2_deadline_too_far"
                 | "aave_third_party_account"
                 | "aave_third_party_withdraw_recipient"
                 | "aave_borrow_health_factor_unknown"
                 | "aave_withdraw_health_factor_unknown"
                 | "aave_collateral_disable_risk"
-                | "aave_post_transaction_health_factor_unknown"
+                | "aave_transaction_dry_run_missing"
                 | "aave_health_factor_caution"
         )
     });
@@ -914,9 +1195,13 @@ pub fn evaluate_transaction_risk(
     };
 
     let (title, message) = match level {
-        TransactionRiskLevel::Low => (
+        TransactionRiskLevel::Low if live_simulated => (
             "Ready for ordinary approval",
             "live simulation succeeded and policy found no blockers",
+        ),
+        TransactionRiskLevel::Low => (
+            "Ready for ordinary approval",
+            "local decoder matched an allowed transfer or curated protocol action",
         ),
         TransactionRiskLevel::Caution if policy.override_allowed => (
             "High-risk confirmation required",
@@ -951,22 +1236,31 @@ fn policy_blocker_title(code: &str) -> &'static str {
         "invalid_transaction_request" => "Invalid transaction",
         "simulation_provider_failed" => "Simulation failed",
         "unknown_calldata" => "Unknown calldata",
+        "empty_transaction" => "Empty transaction",
         "high_risk_unlimited_approval" => "Unlimited token approval",
         "high_risk_operator_approval" => "Approval for all",
         "unknown_approval_authority" => "Unknown approval authority",
+        "unknown_protocol_counterparty" => "Unknown protocol counterparty",
+        "unsupported_transaction_intent" => "Unsupported transaction intent",
         "universal_router_semantics_incomplete" => "Universal Router review incomplete",
         "multicall_semantics_incomplete" => "Multicall review incomplete",
         "uniswap_zero_slippage_floor" => "Zero swap output minimum",
         "swap_deadline_expired" => "Expired swap deadline",
         "swap_deadline_too_far" => "Long swap deadline",
         "swap_deadline_invalid" => "Invalid swap deadline",
+        "swap_deadline_missing" => "Missing swap deadline",
         "swap_third_party_recipient" => "Third-party swap recipient",
+        "universal_router_permit2_semantics_incomplete" => "Permit2 review incomplete",
+        "universal_router_permit2_unbounded_amount" => "Unbounded Permit2 amount",
+        "universal_router_permit2_expiration_invalid" => "Invalid Permit2 expiration",
+        "universal_router_permit2_sig_deadline_invalid" => "Invalid Permit2 signature deadline",
+        "universal_router_permit2_deadline_too_far" => "Long Permit2 deadline",
         "aave_third_party_account" => "Third-party Aave account",
         "aave_third_party_withdraw_recipient" => "Third-party Aave withdraw recipient",
         "aave_borrow_health_factor_unknown" => "Aave borrow risk",
         "aave_withdraw_health_factor_unknown" => "Aave withdraw risk",
         "aave_collateral_disable_risk" => "Aave collateral risk",
-        "aave_post_transaction_health_factor_unknown" => "Aave post-transaction risk",
+        "aave_transaction_dry_run_missing" => "Aave transaction dry run missing",
         "aave_health_factor_caution" => "Aave health factor caution",
         "aave_health_factor_liquidation_risk" => "Aave liquidation risk",
         _ => "Policy reason",
@@ -1005,6 +1299,7 @@ fn policy_blockers_cover_warning(blockers: &[PolicyBlocker], warning_code: &str)
                     | "simulation_provider_error"
                     | "simulation_provider_result_error"
             ) | ("unknown_calldata", "unknown_function_selector")
+                | ("empty_transaction", "empty_transaction")
                 | ("high_risk_unlimited_approval", "unlimited_token_approval")
                 | ("high_risk_operator_approval", "operator_approval_for_all")
         )

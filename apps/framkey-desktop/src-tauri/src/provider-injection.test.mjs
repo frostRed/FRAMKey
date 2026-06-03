@@ -385,10 +385,18 @@ test("interactive remote provider smoke connects, signs, and hides signature pre
       return { id: request.id, result: [account] };
     }
     if (request.method === "personal_sign") {
-      assert.deepEqual(plain(request.params), [
-        "0x4652414d4b65792072656d6f746520736d6f6b65",
-        account,
-      ]);
+      const params = plain(request.params);
+      assert.equal(params[1], account);
+      assert.equal(typeof params[0], "string");
+      assert.equal(
+        params[0].startsWith("app.example wants you to sign in with your Ethereum account:"),
+        true,
+      );
+      assert.equal(params[0].includes(`\n${account}\n\n`), true);
+      assert.equal(params[0].includes("\nURI: https://app.example\n"), true);
+      assert.equal(params[0].includes("\nChain ID: 8453\n"), true);
+      assert.match(params[0], /\nNonce: [A-Za-z0-9]{8,96}\n/);
+      assert.match(params[0], /\nExpiration Time: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/);
       return { id: request.id, result: signature };
     }
     if (request.method === "eth_signTypedData_v4") {

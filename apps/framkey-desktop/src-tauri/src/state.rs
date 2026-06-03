@@ -228,8 +228,8 @@ impl AppState {
 
     pub(crate) fn switch_session_chain(
         &self,
-        chain: SupportedAlchemyChain,
-        alchemy_token: &str,
+        chain: SupportedChain,
+        alchemy_token: Option<&str>,
     ) -> Result<DesktopConfig> {
         let mut guard = self
             .config
@@ -239,7 +239,7 @@ impl AppState {
             *guard = Some(DesktopConfig::load()?);
         }
         let config = guard.as_mut().expect("config initialized above");
-        config.switch_to_alchemy_chain(chain, alchemy_token)?;
+        config.switch_to_supported_chain(chain, alchemy_token)?;
         Ok(config.clone())
     }
 
@@ -255,7 +255,7 @@ impl AppState {
                     &request.params,
                     &config.chain_id,
                 );
-                enrich_aave_account_evidence(config, &mut review);
+                enrich_aave_account_evidence(config, request, &mut review);
                 Some(review)
             }
             _ => None,

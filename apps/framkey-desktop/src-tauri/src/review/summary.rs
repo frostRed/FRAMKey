@@ -6,11 +6,17 @@ use framkey_simulation::{
     known_protocol_counterparty, local_transaction_review,
 };
 use serde_json::{Map, Value, json};
+use tauri::Url;
 
 use super::*;
 
 const MAX_PERMIT_DEADLINE_SECONDS_FROM_NOW: u64 = 90 * 24 * 60 * 60;
 const MAX_PERMIT2_EXPIRATION_SECONDS_FROM_NOW: u64 = 90 * 24 * 60 * 60;
+const MAX_SIWE_EXPIRATION_SECONDS_FROM_NOW: u64 = 30 * 60;
+const MAX_SIWE_ISSUED_AT_AGE_SECONDS: u64 = 24 * 60 * 60;
+const MAX_SIWE_CLOCK_SKEW_SECONDS: u64 = 5 * 60;
+const SIWE_NONCE_MIN_LEN: usize = 8;
+const SIWE_NONCE_MAX_LEN: usize = 96;
 const MAX_U256_DECIMAL: &str =
     "115792089237316195423570985008687907853269984665640564039457584007913129639935";
 const MAX_U160_DECIMAL: &str = "1461501637330902918203684832716283019655932542975";
@@ -22,11 +28,12 @@ pub(crate) fn summarize_review_request(
     method: &str,
     params: &Value,
     chain_id: &str,
+    origin: Option<&str>,
     transaction_review: Option<TransactionReviewReport>,
     transaction_asset_context: Option<Value>,
 ) -> Value {
     match kind {
-        ReviewMethodKind::PersonalSign => summarize_personal_sign(params),
+        ReviewMethodKind::PersonalSign => summarize_personal_sign(params, origin, chain_id),
         ReviewMethodKind::AccountConnection => summarize_account_connection(method, params),
         ReviewMethodKind::NetworkSwitch => summarize_network_management(method, params, chain_id),
         ReviewMethodKind::WatchAsset => summarize_watch_asset(params, chain_id),
@@ -77,9 +84,9 @@ pub(crate) fn summarize_network_management(
         "switch_network"
     };
     let rpc_source = if method == "wallet_addEthereumChain" {
-        "trusted_alchemy_only"
+        "trusted_chain_endpoint"
     } else {
-        "trusted_alchemy_session"
+        "trusted_chain_session"
     };
 
     json!({
@@ -157,16 +164,319 @@ pub(crate) fn summarize_account_connection(method: &str, params: &Value) -> Valu
     })
 }
 
-pub(crate) fn summarize_personal_sign(params: &Value) -> Value {
+pub(crate) fn summarize_personal_sign(
+    params: &Value,
+    origin: Option<&str>,
+    current_chain_id: &str,
+) -> Value {
     let message = array_value(params, 0);
-    let account = array_string(params, 1);
+    let account = array_string(params, 1).filter(|account| looks_like_eth_address(account));
+    let siwe = decode_personal_sign_text(message).and_then(|text| parse_siwe_message(&text));
+    let mut blockers = Vec::new();
+
+    validate_personal_sign_policy(
+        &mut blockers,
+        params,
+        origin,
+        current_chain_id,
+        account,
+        siwe.as_ref().ok(),
+    );
+    if let Err(error) = &siwe {
+        personal_sign_blocker(&mut blockers, error.code, error.message);
+    }
+
     json!({
         "intent": "personal_sign",
         "account": account,
         "message": message.map(payload_summary).unwrap_or(Value::Null),
+        "siwe": personal_sign_siwe_summary(siwe.as_ref()),
+        "policy": {
+            "decision": if blockers.is_empty() { "allowed" } else { "blocked" },
+            "canSign": blockers.is_empty(),
+            "blockers": blockers,
+        },
         "simulation": "not_applicable",
-        "decision": "blocked_before_approval",
+        "decision": if blockers.is_empty() {
+            "requires_trusted_approval"
+        } else {
+            "blocked_before_approval"
+        },
     })
+}
+
+fn decode_personal_sign_text(
+    message: Option<&Value>,
+) -> std::result::Result<String, SiweParseError> {
+    let raw = message.and_then(Value::as_str).ok_or_else(|| {
+        siwe_parse_error(
+            "invalid_personal_sign_params",
+            "personal_sign params must include a string message",
+        )
+    })?;
+    let bytes = personal_sign_message_bytes(raw).map_err(|_| {
+        siwe_parse_error(
+            "invalid_personal_sign_message",
+            "personal_sign message must be valid text or hex-encoded text",
+        )
+    })?;
+    String::from_utf8(bytes).map_err(|_| {
+        siwe_parse_error(
+            "unsupported_personal_sign_message",
+            "personal_sign signing is enabled only for UTF-8 SIWE messages",
+        )
+    })
+}
+
+fn validate_personal_sign_policy(
+    blockers: &mut Vec<Value>,
+    params: &Value,
+    origin: Option<&str>,
+    current_chain_id: &str,
+    account: Option<&str>,
+    siwe: Option<&SiweMessage>,
+) {
+    if params.as_array().is_none() {
+        personal_sign_blocker(
+            blockers,
+            "invalid_personal_sign_params",
+            "personal_sign params must be an array",
+        );
+    }
+    match array_string(params, 1) {
+        Some(address) if looks_like_eth_address(address) => {}
+        Some(_) => personal_sign_blocker(
+            blockers,
+            "invalid_personal_sign_account",
+            "personal_sign params must include a 0x-prefixed EVM account",
+        ),
+        None => personal_sign_blocker(
+            blockers,
+            "missing_personal_sign_account",
+            "personal_sign params must include the connected signer account",
+        ),
+    }
+
+    let Some(siwe) = siwe else {
+        return;
+    };
+
+    let origin_authority = origin.and_then(url_authority);
+    if origin_authority.is_none() {
+        personal_sign_blocker(
+            blockers,
+            "missing_personal_sign_origin",
+            "SIWE personal_sign requires a trusted dApp origin",
+        );
+    }
+
+    let siwe_domain_authority = siwe_domain_authority(&siwe.domain);
+    match (
+        origin_authority.as_deref(),
+        siwe_domain_authority.as_deref(),
+    ) {
+        (Some(origin), Some(domain)) if origin.eq_ignore_ascii_case(domain) => {}
+        (Some(_), Some(_)) => personal_sign_blocker(
+            blockers,
+            "siwe_domain_origin_mismatch",
+            "SIWE domain must match the requesting dApp origin",
+        ),
+        _ => personal_sign_blocker(
+            blockers,
+            "invalid_siwe_domain",
+            "SIWE domain must be a valid host or host:port",
+        ),
+    }
+
+    match (
+        origin_authority.as_deref(),
+        url_authority(&siwe.uri).as_deref(),
+    ) {
+        (Some(origin), Some(uri)) if origin.eq_ignore_ascii_case(uri) => {}
+        (Some(_), Some(_)) => personal_sign_blocker(
+            blockers,
+            "siwe_uri_origin_mismatch",
+            "SIWE URI must match the requesting dApp origin",
+        ),
+        _ => personal_sign_blocker(
+            blockers,
+            "invalid_siwe_uri",
+            "SIWE URI must be an absolute URI for the requesting dApp origin",
+        ),
+    }
+
+    if !looks_like_eth_address(&siwe.address) {
+        personal_sign_blocker(
+            blockers,
+            "invalid_siwe_address",
+            "SIWE address must be a 0x-prefixed EVM address",
+        );
+    } else if let Some(account) = account
+        && !siwe.address.eq_ignore_ascii_case(account)
+    {
+        personal_sign_blocker(
+            blockers,
+            "siwe_account_mismatch",
+            "SIWE address must match the requested signer account",
+        );
+    }
+
+    if siwe.version != "1" {
+        personal_sign_blocker(
+            blockers,
+            "unsupported_siwe_version",
+            "SIWE version must be 1",
+        );
+    }
+
+    match (
+        siwe.chain_id.parse::<u64>().ok(),
+        parse_chain_id_text(current_chain_id),
+    ) {
+        (Some(siwe_chain_id), Some(active_chain_id)) if siwe_chain_id == active_chain_id => {}
+        (Some(_), Some(_)) => personal_sign_blocker(
+            blockers,
+            "siwe_chain_mismatch",
+            "SIWE Chain ID must match the active FRAMKey chain",
+        ),
+        _ => personal_sign_blocker(
+            blockers,
+            "invalid_siwe_chain",
+            "SIWE Chain ID must be a valid decimal chain id",
+        ),
+    }
+
+    if siwe.nonce.len() < SIWE_NONCE_MIN_LEN
+        || siwe.nonce.len() > SIWE_NONCE_MAX_LEN
+        || !siwe.nonce.as_bytes().iter().all(u8::is_ascii_alphanumeric)
+    {
+        personal_sign_blocker(
+            blockers,
+            "invalid_siwe_nonce",
+            "SIWE nonce must be 8-96 alphanumeric characters",
+        );
+    }
+
+    validate_siwe_time_fields(blockers, siwe);
+
+    if !siwe.resources.is_empty() {
+        personal_sign_blocker(
+            blockers,
+            "siwe_resources_not_supported",
+            "SIWE Resources are not supported for ordinary personal_sign signing",
+        );
+    }
+}
+
+fn validate_siwe_time_fields(blockers: &mut Vec<Value>, siwe: &SiweMessage) {
+    let now = current_unix_seconds();
+    match parse_rfc3339_seconds(&siwe.issued_at) {
+        Some(issued_at) if issued_at > now.saturating_add(MAX_SIWE_CLOCK_SKEW_SECONDS) => {
+            personal_sign_blocker(
+                blockers,
+                "siwe_issued_at_invalid",
+                "SIWE Issued At must not be in the future",
+            );
+        }
+        Some(issued_at) if now.saturating_sub(issued_at) > MAX_SIWE_ISSUED_AT_AGE_SECONDS => {
+            personal_sign_blocker(
+                blockers,
+                "siwe_issued_at_too_old",
+                "SIWE Issued At is too old for ordinary signing",
+            );
+        }
+        Some(_) => {}
+        None => personal_sign_blocker(
+            blockers,
+            "siwe_issued_at_invalid",
+            "SIWE Issued At must be a valid RFC3339 UTC timestamp",
+        ),
+    }
+
+    match siwe
+        .expiration_time
+        .as_deref()
+        .and_then(parse_rfc3339_seconds)
+    {
+        Some(expiration_time) if expiration_time <= now => {
+            personal_sign_blocker(
+                blockers,
+                "siwe_expiration_invalid",
+                "SIWE Expiration Time must be in the future",
+            );
+        }
+        Some(expiration_time)
+            if expiration_time.saturating_sub(now) > MAX_SIWE_EXPIRATION_SECONDS_FROM_NOW =>
+        {
+            personal_sign_blocker(
+                blockers,
+                "siwe_expiration_too_far",
+                "SIWE Expiration Time must be no more than 30 minutes in the future",
+            );
+        }
+        Some(_) => {}
+        None => personal_sign_blocker(
+            blockers,
+            "siwe_expiration_missing",
+            "SIWE personal_sign requires a short Expiration Time",
+        ),
+    }
+
+    if let Some(not_before) = &siwe.not_before {
+        match parse_rfc3339_seconds(not_before) {
+            Some(not_before) if not_before > now => personal_sign_blocker(
+                blockers,
+                "siwe_not_before_invalid",
+                "SIWE Not Before must not be in the future",
+            ),
+            Some(_) => {}
+            None => personal_sign_blocker(
+                blockers,
+                "siwe_not_before_invalid",
+                "SIWE Not Before must be a valid RFC3339 UTC timestamp when present",
+            ),
+        }
+    }
+}
+
+fn personal_sign_siwe_summary(siwe: std::result::Result<&SiweMessage, &SiweParseError>) -> Value {
+    match siwe {
+        Ok(siwe) => json!({
+            "status": "ok",
+            "domain": siwe.domain,
+            "address": siwe.address,
+            "statement": siwe.statement.as_deref().map(|statement| preview_string(statement, 160)),
+            "uri": siwe.uri,
+            "version": siwe.version,
+            "chainId": siwe.chain_id,
+            "nonce": preview_string(&siwe.nonce, 32),
+            "issuedAt": siwe.issued_at,
+            "expirationTime": siwe.expiration_time,
+            "notBefore": siwe.not_before,
+            "requestId": siwe.request_id.as_deref().map(|request_id| preview_string(request_id, 80)),
+            "resourceCount": siwe.resources.len(),
+        }),
+        Err(error) => json!({
+            "status": "unrecognized",
+            "error": {
+                "code": error.code,
+                "message": error.message,
+            },
+        }),
+    }
+}
+
+fn personal_sign_blocker(blockers: &mut Vec<Value>, code: &str, message: &str) {
+    if blockers
+        .iter()
+        .any(|blocker| blocker.get("code").and_then(Value::as_str) == Some(code))
+    {
+        return;
+    }
+    blockers.push(json!({
+        "code": code,
+        "message": message,
+    }));
 }
 
 pub fn personal_sign_payload(params: &Value) -> Result<PersonalSignPayload> {
@@ -210,6 +520,346 @@ pub(crate) fn personal_sign_message_bytes(message: &str) -> Result<Vec<u8>> {
         bytes.push((high << 4) | low);
     }
     Ok(bytes)
+}
+
+#[derive(Debug, Clone)]
+struct SiweMessage {
+    domain: String,
+    address: String,
+    statement: Option<String>,
+    uri: String,
+    version: String,
+    chain_id: String,
+    nonce: String,
+    issued_at: String,
+    expiration_time: Option<String>,
+    not_before: Option<String>,
+    request_id: Option<String>,
+    resources: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SiweParseError {
+    code: &'static str,
+    message: &'static str,
+}
+
+fn siwe_parse_error(code: &'static str, message: &'static str) -> SiweParseError {
+    SiweParseError { code, message }
+}
+
+fn parse_siwe_message(text: &str) -> std::result::Result<SiweMessage, SiweParseError> {
+    if text
+        .chars()
+        .any(|char| char.is_control() && !matches!(char, '\n' | '\r' | '\t'))
+    {
+        return Err(siwe_parse_error(
+            "unsupported_personal_sign_message",
+            "personal_sign signing is enabled only for plain-text SIWE messages",
+        ));
+    }
+
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let lines = normalized.lines().collect::<Vec<_>>();
+    let Some(first_line) = lines.first() else {
+        return Err(siwe_parse_error(
+            "unrecognized_personal_sign_message",
+            "personal_sign signing is enabled only for SIWE messages",
+        ));
+    };
+    let Some(domain) = first_line.strip_suffix(" wants you to sign in with your Ethereum account:")
+    else {
+        return Err(siwe_parse_error(
+            "unrecognized_personal_sign_message",
+            "personal_sign signing is enabled only for SIWE messages",
+        ));
+    };
+    let domain = domain.trim();
+    if domain.is_empty() {
+        return Err(siwe_parse_error(
+            "invalid_siwe_domain",
+            "SIWE domain must not be empty",
+        ));
+    }
+
+    let address = lines
+        .get(1)
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .ok_or_else(|| {
+            siwe_parse_error(
+                "invalid_siwe_address",
+                "SIWE message must include an Ethereum account address",
+            )
+        })?;
+    if lines.get(2) != Some(&"") {
+        return Err(siwe_parse_error(
+            "unrecognized_personal_sign_message",
+            "SIWE message must include the standard blank line after the address",
+        ));
+    }
+
+    let mut index = 3;
+    let mut statement = None;
+    if let Some(line) = lines.get(index)
+        && !line.starts_with("URI: ")
+    {
+        if line.is_empty() {
+            index += 1;
+        } else {
+            let mut statement_lines = Vec::new();
+            while let Some(line) = lines.get(index) {
+                if line.is_empty() {
+                    index += 1;
+                    break;
+                }
+                statement_lines.push(*line);
+                index += 1;
+            }
+            statement = Some(statement_lines.join("\n"));
+        }
+    }
+
+    let mut uri = None;
+    let mut version = None;
+    let mut chain_id = None;
+    let mut nonce = None;
+    let mut issued_at = None;
+    let mut expiration_time = None;
+    let mut not_before = None;
+    let mut request_id = None;
+    let mut resources = Vec::new();
+
+    while let Some(line) = lines.get(index) {
+        if let Some(value) = line.strip_prefix("URI: ") {
+            set_siwe_field(&mut uri, value)?;
+        } else if let Some(value) = line.strip_prefix("Version: ") {
+            set_siwe_field(&mut version, value)?;
+        } else if let Some(value) = line.strip_prefix("Chain ID: ") {
+            set_siwe_field(&mut chain_id, value)?;
+        } else if let Some(value) = line.strip_prefix("Nonce: ") {
+            set_siwe_field(&mut nonce, value)?;
+        } else if let Some(value) = line.strip_prefix("Issued At: ") {
+            set_siwe_field(&mut issued_at, value)?;
+        } else if let Some(value) = line.strip_prefix("Expiration Time: ") {
+            set_siwe_field(&mut expiration_time, value)?;
+        } else if let Some(value) = line.strip_prefix("Not Before: ") {
+            set_siwe_field(&mut not_before, value)?;
+        } else if let Some(value) = line.strip_prefix("Request ID: ") {
+            set_siwe_field(&mut request_id, value)?;
+        } else if *line == "Resources:" {
+            index += 1;
+            while let Some(resource_line) = lines.get(index) {
+                let Some(resource) = resource_line.strip_prefix("- ") else {
+                    return Err(siwe_parse_error(
+                        "invalid_siwe_resources",
+                        "SIWE Resources entries must start with '- '",
+                    ));
+                };
+                resources.push(resource.trim().to_owned());
+                index += 1;
+            }
+            break;
+        } else if line.trim().is_empty() {
+            return Err(siwe_parse_error(
+                "unrecognized_personal_sign_message",
+                "SIWE fields must use the standard EIP-4361 format",
+            ));
+        } else {
+            return Err(siwe_parse_error(
+                "unrecognized_personal_sign_message",
+                "personal_sign signing is enabled only for SIWE messages",
+            ));
+        }
+        index += 1;
+    }
+
+    Ok(SiweMessage {
+        domain: domain.to_owned(),
+        address: address.to_owned(),
+        statement,
+        uri: required_siwe_field(uri, "URI")?,
+        version: required_siwe_field(version, "Version")?,
+        chain_id: required_siwe_field(chain_id, "Chain ID")?,
+        nonce: required_siwe_field(nonce, "Nonce")?,
+        issued_at: required_siwe_field(issued_at, "Issued At")?,
+        expiration_time,
+        not_before,
+        request_id,
+        resources,
+    })
+}
+
+fn set_siwe_field(
+    field: &mut Option<String>,
+    value: &str,
+) -> std::result::Result<(), SiweParseError> {
+    if field.is_some() {
+        return Err(siwe_parse_error(
+            "invalid_siwe_message",
+            "SIWE message must not repeat fields",
+        ));
+    }
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(siwe_parse_error(
+            "invalid_siwe_message",
+            "SIWE message fields must not be empty",
+        ));
+    }
+    *field = Some(value.to_owned());
+    Ok(())
+}
+
+fn required_siwe_field(
+    field: Option<String>,
+    label: &'static str,
+) -> std::result::Result<String, SiweParseError> {
+    field.ok_or_else(|| {
+        siwe_parse_error(
+            "invalid_siwe_message",
+            match label {
+                "URI" => "SIWE message must include URI",
+                "Version" => "SIWE message must include Version",
+                "Chain ID" => "SIWE message must include Chain ID",
+                "Nonce" => "SIWE message must include Nonce",
+                "Issued At" => "SIWE message must include Issued At",
+                _ => "SIWE message is missing a required field",
+            },
+        )
+    })
+}
+
+fn url_authority(value: &str) -> Option<String> {
+    let url = Url::parse(value).ok()?;
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{}:{port}", host.to_ascii_lowercase()),
+        None => host.to_ascii_lowercase(),
+    })
+}
+
+fn siwe_domain_authority(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.contains("://")
+        || value.contains('/')
+        || value.contains('@')
+        || value.chars().any(char::is_control)
+    {
+        return None;
+    }
+    Some(value.trim_end_matches('.').to_ascii_lowercase())
+}
+
+fn parse_rfc3339_seconds(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let without_z = value.strip_suffix('Z')?;
+    let (base, fraction) = without_z
+        .split_once('.')
+        .map(|(base, fraction)| (base, Some(fraction)))
+        .unwrap_or((without_z, None));
+    if let Some(fraction) = fraction
+        && (fraction.is_empty() || !fraction.as_bytes().iter().all(u8::is_ascii_digit))
+    {
+        return None;
+    }
+    if base.len() != 19
+        || base.as_bytes().get(4) != Some(&b'-')
+        || base.as_bytes().get(7) != Some(&b'-')
+        || base.as_bytes().get(10) != Some(&b'T')
+        || base.as_bytes().get(13) != Some(&b':')
+        || base.as_bytes().get(16) != Some(&b':')
+    {
+        return None;
+    }
+    let year = parse_fixed_i64(base, 0, 4)?;
+    let month = parse_fixed_u32(base, 5, 2)?;
+    let day = parse_fixed_u32(base, 8, 2)?;
+    let hour = parse_fixed_u32(base, 11, 2)?;
+    let minute = parse_fixed_u32(base, 14, 2)?;
+    let second = parse_fixed_u32(base, 17, 2)?;
+    if !(1..=12).contains(&month)
+        || day == 0
+        || day > days_in_month(year, month)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    let days = days_from_civil(year, month, day);
+    if days < 0 {
+        return None;
+    }
+    Some(
+        (days as u64)
+            .saturating_mul(86_400)
+            .saturating_add((hour as u64) * 3_600)
+            .saturating_add((minute as u64) * 60)
+            .saturating_add(second as u64),
+    )
+}
+
+fn parse_fixed_i64(value: &str, start: usize, len: usize) -> Option<i64> {
+    value.get(start..start + len)?.parse().ok()
+}
+
+fn parse_fixed_u32(value: &str, start: usize, len: usize) -> Option<u32> {
+    value.get(start..start + len)?.parse().ok()
+}
+
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let month = month as i64;
+    let day = day as i64;
+    let year = year - i64::from(month <= 2);
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_prime = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+#[cfg(test)]
+pub(crate) fn format_rfc3339_seconds(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let seconds_of_day = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+#[cfg(test)]
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month as u32, day as u32)
 }
 
 pub(crate) fn summarize_eth_sign(method: &str, params: &Value) -> Value {
@@ -1177,8 +1827,14 @@ pub(crate) fn transaction_guidance_value(
     } else {
         "Cannot sign this transaction"
     };
-    let message = if policy.can_sign {
+    let live_simulation_present = risk
+        .reasons
+        .iter()
+        .any(|reason| reason.code == "live_simulation_present");
+    let message = if policy.can_sign && live_simulation_present {
         "Live simulation succeeded and policy found no blockers.".to_owned()
+    } else if policy.can_sign {
+        "Local decoder matched a supported transfer or curated protocol action.".to_owned()
     } else if policy.override_allowed {
         risk.message.clone()
     } else {

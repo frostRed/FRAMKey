@@ -315,23 +315,34 @@ pub(crate) fn alchemy_endpoint_from_token(network: &str, token: &str) -> Result<
     Ok(format!("https://{network}.g.alchemy.com/v2/{token}"))
 }
 
-pub(crate) fn validate_alchemy_endpoint(url: &str) -> Result<()> {
+pub(crate) fn validate_rpc_endpoint(url: &str) -> Result<()> {
     if url.trim() != url || url.is_empty() || url.chars().any(char::is_control) {
-        anyhow::bail!("Alchemy RPC URL is malformed");
+        anyhow::bail!("RPC URL is malformed");
     }
     if !url.starts_with("https://") && !url.starts_with("http://") {
-        anyhow::bail!("Alchemy RPC URL must start with http:// or https://");
+        anyhow::bail!("RPC URL must start with http:// or https://");
     }
     Ok(())
 }
 
-pub(crate) fn validate_alchemy_network(network: &str) -> Result<()> {
+pub(crate) fn validate_alchemy_endpoint(url: &str) -> Result<()> {
+    validate_rpc_endpoint(url)
+}
+
+pub(crate) fn validate_rpc_network(network: &str) -> Result<()> {
     if network.is_empty()
         || network.len() > 64
         || !network
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     {
+        anyhow::bail!("RPC network must be a short alphanumeric slug");
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_alchemy_network(network: &str) -> Result<()> {
+    if let Err(_error) = validate_rpc_network(network) {
         anyhow::bail!("Alchemy network must be a short alphanumeric slug");
     }
     Ok(())

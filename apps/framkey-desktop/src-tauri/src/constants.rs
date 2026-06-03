@@ -5,6 +5,9 @@ pub(crate) const DEFAULT_KEYCHAIN_ACCOUNT: &str = "default";
 pub(crate) const DEFAULT_CHAIN_ID: &str = "0x1";
 pub(crate) const DEFAULT_GBXCART_PORT: &str = "/dev/cu.usbserial-210";
 pub(crate) const DEFAULT_ALCHEMY_NETWORK: &str = "eth-mainnet";
+pub(crate) const HYPEREVM_CHAIN_ID: &str = "0x3e7";
+pub(crate) const HYPEREVM_NETWORK: &str = "hyperliquid-mainnet";
+pub(crate) const HYPEREVM_RPC_URL: &str = "https://rpc.hyperliquid.xyz/evm";
 pub(crate) const DEFAULT_SIMULATION_TIMEOUT_MS: u64 = 5_000;
 pub(crate) const DEFAULT_SIMULATION_DEFAULT_GAS: &str = "0x7a1200";
 pub(crate) const DEFAULT_RPC_TIMEOUT_MS: u64 = 10_000;
@@ -31,49 +34,151 @@ pub(crate) const MACOS_NO_NETWORK_SANDBOX_PROFILE: &str =
     "(version 1) (allow default) (deny network*)";
 pub(crate) const SIGNER_HELPER_BASENAME: &str = "framkey-signer-helper";
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct SupportedAlchemyChain {
-    pub(crate) chain_id: &'static str,
-    pub(crate) name: &'static str,
-    pub(crate) alchemy_network: &'static str,
-    pub(crate) native_symbol: &'static str,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SupportedChainRpc {
+    Alchemy {
+        network: &'static str,
+    },
+    StaticJsonRpc {
+        provider: &'static str,
+        network: &'static str,
+        endpoint_url: &'static str,
+    },
 }
 
-pub(crate) const SUPPORTED_ALCHEMY_CHAINS: &[SupportedAlchemyChain] = &[
-    SupportedAlchemyChain {
-        chain_id: "0x1",
-        name: "Ethereum",
-        alchemy_network: "eth-mainnet",
-        native_symbol: "ETH",
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SupportedChain {
+    pub(crate) chain_id: &'static str,
+    pub(crate) name: &'static str,
+    pub(crate) native_name: &'static str,
+    pub(crate) native_symbol: &'static str,
+    pub(crate) rpc: SupportedChainRpc,
+    pub(crate) block_explorer_url: Option<&'static str>,
+}
+
+impl SupportedChain {
+    pub(crate) fn rpc_network(self) -> &'static str {
+        match self.rpc {
+            SupportedChainRpc::Alchemy { network } => network,
+            SupportedChainRpc::StaticJsonRpc { network, .. } => network,
+        }
+    }
+
+    pub(crate) fn alchemy_network(self) -> Option<&'static str> {
+        match self.rpc {
+            SupportedChainRpc::Alchemy { network } => Some(network),
+            SupportedChainRpc::StaticJsonRpc { .. } => None,
+        }
+    }
+
+    pub(crate) fn rpc_provider(self) -> &'static str {
+        match self.rpc {
+            SupportedChainRpc::Alchemy { .. } => "alchemy",
+            SupportedChainRpc::StaticJsonRpc { provider, .. } => provider,
+        }
+    }
+
+    pub(crate) fn rpc_kind(self) -> &'static str {
+        match self.rpc {
+            SupportedChainRpc::Alchemy { .. } => "alchemy_rpc",
+            SupportedChainRpc::StaticJsonRpc { .. } => "json_rpc",
+        }
+    }
+
+    pub(crate) fn requires_alchemy_token(self) -> bool {
+        matches!(self.rpc, SupportedChainRpc::Alchemy { .. })
+    }
+
+    pub(crate) fn supports_alchemy_token_api(self) -> bool {
+        matches!(self.rpc, SupportedChainRpc::Alchemy { .. })
+    }
+}
+
+pub(crate) const ETHEREUM_CHAIN: SupportedChain = SupportedChain {
+    chain_id: "0x1",
+    name: "Ethereum",
+    native_name: "Ether",
+    native_symbol: "ETH",
+    rpc: SupportedChainRpc::Alchemy {
+        network: "eth-mainnet",
     },
-    SupportedAlchemyChain {
-        chain_id: "0xaa36a7",
-        name: "Sepolia",
-        alchemy_network: "eth-sepolia",
-        native_symbol: "ETH",
+    block_explorer_url: Some("https://etherscan.io"),
+};
+
+pub(crate) const SEPOLIA_CHAIN: SupportedChain = SupportedChain {
+    chain_id: "0xaa36a7",
+    name: "Sepolia",
+    native_name: "Ether",
+    native_symbol: "ETH",
+    rpc: SupportedChainRpc::Alchemy {
+        network: "eth-sepolia",
     },
-    SupportedAlchemyChain {
-        chain_id: "0x2105",
-        name: "Base",
-        alchemy_network: "base-mainnet",
-        native_symbol: "ETH",
+    block_explorer_url: Some("https://sepolia.etherscan.io"),
+};
+
+pub(crate) const BASE_CHAIN: SupportedChain = SupportedChain {
+    chain_id: "0x2105",
+    name: "Base",
+    native_name: "Ether",
+    native_symbol: "ETH",
+    rpc: SupportedChainRpc::Alchemy {
+        network: "base-mainnet",
     },
-    SupportedAlchemyChain {
-        chain_id: "0xa",
-        name: "OP Mainnet",
-        alchemy_network: "opt-mainnet",
-        native_symbol: "ETH",
+    block_explorer_url: Some("https://basescan.org"),
+};
+
+pub(crate) const OP_MAINNET_CHAIN: SupportedChain = SupportedChain {
+    chain_id: "0xa",
+    name: "OP Mainnet",
+    native_name: "Ether",
+    native_symbol: "ETH",
+    rpc: SupportedChainRpc::Alchemy {
+        network: "opt-mainnet",
     },
-    SupportedAlchemyChain {
-        chain_id: "0xa4b1",
-        name: "Arbitrum One",
-        alchemy_network: "arb-mainnet",
-        native_symbol: "ETH",
+    block_explorer_url: Some("https://optimistic.etherscan.io"),
+};
+
+pub(crate) const ARBITRUM_ONE_CHAIN: SupportedChain = SupportedChain {
+    chain_id: "0xa4b1",
+    name: "Arbitrum One",
+    native_name: "Ether",
+    native_symbol: "ETH",
+    rpc: SupportedChainRpc::Alchemy {
+        network: "arb-mainnet",
     },
-    SupportedAlchemyChain {
-        chain_id: "0x89",
-        name: "Polygon",
-        alchemy_network: "polygon-mainnet",
-        native_symbol: "MATIC",
+    block_explorer_url: Some("https://arbiscan.io"),
+};
+
+pub(crate) const POLYGON_CHAIN: SupportedChain = SupportedChain {
+    chain_id: "0x89",
+    name: "Polygon",
+    native_name: "Matic",
+    native_symbol: "MATIC",
+    rpc: SupportedChainRpc::Alchemy {
+        network: "polygon-mainnet",
     },
+    block_explorer_url: Some("https://polygonscan.com"),
+};
+
+pub(crate) const HYPEREVM_CHAIN: SupportedChain = SupportedChain {
+    chain_id: HYPEREVM_CHAIN_ID,
+    name: "Hyperliquid",
+    native_name: "HYPE",
+    native_symbol: "HYPE",
+    rpc: SupportedChainRpc::StaticJsonRpc {
+        provider: "hyperliquid",
+        network: HYPEREVM_NETWORK,
+        endpoint_url: HYPEREVM_RPC_URL,
+    },
+    block_explorer_url: Some("https://hyperevmscan.io"),
+};
+
+pub(crate) const SUPPORTED_CHAINS: &[SupportedChain] = &[
+    ETHEREUM_CHAIN,
+    SEPOLIA_CHAIN,
+    BASE_CHAIN,
+    OP_MAINNET_CHAIN,
+    ARBITRUM_ONE_CHAIN,
+    POLYGON_CHAIN,
+    HYPEREVM_CHAIN,
 ];

@@ -110,7 +110,7 @@ This continuation raises the bar from "clearer console" to a consumer-ready DeFi
 
 # Keychain Helper Authorization
 
-Status: active
+Status: completed
 
 ## Goal
 
@@ -168,7 +168,7 @@ Make the FRAMKey local KEK item usable by the configured signer helper without r
 
 # Cloud Vault Backup Artifacts
 
-Status: active
+Status: completed
 
 ## Goal
 
@@ -258,6 +258,7 @@ Move the current ETH/DeFi signing layer from a simulation-assisted prototype tow
 - `cargo check -p framkey-desktop`
 - `cargo nextest run -p framkey-simulation`
 - `cargo nextest run -p framkey-desktop`
+
 - `node --check apps/framkey-desktop/ui/main.js`
 - `node --check apps/framkey-desktop/ui/dapp.js`
 - `node --test apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`
@@ -421,3 +422,181 @@ Make FRAMKey show the product icon in remote dApp wallet pickers and avoid dupli
 
 - Some dApp wallet pickers may cache EIP-6963 provider metadata until the page is refreshed.
 - Over-hiding counts would make approvals hard to find, so the in-page approval callout and review count must remain.
+
+# HyperEVM Chain Support Investigation
+
+Status: completed
+
+## Goal
+
+Support HyperEVM as a first-class FRAMKey desktop network for EVM account exposure, trusted network switching, native HYPE send, ERC-20 sends, transaction review, signing, broadcast, activity tracking, and dApp compatibility checks.
+
+## Scope
+
+- Add HyperEVM mainnet chain metadata: chain id `0x3e7`, name `Hyperliquid`, native symbol `HYPE`, official RPC `https://rpc.hyperliquid.xyz/evm`, and explorer links for display.
+- Split the current `SupportedAlchemyChain` model into a more general supported-chain model so known non-Alchemy chains can be switched safely without trusting dApp-supplied RPC URLs.
+- Keep read RPC proxy, RPC health, nonce/gas/fee preparation, raw transaction broadcast, portfolio refresh, and transaction activity working against the trusted chain endpoint.
+- Treat Alchemy-specific token discovery, token metadata, and `alchemy_simulateAssetChanges` as provider capabilities instead of chain requirements.
+- Preserve local decoder coverage and policy behavior for HyperEVM transactions when live asset-change simulation is unavailable.
+- Update trusted UI labels so native balance/send/review surfaces show `HYPE`, not hardcoded `ETH`, on HyperEVM.
+- Keep Chrome native-host bridge support limited to read-only chain/account reporting unless the desktop path proves the chain support first.
+
+## Invariants
+
+- Do not change vault, Keychain, recovery, or signer-helper secret handling.
+- Do not allow dApp-provided RPC URLs to become trusted endpoints.
+- Do not loosen trusted-window approval, account grant, transaction policy, typed-data policy, or raw signing blockers.
+- Do not treat missing Alchemy simulation or token discovery as equivalent to live simulation success.
+- Do not log or expose RPC URLs containing tokens, wallet secrets, calldata beyond existing sanitized review paths, or signed raw transactions beyond existing activity policy.
+
+## Likely Files
+
+- `apps/framkey-desktop/src-tauri/src/constants.rs`
+- `apps/framkey-desktop/src-tauri/src/chains.rs`
+- `apps/framkey-desktop/src-tauri/src/config.rs`
+- `apps/framkey-desktop/src-tauri/src/wallet.rs`
+- `apps/framkey-desktop/src-tauri/src/transactions.rs`
+- `apps/framkey-desktop/src-tauri/src/review/summary.rs`
+- `apps/framkey-desktop/src-tauri/src/state.rs`
+- `apps/framkey-desktop/ui/index.html`
+- `apps/framkey-desktop/ui/main.js`
+- `README.md`
+- `docs/tauri-defi-browser.md`
+- `PLANS.md`
+
+## Verification
+
+- Live HyperEVM RPC probe confirmed `eth_chainId` returns `0x3e7`, `eth_feeHistory` succeeds with `latest`, and `alchemy_getTokenBalances` returns method-not-found on the official RPC.
+- `node --check apps/framkey-desktop/ui/main.js` passed.
+- `cargo fmt --all -- --check` passed.
+- `cargo check -p framkey-desktop --tests` passed.
+- `cargo check -p framkey-simulation` passed.
+- `cargo nextest run -p framkey-desktop hyperevm` passed: 7 tests.
+- `cargo nextest run -p framkey-desktop eip1559_fee_history_falls_back_from_pending_to_latest` passed: 1 test.
+- `cargo nextest run -p framkey-desktop wallet_assets_queries_alchemy_token_balances_and_metadata` passed: 1 test.
+- `cargo nextest run -p framkey-simulation` passed: 36 tests.
+- Mock-mode read-only runtime smoke with `FRAMKEY_DESKTOP_CHAIN_ID=0x3e7`, `FRAMKEY_DESKTOP_REMOTE_PROVIDER_SMOKE=read`, and local decoder simulation passed: provider injection completed; `eth_chainId`, `eth_accounts`, and `eth_blockNumber` returned ok through the real desktop/WebView path.
+
+## Main Risks
+
+- HyperEVM's official JSON-RPC supports standard EVM reads and writes but does not expose Alchemy-specific methods; portfolio token discovery and live asset-change simulation need graceful capability fallbacks or another trusted provider.
+- The official RPC currently supports only latest-state reads for several methods, so review and portfolio paths should avoid historical-state assumptions.
+- HyperEVM has dual small/big block behavior and next-eight-nonces mempool constraints; FRAMKey's pending nonce reservation should be checked against rejected or pruned pending transactions.
+- Native HYPE transfers to HyperCore system addresses have chain-specific consequences; initially treat them as ordinary native transfers plus explicit review text only if a later slice adds HyperCore-aware warnings.
+
+# Conservative Uni/Aave Policy And Trusted Token Sends
+
+Status: completed
+
+## Goal
+
+Align the EVM signing surface with FRAMKey's intended positioning as a safe, conservative holder wallet while still supporting the agreed core Uniswap and Aave workflows.
+
+## Scope
+
+- Keep native transfers and trusted ERC-20 transfers as first-class wallet actions.
+- Keep Uniswap support for recognized swap/permit paths only when semantics are fully decoded and bounded.
+- Require every supported Uniswap swap path, including Universal Router swaps, to carry a short transaction-level deadline.
+- Apply the same bounded amount, expiration, and signature-deadline policy to Universal Router embedded Permit2 permit commands that typed-data Permit2 signing already uses.
+- Keep Aave support for recognized supply, repay, borrow, withdraw, and collateral toggle paths, but require known pools, signer-owned accounts, bounded semantics, and conservative health-factor evidence for debt/collateral-risk actions.
+- Remove transaction high-risk override from the default signing authorization path; unknown or incomplete transaction semantics must block rather than rely on user override.
+- Ensure dApp-provided `wallet_watchAsset` metadata remains display-only and cannot determine trusted ERC-20 transfer amount encoding.
+- Keep HyperEVM support scoped to trusted RPC, native HYPE transfers, ERC-20 transfer review, and local decode when Alchemy-only capabilities are unavailable.
+
+## Invariants
+
+- Do not loosen origin binding, trusted-window approval, review TTL, signer-helper isolation, account grants, or raw `eth_sign`/`eth_signTransaction` blockers.
+- Do not let dApp-supplied RPC URLs, token symbols, token decimals, or images affect trusted signing semantics.
+- Do not label current Aave health-factor evidence as post-transaction safety; debt/collateral-risk actions need exact transaction dry-run evidence plus conservative current-account thresholds.
+- Do not add broad DeFi compatibility to satisfy Uniswap/Aave; support only named protocol actions with explicit policy.
+- Do not allow partially bounded Universal Router semantics to reach signing; missing deadlines or unbounded embedded Permit2 authority must block.
+
+## Likely Files
+
+- `crates/framkey-simulation/src/assessment.rs`
+- `crates/framkey-simulation/src/decoder.rs`
+- `apps/framkey-desktop/src-tauri/src/review/authorization.rs`
+- `apps/framkey-desktop/src-tauri/src/review/summary.rs`
+- `apps/framkey-desktop/src-tauri/src/transactions.rs`
+- `apps/framkey-desktop/src-tauri/src/wallet.rs`
+- `apps/framkey-desktop/src-tauri/src/config.rs`
+- `apps/framkey-desktop/src-tauri/src/tests.rs`
+- `apps/framkey-desktop/ui/main.js`
+- `README.md`
+- `docs/tauri-defi-browser.md`
+- `PLANS.md`
+
+## Verification
+
+- `cargo check -p framkey-simulation --tests` (passed)
+- `cargo check -p framkey-desktop --tests` (passed)
+- Focused nextest for conservative policy, Aave health evidence, Uniswap blockers, and trusted token send decimals (passed)
+- Focused nextest for Uni deadline and Universal Router Permit2 bounded-authority blockers (passed)
+- `cargo nextest run -p framkey-simulation` (passed)
+- `cargo nextest run -p framkey-desktop --no-fail-fast` (passed)
+- `node --check apps/framkey-desktop/ui/main.js` (passed)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
+
+## Main Risks
+
+- Aave borrow/collateral safety is easy to overstate. This slice uses exact transaction dry-run plus conservative current-account thresholds, but still does not model full post-mining health factor.
+- Token metadata can come from dApps, RPC providers, or token contracts; only trusted/provider or contract-returned decimals may encode transfer amounts.
+- Removing high-risk override may break existing development smoke paths that expected unfunded mock sends to reach signing under local-only simulation.
+
+# SIWE-Only Personal Sign Policy
+
+Status: completed
+
+## Goal
+
+Align `personal_sign` with FRAMKey's conservative holder-wallet positioning by allowing only structured Sign-In with Ethereum messages and blocking arbitrary message signatures before signer-helper access.
+
+## Scope
+
+- Parse `personal_sign` payloads as EIP-4361/SIWE when possible.
+- Permit signing only when the message domain, account, URI, chain id, nonce, issue time, expiration, not-before, and resources satisfy FRAMKey's local policy.
+- Keep non-SIWE text and hex messages reviewable for diagnostics but not signable.
+- Update remote/local smoke fixtures to use SIWE-shaped messages when they expect signing.
+- Keep CLI helper smoke for direct signer-helper plumbing separate from dApp `personal_sign` policy.
+
+## Invariants
+
+- Do not loosen account grants, trusted-window approval, review TTL, raw `eth_sign`, unknown typed-data, or transaction policy.
+- Do not allow high-risk override for `personal_sign`.
+- Do not rely on dApp UI, dApp origin claims, or raw message text alone as authority.
+- Do not persist signed messages, signatures, wallet secrets, or recovery material.
+
+## Likely Files
+
+- `apps/framkey-desktop/src-tauri/src/review/summary.rs`
+- `apps/framkey-desktop/src-tauri/src/review/authorization.rs`
+- `apps/framkey-desktop/src-tauri/src/provider.rs`
+- `apps/framkey-desktop/src-tauri/src/provider-injection.js`
+- `apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs`
+- `apps/framkey-desktop/src-tauri/src/tests.rs`
+- `apps/framkey-desktop/src-tauri/src/review/tests.rs`
+- `README.md`
+- `docs/tauri-defi-browser.md`
+- `docs/threat-model.md`
+- `docs/product-roadmap.md`
+- `PLANS.md`
+
+## Verification
+
+- `cargo check -p framkey-desktop` (passed)
+- `cargo nextest run -p framkey-desktop review::` (passed)
+- `cargo nextest run -p framkey-desktop personal_sign` (passed)
+- `cargo nextest run -p framkey-desktop` (passed)
+- `node --check apps/framkey-desktop/src-tauri/src/provider-injection.js` (passed)
+- `node --check apps/framkey-desktop/ui/main.js` (passed)
+- `node apps/framkey-desktop/src-tauri/src/provider-injection.test.mjs` (passed)
+- `cargo fmt -p framkey-desktop` (passed)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
+
+## Main Risks
+
+- Some dApps still use arbitrary `personal_sign` for login; they will now fail until they adopt SIWE or a later explicitly-scoped compatibility mode is added.
+- SIWE parsing should be strict enough to block replay-prone messages but simple enough to remain auditable without a new dependency.
+- Existing mock smoke flows must use a valid SIWE fixture or they will correctly stop at review.

@@ -32,6 +32,7 @@ const portfolioTokenCount = document.querySelector("#portfolio-token-count");
 const portfolioUpdated = document.querySelector("#portfolio-updated");
 const portfolioAssets = document.querySelector("#portfolio-assets");
 const nativeSendForm = document.querySelector("#native-send-form");
+const nativeSendTitle = document.querySelector("#native-send-title");
 const nativeSendTo = document.querySelector("#native-send-to");
 const nativeSendAmount = document.querySelector("#native-send-amount");
 const nativeSendSubmitButton = document.querySelector("#native-send-submit");
@@ -438,8 +439,8 @@ function renderWalletProductOverview() {
   walletHomeBalance.textContent = address
     ? nativeBalance
       ? formatNativeBalance(nativeBalance)
-      : accountBalance.textContent || "0 ETH"
-    : "0 ETH";
+      : accountBalance.textContent || zeroNativeBalanceText()
+    : zeroNativeBalanceText();
   walletHomeAddress.textContent = connecting
     ? "Reading vault from card; macOS unlock follows"
     : connectionError
@@ -751,6 +752,9 @@ function primaryApprovalTone(request) {
   if (request.kind === "transaction") {
     return transactionRiskTone(request.summary?.risk, request.summary?.policy);
   }
+  if (request.kind === "personal_sign" && !personalSignSigningAllowed(request)) {
+    return "bad";
+  }
   if (request.kind === "typed_data" && !typedDataSigningAllowed(request)) {
     return "bad";
   }
@@ -774,8 +778,11 @@ function primaryApprovalDetail(request) {
     return `${origin} wants to add ${valueOrDash(summary.symbol)} to the trusted Assets view. This does not grant token control.`;
   }
   if (request.kind === "personal_sign") {
-    const message = summary.message ?? {};
-    return `${origin} wants a wallet signature for: ${valueOrDash(message.preview ?? message.utf8Preview)}`;
+    if (!personalSignSigningAllowed(request)) {
+      return `${origin} requested a message signature that FRAMKey will not sign: ${firstPolicyBlockerMessage(summary.policy)}`;
+    }
+    const siwe = summary.siwe ?? {};
+    return `${origin} wants a short-lived SIWE sign-in for ${valueOrDash(siwe.domain)} until ${valueOrDash(siwe.expirationTime)}.`;
   }
   if (request.kind === "typed_data") {
     const typedData = summary.typedData ?? {};
@@ -840,8 +847,14 @@ function primaryApprovalBadges(request) {
     return badges;
   }
   if (request.kind === "personal_sign") {
-    badges.push({ label: "Signature", tone: "warn" });
+    badges.push({
+      label: personalSignSigningAllowed(request) ? "SIWE sign-in" : "Blocked",
+      tone: personalSignSigningAllowed(request) ? "warn" : "bad",
+    });
     badges.push({ label: `${summary.message?.bytes ?? summary.message?.chars ?? 0} bytes`, tone: "idle" });
+    if (summary.siwe?.chainId) {
+      badges.push({ label: `Chain ${summary.siwe.chainId}`, tone: "idle" });
+    }
     return badges;
   }
   badges.push({ label: request.method ?? "wallet request", tone: "idle" });
@@ -2468,7 +2481,11 @@ function renderStatus(status) {
   rpcStatus.textContent = formatRpc(status.rpc);
   device.textContent = formatDevice(status.device);
   signerHelper.textContent = formatSignerHelper(status.signerHelper);
-  nativeSendAmount.placeholder = `0.01 ${nativeSymbolForStatus(status)}`;
+  const nativeSymbol = nativeSymbolForStatus(status);
+  if (nativeSendTitle) {
+    nativeSendTitle.textContent = `Send ${nativeSymbol}`;
+  }
+  nativeSendAmount.placeholder = `0.01 ${nativeSymbol}`;
   if (selectedTokenForSend?.chainId && status.chainId && !sameChainId(selectedTokenForSend.chainId, status.chainId)) {
     clearTokenSendSelection();
   }
@@ -2516,7 +2533,7 @@ function renderDappSession(session) {
 function setRpcHealthLoading() {
   rpcHealthSummary.textContent = "Checking";
   rpcHealthSummary.dataset.tone = "busy";
-  rpcHealthProvider.textContent = "Alchemy";
+  rpcHealthProvider.textContent = rpcProviderLabel(latestStatus?.rpc ?? latestStatus?.network);
   rpcHealthChain.textContent = latestStatus?.chainId ? `expected ${latestStatus.chainId}` : "-";
   rpcHealthBlock.textContent = "-";
   rpcHealthLatency.textContent = "-";
@@ -2530,7 +2547,7 @@ function renderRpcHealth(health) {
   const tone = rpcHealthTone(health);
   rpcHealthSummary.textContent = rpcHealthSummaryText(health);
   rpcHealthSummary.dataset.tone = tone;
-  rpcHealthProvider.textContent = health.provider === "alchemy" ? "Alchemy" : labelize(health.provider ?? "RPC");
+  rpcHealthProvider.textContent = rpcProviderLabel(health);
   rpcHealthChain.textContent = rpcHealthChainText(health);
   rpcHealthBlock.textContent = health.latestBlock
     ? `Block ${formatHexInteger(health.latestBlock)}`
@@ -2551,7 +2568,7 @@ function renderRpcHealthError(error) {
   };
   rpcHealthSummary.textContent = "Unavailable";
   rpcHealthSummary.dataset.tone = "bad";
-  rpcHealthProvider.textContent = "Alchemy";
+  rpcHealthProvider.textContent = rpcProviderLabel(latestStatus?.rpc ?? latestStatus?.network);
   rpcHealthChain.textContent = "-";
   rpcHealthBlock.textContent = "-";
   rpcHealthLatency.textContent = "-";
@@ -2565,13 +2582,13 @@ function renderRpcHealthBaseline() {
   latestRpcHealth = null;
   rpcHealthSummary.textContent = "Not checked";
   rpcHealthSummary.dataset.tone = "idle";
-  rpcHealthProvider.textContent = "Alchemy";
+  rpcHealthProvider.textContent = rpcProviderLabel(latestStatus?.rpc ?? latestStatus?.network);
   rpcHealthChain.textContent = "-";
   rpcHealthBlock.textContent = "-";
   rpcHealthLatency.textContent = "-";
   rpcHealthUpdated.textContent = "-";
   rpcHealthDetail.dataset.tone = "warn";
-  rpcHealthDetail.replaceChildren(textSpan("Token and endpoint are hidden"));
+  rpcHealthDetail.replaceChildren(textSpan("Endpoint is hidden"));
 }
 
 function renderNetworkOptions(status) {
@@ -2614,6 +2631,7 @@ function renderPortfolio(portfolio) {
   const errors = portfolio.errors ?? [];
   const tokens = portfolio.tokens ?? [];
   const nativeBalance = portfolio.native?.balance;
+  const nativeSymbol = portfolio.native?.symbol ?? activeNativeSymbol();
   const tokenScan = portfolio.tokenScan ?? {};
   const hasRpc = Boolean(portfolio.rpc);
   const updatedAt = Date.now();
@@ -2625,7 +2643,7 @@ function renderPortfolio(portfolio) {
     chainId.textContent = portfolio.chainId;
   }
   if (nativeBalance) {
-    accountBalance.textContent = formatNativeBalance(nativeBalance);
+    accountBalance.textContent = formatNativeBalance(nativeBalance, nativeSymbol);
   } else if (!hasRpc) {
     accountBalance.textContent = "RPC missing";
   }
@@ -2637,7 +2655,7 @@ function renderPortfolio(portfolio) {
     : hasRpc
       ? "Block unavailable"
       : "RPC missing";
-  portfolioNative.textContent = nativeBalance ? formatNativeBalance(nativeBalance) : "-";
+  portfolioNative.textContent = nativeBalance ? formatNativeBalance(nativeBalance, nativeSymbol) : "-";
   const watchedCount = tokenScan.watched ?? tokens.filter((token) => token.watched).length;
   const walletStateLabel = walletStatePersistenceLabel(portfolio.walletState?.persistence);
   portfolioTokenCount.textContent = `${tokens.length} shown · ${tokenScan.nonzero ?? 0} nonzero · ${watchedCount} watched${walletStateLabel}`;
@@ -2723,7 +2741,7 @@ function renderNativeSendResult(result) {
     setNativeSendState(
       "Broadcast",
       "good",
-      `${shortHash(result.transactionHash)} · ${result.amount} ${result.nativeSymbol ?? "ETH"}`,
+      `${shortHash(result.transactionHash)} · ${result.amount} ${result.nativeSymbol ?? activeNativeSymbol()}`,
     );
     return;
   }
@@ -2745,6 +2763,7 @@ function renderNativeSendError(error) {
 function canSendPortfolioToken(token) {
   return Boolean(
     token?.contractAddress &&
+      token.metadata?.decimalsTrusted === true &&
       Number.isInteger(token.metadata?.decimals) &&
       token.metadata.decimals >= 0 &&
       token.metadata.decimals <= 255,
@@ -2757,7 +2776,7 @@ function tokenSymbol(token) {
 
 function selectTokenForSend(token) {
   if (!canSendPortfolioToken(token)) {
-    setTokenSendState("Unavailable", "bad", "Token decimals are required before transfer");
+    setTokenSendState("Unavailable", "bad", "Trusted contract decimals are required before transfer");
     return;
   }
   selectedTokenForSend = {
@@ -2788,7 +2807,7 @@ function syncSelectedTokenFromPortfolio(tokens, chainId) {
       token.contractAddress.toLowerCase() === selectedTokenForSend.contractAddress.toLowerCase(),
   );
   if (!fresh || !canSendPortfolioToken(fresh)) {
-    renderTokenSendSelection();
+    clearTokenSendSelection();
     return;
   }
   selectedTokenForSend = {
@@ -3218,7 +3237,10 @@ function portfolioSummaryText(portfolio) {
   if (!portfolio.rpc) {
     return "RPC missing";
   }
-  const native = portfolio.native?.balance ? formatNativeBalance(portfolio.native.balance) : "ETH -";
+  const nativeSymbol = portfolio.native?.symbol ?? activeNativeSymbol();
+  const native = portfolio.native?.balance
+    ? formatNativeBalance(portfolio.native.balance, nativeSymbol)
+    : `${nativeSymbol} -`;
   const tokenCount = portfolio.tokens?.length ?? 0;
   const errorCount = portfolio.errors?.length ?? 0;
   if (errorCount > 0) {
@@ -3380,7 +3402,7 @@ function renderSessionReadiness() {
   const rpcReadinessLabel = latestRpcHealth
     ? rpcHealthReadinessText(latestRpcHealth)
     : rpcReady
-      ? "Alchemy"
+      ? rpcProviderLabel(latestStatus?.rpc ?? latestStatus?.network)
       : "Missing";
   const providerReady = Boolean(providerInjected);
   const reviewReady = pending.length === 0;
@@ -5784,10 +5806,18 @@ function renderReviewSynopsis(request) {
   }
 
   if (request.kind === "personal_sign") {
+    const siwe = summary.siwe ?? {};
     const message = summary.message ?? {};
     card.append(
       summaryGrid([
         ["Account", shortAddress(summary.account)],
+        ["Intent", siwe.status === "ok" ? "SIWE sign-in" : "unsupported message"],
+        ["Domain", siwe.domain ?? "-"],
+        ["Address", shortAddress(siwe.address ?? summary.account)],
+        ["URI", siwe.uri ?? "-"],
+        ["Network", siwe.chainId ?? "-"],
+        ["Expires", siwe.expirationTime ?? "-"],
+        ["Decision", personalSignSigningAllowed(request) ? "requires trusted approval" : "blocked before signing"],
         ["Message", message.preview ?? message.utf8Preview ?? "-"],
         ["Encoding", message.encoding ?? "-"],
         ["Size", message.bytes != null ? `${message.bytes} bytes` : `${message.chars ?? 0} chars`],
@@ -5903,11 +5933,11 @@ function networkManagementIntentLabel(intent) {
 
 function networkManagementRpcLabel(summary) {
   const source = summary?.rpcSource;
-  if (source === "trusted_alchemy_only") {
-    return "FRAMKey Alchemy endpoint; dApp RPC ignored";
+  if (source === "trusted_chain_endpoint") {
+    return "FRAMKey trusted endpoint; dApp RPC ignored";
   }
-  if (source === "trusted_alchemy_session") {
-    return "FRAMKey Alchemy session";
+  if (source === "trusted_chain_session") {
+    return "FRAMKey trusted session";
   }
   return valueOrDash(source);
 }
@@ -6315,7 +6345,15 @@ function approveActionForRequest(request) {
     return { label: "Add Token", decision: "approve", disabled: false };
   }
   if (request.kind === "personal_sign") {
-    return { label: "Sign Message", decision: "approve", disabled: false };
+    if (personalSignSigningAllowed(request)) {
+      return { label: "Sign In", decision: "approve", disabled: false };
+    }
+    return {
+      label: "Blocked",
+      decision: "approve",
+      disabled: true,
+      disabledReason: firstPolicyBlockerMessage(request.summary?.policy),
+    };
   }
   if (request.kind === "transaction") {
     const policy = request.summary?.policy;
@@ -6657,9 +6695,14 @@ function typedPermitDeadlineLabel(permit) {
   return valueOrDash(permit.deadline ?? permit.expiration);
 }
 
+function personalSignSigningAllowed(request) {
+  return request?.kind === "personal_sign" && request?.summary?.policy?.canSign === true && request?.summary?.siwe?.status === "ok";
+}
+
 function typedDataSigningAllowed(request) {
   return (
     request?.method === "eth_signTypedData_v4" &&
+    request?.summary?.typedData?.policy?.canSign === true &&
     [
       "erc20_permit",
       "permit2_permit_single",
@@ -6668,6 +6711,10 @@ function typedDataSigningAllowed(request) {
       "permit2_batch_transfer_from",
     ].includes(request?.summary?.typedData?.intent)
   );
+}
+
+function firstPolicyBlockerMessage(policy) {
+  return policy?.blockers?.[0]?.message ?? "Policy blocks signing";
 }
 
 function isMaxUint256(hex) {
@@ -6785,7 +6832,7 @@ function formatTransactionValue(summary) {
   if (typeof summary?.value === "string") {
     return formatNativeBalance(summary.value);
   }
-  return "0 ETH";
+  return zeroNativeBalanceText();
 }
 
 function transactionCallLabel(simulation) {
@@ -6800,19 +6847,23 @@ function transactionCallLabel(simulation) {
   return "native transfer";
 }
 
-function formatNativeBalance(hexQuantity) {
+function formatNativeBalance(hexQuantity, symbol = activeNativeSymbol()) {
   try {
     const wei = BigInt(hexQuantity);
     const whole = wei / 1_000_000_000_000_000_000n;
     const fraction = wei % 1_000_000_000_000_000_000n;
     if (fraction === 0n) {
-      return `${whole.toString()} ETH`;
+      return `${whole.toString()} ${symbol}`;
     }
     const fractionText = fraction.toString().padStart(18, "0").slice(0, 6).replace(/0+$/, "");
-    return `${whole.toString()}.${fractionText || "0"} ETH`;
+    return `${whole.toString()}.${fractionText || "0"} ${symbol}`;
   } catch {
     return valueOrDash(hexQuantity);
   }
+}
+
+function zeroNativeBalanceText(symbol = activeNativeSymbol()) {
+  return `0 ${symbol}`;
 }
 
 function formatTokenBalance(hexQuantity, decimals, symbol) {
@@ -6919,7 +6970,21 @@ function formatRpc(value) {
     return "not configured";
   }
   const network = value.network ? ` ${value.network}` : "";
-  return `${value.kind ?? "rpc"}${network} ${value.timeoutMs ?? "-"}ms`.trim();
+  return `${rpcProviderLabel(value)}${network} ${value.timeoutMs ?? "-"}ms`.trim();
+}
+
+function rpcProviderLabel(value) {
+  const provider = typeof value === "string" ? value : value?.provider ?? value?.rpcProvider;
+  if (provider === "alchemy") {
+    return "Alchemy RPC";
+  }
+  if (provider === "hyperliquid") {
+    return "Hyperliquid RPC";
+  }
+  if (provider === "custom") {
+    return "Custom RPC";
+  }
+  return provider ? `${labelize(provider)} RPC` : "RPC";
 }
 
 function formatRpcWithHealth(rpc, health) {
@@ -7024,9 +7089,9 @@ function rpcHealthDetailText(health) {
     return `${health.error.scope ?? "rpc"}: ${health.error.message}`;
   }
   if (health?.healthy) {
-    return "Alchemy RPC is reachable; token and endpoint are hidden";
+    return `${rpcProviderLabel(health)} is reachable; endpoint is hidden`;
   }
-  return "Token and endpoint are hidden";
+  return "Endpoint is hidden";
 }
 
 function formatNetwork(value) {
@@ -7034,14 +7099,19 @@ function formatNetwork(value) {
     return "-";
   }
   const label = value.name ?? value.chainId ?? "network";
-  const rpc = value.alchemyNetwork ? ` ${value.alchemyNetwork}` : "";
+  const rpcNetwork = value.rpcNetwork ?? value.alchemyNetwork;
+  const rpc = rpcNetwork ? ` ${rpcNetwork}` : "";
   return `${label}${rpc}`.trim();
+}
+
+function activeNativeSymbol() {
+  return latestPortfolio?.native?.symbol ?? latestStatus?.network?.nativeSymbol ?? nativeSymbolForStatus(latestStatus);
 }
 
 function nativeSymbolForStatus(status) {
   const active = status?.chainId;
   const chain = (status?.supportedChains ?? []).find((item) => sameChainId(item.chainId, active));
-  return chain?.nativeSymbol ?? "ETH";
+  return status?.network?.nativeSymbol ?? chain?.nativeSymbol ?? "ETH";
 }
 
 function networkOptionLabel(value) {

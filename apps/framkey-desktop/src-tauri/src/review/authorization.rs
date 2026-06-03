@@ -53,7 +53,9 @@ pub(crate) fn decision_broker_mode(
         (ReviewMethodKind::WatchAsset, ReviewDecision::ApproveWithRisk) => {
             bail!("watch asset does not support high-risk approval")
         }
-        (ReviewMethodKind::PersonalSign, ReviewDecision::Approve) => Ok("controlled_personal_sign"),
+        (ReviewMethodKind::PersonalSign, ReviewDecision::Approve) => {
+            personal_sign_broker_mode_for_decision(request, decision)
+        }
         (ReviewMethodKind::PersonalSign, ReviewDecision::ApproveWithRisk) => {
             bail!("personal_sign does not support high-risk approval")
         }
@@ -100,6 +102,26 @@ pub fn typed_data_signing_authorization(request: &ReviewRequest) -> Result<&'sta
     typed_data_broker_mode_for_decision(request, decision)
 }
 
+pub fn personal_sign_signing_authorization(request: &ReviewRequest) -> Result<&'static str> {
+    if request.status != ReviewStatus::Approved {
+        bail!(
+            "personal_sign review request {} is not approved",
+            request.id
+        );
+    }
+    let decision = request
+        .decision
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "personal_sign review request {} has no decision",
+                request.id
+            )
+        })?
+        .decision;
+    personal_sign_broker_mode_for_decision(request, decision)
+}
+
 pub fn network_switch_authorization(request: &ReviewRequest) -> Result<()> {
     if request.kind != ReviewMethodKind::NetworkSwitch {
         bail!("review request {} is not a network switch", request.id);
@@ -129,6 +151,79 @@ pub fn network_switch_authorization(request: &ReviewRequest) -> Result<()> {
             bail!("network switch review request {} was rejected", request.id)
         }
     }
+}
+
+pub(crate) fn personal_sign_broker_mode_for_decision(
+    request: &ReviewRequest,
+    decision: ReviewDecision,
+) -> Result<&'static str> {
+    if request.kind != ReviewMethodKind::PersonalSign {
+        bail!("review request {} is not personal_sign", request.id);
+    }
+    match decision {
+        ReviewDecision::Approve => {
+            ensure_signable_personal_sign(request)?;
+            Ok("controlled_personal_sign")
+        }
+        ReviewDecision::ApproveWithRisk => {
+            bail!("personal_sign does not support high-risk approval")
+        }
+        ReviewDecision::Reject => bail!("personal_sign review request {} was rejected", request.id),
+    }
+}
+
+pub fn signable_personal_sign_intent(request: &ReviewRequest) -> Option<&'static str> {
+    if personal_sign_policy_can_sign(request) != Some(true) {
+        return None;
+    }
+    let siwe_status = request
+        .summary
+        .get("siwe")
+        .and_then(Value::as_object)
+        .and_then(|siwe| siwe.get("status"))
+        .and_then(Value::as_str)?;
+    match siwe_status {
+        "ok" => Some("siwe"),
+        _ => None,
+    }
+}
+
+pub(crate) fn ensure_signable_personal_sign(request: &ReviewRequest) -> Result<&'static str> {
+    let Some(intent) = signable_personal_sign_intent(request) else {
+        let blocker = first_personal_sign_policy_blocker(request);
+        let message = blocker
+            .as_ref()
+            .and_then(|blocker| blocker.get("message"))
+            .and_then(Value::as_str)
+            .unwrap_or("personal_sign signing is enabled only for short-lived SIWE messages");
+        let code = blocker
+            .as_ref()
+            .and_then(|blocker| blocker.get("code"))
+            .and_then(Value::as_str)
+            .unwrap_or("personal_sign_policy_blocked");
+        bail!("personal_sign policy blocks signing: {code}: {message}");
+    };
+    Ok(intent)
+}
+
+pub(crate) fn personal_sign_policy_can_sign(request: &ReviewRequest) -> Option<bool> {
+    request
+        .summary
+        .get("policy")
+        .and_then(Value::as_object)
+        .and_then(|policy| policy.get("canSign"))
+        .and_then(Value::as_bool)
+}
+
+pub(crate) fn first_personal_sign_policy_blocker(request: &ReviewRequest) -> Option<Value> {
+    request
+        .summary
+        .get("policy")
+        .and_then(Value::as_object)
+        .and_then(|policy| policy.get("blockers"))
+        .and_then(Value::as_array)
+        .and_then(|blockers| blockers.first())
+        .cloned()
 }
 
 pub(crate) fn typed_data_broker_mode_for_decision(

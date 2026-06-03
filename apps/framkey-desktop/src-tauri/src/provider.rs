@@ -51,9 +51,7 @@ pub(crate) fn handle_provider_request(
             if let Some(response) = signing_permission_error_response(state, request)? {
                 Ok(response)
             } else {
-                Ok(ProviderResponse::Result(handle_personal_sign_request(
-                    state, config, request,
-                )?))
+                handle_personal_sign_request(state, config, request)
             }
         }
         method if is_typed_data_method(method) => {
@@ -530,7 +528,7 @@ pub(crate) fn transaction_activity_snapshot(
                 "pending": 0,
                 "errors": [{
                     "scope": "rpc",
-                    "message": "Alchemy RPC is not configured",
+                    "message": "RPC is not configured",
                 }],
                 "limit": TRANSACTION_RECEIPT_REFRESH_LIMIT,
             })
@@ -554,7 +552,7 @@ pub(crate) fn handle_personal_sign_request(
     state: &AppState,
     config: &DesktopConfig,
     request: &ProviderRequest,
-) -> Result<Value> {
+) -> Result<ProviderResponse> {
     let payload = review::personal_sign_payload(&request.params)?;
     if payload.message.len() > MAX_SIGNER_HELPER_PERSONAL_SIGN_MESSAGE_BYTES {
         anyhow::bail!(
@@ -564,6 +562,10 @@ pub(crate) fn handle_personal_sign_request(
     }
 
     let review = state.capture_review_request(config, request)?;
+    if review::signable_personal_sign_intent(&review).is_none() {
+        return Ok(ProviderResponse::Error(blocked_review_error(review)));
+    }
+
     eprintln!("personal_sign captured review_id={}", review.id);
     let approved = state.wait_for_review_approval(&review.id)?;
     eprintln!("personal_sign approved review_id={}", approved.id);
@@ -573,6 +575,14 @@ pub(crate) fn handle_personal_sign_request(
             approved.id
         );
     }
+    let personal_sign_broker_mode = match review::personal_sign_signing_authorization(&approved) {
+        Ok(mode) => mode,
+        Err(error) => {
+            let message = error.to_string();
+            let _ = state.mark_review_sign_failed(&review.id, &message);
+            return Err(error);
+        }
+    };
 
     let signed = (|| match config.wallet {
         DesktopWalletConfig::KeychainVault => {
@@ -592,8 +602,11 @@ pub(crate) fn handle_personal_sign_request(
     match signed {
         Ok(signed) => {
             state.mark_review_signed(&review.id, &signed)?;
-            eprintln!("personal_sign signed review_id={}", review.id);
-            Ok(json!(signed.signature))
+            eprintln!(
+                "personal_sign signed review_id={} broker_mode={}",
+                review.id, personal_sign_broker_mode
+            );
+            Ok(ProviderResponse::Result(json!(signed.signature)))
         }
         Err(error) => {
             let message = error.to_string();

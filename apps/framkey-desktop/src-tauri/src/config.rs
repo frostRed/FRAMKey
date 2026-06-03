@@ -185,31 +185,41 @@ impl DesktopConfig {
         Ok(())
     }
 
-    pub(crate) fn switch_to_alchemy_chain(
+    pub(crate) fn switch_to_supported_chain(
         &mut self,
-        chain: SupportedAlchemyChain,
-        alchemy_token: &str,
+        chain: SupportedChain,
+        alchemy_token: Option<&str>,
     ) -> Result<()> {
         let timeout_ms = self
             .rpc
             .as_ref()
             .map(|rpc| rpc.timeout_ms)
             .unwrap_or(DEFAULT_RPC_TIMEOUT_MS);
-        let endpoint_url = alchemy_endpoint_from_token(chain.alchemy_network, alchemy_token)?;
+        let endpoint_url = trusted_chain_endpoint(chain, alchemy_token)?;
         self.chain_id = chain.chain_id.to_owned();
         self.rpc = Some(DesktopRpcConfig {
             endpoint_url: endpoint_url.clone(),
-            network: Some(chain.alchemy_network.to_owned()),
+            network: Some(chain.rpc_network().to_owned()),
             timeout_ms,
+            provider: rpc_provider_for_supported_chain(chain),
         });
-        if let DesktopSimulationConfig::AlchemyAssetChanges {
-            endpoint_url: simulation_endpoint,
-            network,
-            ..
-        } = &mut self.simulation
-        {
-            *simulation_endpoint = endpoint_url;
-            *network = Some(chain.alchemy_network.to_owned());
+        if matches!(
+            self.simulation,
+            DesktopSimulationConfig::AlchemyAssetChanges { .. }
+        ) {
+            if let Some(alchemy_network) = chain.alchemy_network() {
+                if let DesktopSimulationConfig::AlchemyAssetChanges {
+                    endpoint_url: simulation_endpoint,
+                    network,
+                    ..
+                } = &mut self.simulation
+                {
+                    *simulation_endpoint = endpoint_url;
+                    *network = Some(alchemy_network.to_owned());
+                }
+            } else {
+                self.simulation = DesktopSimulationConfig::LocalDecoderOnly;
+            }
         }
         self.validate()
     }
@@ -223,10 +233,17 @@ impl DesktopConfig {
         } else {
             None
         };
+        let active_chain_supports_alchemy = supported_chain(&self.chain_id)
+            .map(|chain| chain.supports_alchemy_token_api())
+            .unwrap_or(true);
         let rpc_url = env_string("FRAMKEY_ALCHEMY_RPC_URL")
             .or_else(|| env_string("ALCHEMY_RPC_URL"))
             .or_else(|| default_rpc.map(|rpc| rpc.endpoint_url.clone()));
-        let token = env_string("FRAMKEY_ALCHEMY_TOKEN").or_else(|| env_string("ALCHEMY_TOKEN"));
+        let token = if provider.is_some() || rpc_url.is_some() || active_chain_supports_alchemy {
+            env_string("FRAMKEY_ALCHEMY_TOKEN").or_else(|| env_string("ALCHEMY_TOKEN"))
+        } else {
+            None
+        };
         let network = env_string("FRAMKEY_ALCHEMY_NETWORK")
             .or_else(|| default_rpc.and_then(|rpc| rpc.network.clone()));
         self.simulation = simulation_config_from_env(
@@ -243,13 +260,23 @@ impl DesktopConfig {
     }
 
     pub(crate) fn apply_rpc_env(&mut self) -> Result<()> {
-        let rpc_url = env_string("FRAMKEY_RPC_URL")
-            .or_else(|| env_string("FRAMKEY_ALCHEMY_RPC_URL"))
-            .or_else(|| env_string("ALCHEMY_RPC_URL"));
+        let generic_rpc_url = env_string("FRAMKEY_RPC_URL");
+        let alchemy_rpc_url =
+            env_string("FRAMKEY_ALCHEMY_RPC_URL").or_else(|| env_string("ALCHEMY_RPC_URL"));
+        let rpc_url_provider = if generic_rpc_url.is_some() {
+            None
+        } else if alchemy_rpc_url.is_some() {
+            Some(DesktopRpcProvider::Alchemy)
+        } else {
+            None
+        };
+        let rpc_url = generic_rpc_url.or(alchemy_rpc_url);
         let token = env_string("FRAMKEY_ALCHEMY_TOKEN").or_else(|| env_string("ALCHEMY_TOKEN"));
         self.rpc = rpc_config_from_env(
             self.rpc.as_ref(),
+            &self.chain_id,
             rpc_url,
+            rpc_url_provider,
             token,
             env_string("FRAMKEY_ALCHEMY_NETWORK"),
             env_u64("FRAMKEY_RPC_TIMEOUT_MS")?,
@@ -360,7 +387,9 @@ pub(crate) fn alchemy_simulation_config_from_inputs(
 
 pub(crate) fn rpc_config_from_env(
     current: Option<&DesktopRpcConfig>,
+    chain_id: &str,
     rpc_url: Option<String>,
+    rpc_url_provider: Option<DesktopRpcProvider>,
     token: Option<String>,
     network: Option<String>,
     timeout_ms: Option<u64>,
@@ -370,20 +399,42 @@ pub(crate) fn rpc_config_from_env(
         .unwrap_or(DEFAULT_RPC_TIMEOUT_MS);
 
     if let Some(endpoint_url) = rpc_url {
-        let network = network.unwrap_or_else(|| DEFAULT_ALCHEMY_NETWORK.to_owned());
+        let network = network
+            .or_else(|| current.and_then(|rpc| rpc.network.clone()))
+            .or_else(|| supported_chain(chain_id).map(|chain| chain.rpc_network().to_owned()));
         return Ok(Some(DesktopRpcConfig {
+            provider: rpc_url_provider
+                .unwrap_or_else(|| rpc_provider_for_endpoint(&endpoint_url, network.as_deref())),
             endpoint_url,
-            network: Some(network),
+            network,
             timeout_ms,
         }));
     }
 
+    if let Some(chain) = supported_chain(chain_id)
+        && !chain.requires_alchemy_token()
+    {
+        return Ok(Some(DesktopRpcConfig {
+            endpoint_url: trusted_chain_endpoint(chain, None)?,
+            network: Some(chain.rpc_network().to_owned()),
+            timeout_ms,
+            provider: rpc_provider_for_supported_chain(chain),
+        }));
+    }
+
     if let Some(token) = token {
-        let network = network.unwrap_or_else(|| DEFAULT_ALCHEMY_NETWORK.to_owned());
+        let network = network
+            .or_else(|| {
+                supported_chain(chain_id)
+                    .and_then(SupportedChain::alchemy_network)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| DEFAULT_ALCHEMY_NETWORK.to_owned());
         return Ok(Some(DesktopRpcConfig {
             endpoint_url: alchemy_endpoint_from_token(&network, &token)?,
             network: Some(network),
             timeout_ms,
+            provider: DesktopRpcProvider::Alchemy,
         }));
     }
 
@@ -391,6 +442,7 @@ pub(crate) fn rpc_config_from_env(
         endpoint_url: rpc.endpoint_url.clone(),
         network: rpc.network.clone(),
         timeout_ms,
+        provider: rpc.provider,
     }))
 }
 
@@ -453,27 +505,96 @@ pub(crate) struct DesktopRpcConfig {
     pub(crate) endpoint_url: String,
     pub(crate) network: Option<String>,
     pub(crate) timeout_ms: u64,
+    pub(crate) provider: DesktopRpcProvider,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DesktopRpcProvider {
+    Alchemy,
+    Hyperliquid,
+    Custom,
+}
+
+impl DesktopRpcProvider {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Alchemy => "alchemy",
+            Self::Hyperliquid => "hyperliquid",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub(crate) fn kind(self) -> &'static str {
+        match self {
+            Self::Alchemy => "alchemy_rpc",
+            Self::Hyperliquid | Self::Custom => "json_rpc",
+        }
+    }
+
+    pub(crate) fn supports_alchemy_token_api(self) -> bool {
+        matches!(self, Self::Alchemy)
+    }
 }
 
 impl DesktopRpcConfig {
+    pub(crate) fn kind(&self) -> &'static str {
+        self.provider.kind()
+    }
+
+    pub(crate) fn provider(&self) -> &'static str {
+        self.provider.as_str()
+    }
+
+    pub(crate) fn supports_alchemy_token_api(&self) -> bool {
+        self.provider.supports_alchemy_token_api()
+    }
+
     pub(crate) fn describe(&self) -> Value {
         json!({
-            "kind": "alchemy_rpc",
+            "kind": self.kind(),
+            "provider": self.provider(),
             "configured": true,
             "network": self.network,
             "timeoutMs": self.timeout_ms,
+            "capabilities": {
+                "alchemyTokenApi": self.supports_alchemy_token_api(),
+            },
         })
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        validate_alchemy_endpoint(&self.endpoint_url)?;
+        validate_rpc_endpoint(&self.endpoint_url)?;
         if let Some(network) = &self.network {
-            validate_alchemy_network(network)?;
+            validate_rpc_network(network)?;
         }
         if self.timeout_ms == 0 || self.timeout_ms > 30_000 {
             anyhow::bail!("read RPC timeout must be between 1 and 30000 ms");
         }
         Ok(())
+    }
+}
+
+pub(crate) fn rpc_provider_for_supported_chain(chain: SupportedChain) -> DesktopRpcProvider {
+    match chain.rpc {
+        SupportedChainRpc::Alchemy { .. } => DesktopRpcProvider::Alchemy,
+        SupportedChainRpc::StaticJsonRpc {
+            provider: "hyperliquid",
+            ..
+        } => DesktopRpcProvider::Hyperliquid,
+        SupportedChainRpc::StaticJsonRpc { .. } => DesktopRpcProvider::Custom,
+    }
+}
+
+pub(crate) fn rpc_provider_for_endpoint(
+    endpoint_url: &str,
+    network: Option<&str>,
+) -> DesktopRpcProvider {
+    if endpoint_url == HYPEREVM_RPC_URL || network == Some(HYPEREVM_NETWORK) {
+        DesktopRpcProvider::Hyperliquid
+    } else if is_alchemy_endpoint(endpoint_url) {
+        DesktopRpcProvider::Alchemy
+    } else {
+        DesktopRpcProvider::Custom
     }
 }
 
@@ -858,6 +979,13 @@ pub(crate) enum ConfigRpc {
         #[serde(default)]
         timeout_ms: Option<u64>,
     },
+    JsonRpc {
+        rpc_url: String,
+        #[serde(default)]
+        network: Option<String>,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
 }
 
 impl ConfigRpc {
@@ -868,6 +996,17 @@ impl ConfigRpc {
                 network,
                 timeout_ms,
             } => Ok(DesktopRpcConfig {
+                provider: DesktopRpcProvider::Alchemy,
+                endpoint_url: rpc_url,
+                network,
+                timeout_ms: timeout_ms.unwrap_or(DEFAULT_RPC_TIMEOUT_MS),
+            }),
+            Self::JsonRpc {
+                rpc_url,
+                network,
+                timeout_ms,
+            } => Ok(DesktopRpcConfig {
+                provider: rpc_provider_for_endpoint(&rpc_url, network.as_deref()),
                 endpoint_url: rpc_url,
                 network,
                 timeout_ms: timeout_ms.unwrap_or(DEFAULT_RPC_TIMEOUT_MS),
@@ -1107,7 +1246,7 @@ impl NativeTransferRequest {
         config: &DesktopConfig,
     ) -> Result<NormalizedNativeTransferRequest> {
         if config.rpc.is_none() {
-            anyhow::bail!("Alchemy RPC is required before sending a native transfer");
+            anyhow::bail!("RPC is required before sending a native transfer");
         }
         let to = self
             .to
@@ -1147,7 +1286,7 @@ impl TokenTransferRequest {
         config: &DesktopConfig,
     ) -> Result<NormalizedTokenTransferRequest> {
         if config.rpc.is_none() {
-            anyhow::bail!("Alchemy RPC is required before sending a token transfer");
+            anyhow::bail!("RPC is required before sending a token transfer");
         }
         let token_contract = self
             .token_contract
@@ -1161,13 +1300,28 @@ impl TokenTransferRequest {
             .parse::<EvmAddress>()
             .map_err(|_| anyhow::anyhow!("token transfer recipient is not a valid EVM address"))?
             .to_string();
-        let decimals = self
-            .decimals
-            .ok_or_else(|| anyhow::anyhow!("token decimals are required before sending"))?;
-        if decimals > u64::from(u8::MAX) {
-            anyhow::bail!("token decimals must be between 0 and 255");
+        if let Some(decimals) = self.decimals {
+            if decimals > u64::from(u8::MAX) {
+                anyhow::bail!("token decimals must be between 0 and 255");
+            }
+            let claimed_decimals = u8::try_from(decimals).context("token decimals are invalid")?;
+            let _ = token_amount_decimal_to_raw_hex(
+                &self.amount,
+                usize::from(claimed_decimals),
+                "token transfer",
+            )?;
         }
-        let decimals_u8 = u8::try_from(decimals).context("token decimals are invalid")?;
+        let decimals_u8 = trusted_erc20_decimals(config, &token_contract)
+            .context("failed to read trusted token decimals from contract")?;
+        if let Some(decimals) = self.decimals
+            && decimals != u64::from(decimals_u8)
+        {
+            anyhow::bail!(
+                "token decimals {} do not match trusted contract decimals {}",
+                decimals,
+                decimals_u8
+            );
+        }
         let raw_amount = token_amount_decimal_to_raw_hex(
             &self.amount,
             usize::from(decimals_u8),

@@ -31,38 +31,38 @@ pub(crate) fn handle_add_chain_request_with_probe(
     };
     let configured = normalize_chain_id(&config.chain_id)?;
 
-    let Some(chain) = supported_alchemy_chain(&requested) else {
+    let Some(chain) = supported_chain(&requested) else {
         return Ok(ProviderResponse::Error(chain_management_provider_error(
             &request.method,
             &configured,
             &requested,
-            "FRAMKey can only add known Alchemy-backed chains",
+            "FRAMKey can only add known trusted chains",
         )));
     };
 
-    let Some(alchemy_token) = alchemy_token else {
+    if chain.requires_alchemy_token() && alchemy_token.is_none() {
         return Ok(ProviderResponse::Error(chain_management_provider_error(
             &request.method,
             &configured,
             &requested,
-            "FRAMKey needs FRAMKEY_ALCHEMY_TOKEN or ALCHEMY_TOKEN to verify the requested chain",
+            "FRAMKey needs FRAMKEY_ALCHEMY_TOKEN or ALCHEMY_TOKEN to verify this Alchemy-backed chain",
         )));
-    };
+    }
 
     let review = state.capture_review_request(config, request)?;
     let approved = state.wait_for_review_approval(&review.id)?;
     network_switch_authorization(&approved)?;
 
     if rpc_probe == ChainSwitchRpcProbe::VerifyEndpoint {
-        let endpoint_url = alchemy_endpoint_from_token(chain.alchemy_network, &alchemy_token)?;
+        let endpoint_url = trusted_chain_endpoint(chain, alchemy_token.as_deref())?;
         let timeout_ms = config
             .rpc
             .as_ref()
             .map(|rpc| rpc.timeout_ms)
             .unwrap_or(DEFAULT_RPC_TIMEOUT_MS);
-        if let Err(error) = verify_alchemy_chain_endpoint(chain, &endpoint_url, timeout_ms) {
+        if let Err(error) = verify_supported_chain_endpoint(chain, &endpoint_url, timeout_ms) {
             let message =
-                format!("FRAMKey could not verify the requested chain via Alchemy: {error}");
+                format!("FRAMKey could not verify the requested chain via trusted RPC: {error}");
             let _ = state.mark_review_sign_failed(&review.id, &message);
             return Ok(ProviderResponse::Error(chain_management_provider_error(
                 &request.method,
@@ -100,7 +100,7 @@ pub(crate) fn handle_switch_chain_request_with_probe(
         return Ok(ProviderResponse::Result(Value::Null));
     }
 
-    let Some(chain) = supported_alchemy_chain(&requested) else {
+    let Some(chain) = supported_chain(&requested) else {
         return Ok(ProviderResponse::Error(chain_management_provider_error(
             &request.method,
             &configured,
@@ -109,27 +109,27 @@ pub(crate) fn handle_switch_chain_request_with_probe(
         )));
     };
 
-    let Some(alchemy_token) = alchemy_token else {
+    if chain.requires_alchemy_token() && alchemy_token.is_none() {
         return Ok(ProviderResponse::Error(chain_management_provider_error(
             &request.method,
             &configured,
             &requested,
-            "FRAMKey needs FRAMKEY_ALCHEMY_TOKEN or ALCHEMY_TOKEN to derive a safe RPC endpoint for the requested chain",
+            "FRAMKey needs FRAMKEY_ALCHEMY_TOKEN or ALCHEMY_TOKEN to derive a trusted Alchemy endpoint for this chain",
         )));
-    };
+    }
 
     let review = state.capture_review_request(config, request)?;
     let approved = state.wait_for_review_approval(&review.id)?;
     network_switch_authorization(&approved)?;
 
     if rpc_probe == ChainSwitchRpcProbe::VerifyEndpoint {
-        let endpoint_url = alchemy_endpoint_from_token(chain.alchemy_network, &alchemy_token)?;
+        let endpoint_url = trusted_chain_endpoint(chain, alchemy_token.as_deref())?;
         let timeout_ms = config
             .rpc
             .as_ref()
             .map(|rpc| rpc.timeout_ms)
             .unwrap_or(DEFAULT_RPC_TIMEOUT_MS);
-        if let Err(error) = verify_alchemy_chain_endpoint(chain, &endpoint_url, timeout_ms) {
+        if let Err(error) = verify_supported_chain_endpoint(chain, &endpoint_url, timeout_ms) {
             let message = format!(
                 "FRAMKey could not verify a safe RPC endpoint for the requested chain: {error}"
             );
@@ -143,7 +143,7 @@ pub(crate) fn handle_switch_chain_request_with_probe(
         }
     }
 
-    match state.switch_session_chain(chain, &alchemy_token) {
+    match state.switch_session_chain(chain, alchemy_token.as_deref()) {
         Ok(_) => {
             state.mark_review_completed(&review.id, None)?;
             Ok(ProviderResponse::Result(Value::Null))
@@ -156,8 +156,8 @@ pub(crate) fn handle_switch_chain_request_with_probe(
     }
 }
 
-pub(crate) fn verify_alchemy_chain_endpoint(
-    chain: SupportedAlchemyChain,
+pub(crate) fn verify_supported_chain_endpoint(
+    chain: SupportedChain,
     endpoint_url: &str,
     timeout_ms: u64,
 ) -> Result<()> {
@@ -231,27 +231,27 @@ pub(crate) fn switch_session_chain_from_trusted_ui(
         }));
     }
 
-    let chain = supported_alchemy_chain(&requested).ok_or_else(|| {
+    let chain = supported_chain(&requested).ok_or_else(|| {
         anyhow::anyhow!("FRAMKey does not support session switching to the requested chain")
     })?;
-    let alchemy_token = alchemy_token.ok_or_else(|| {
-        anyhow::anyhow!(
-            "FRAMKey needs FRAMKEY_ALCHEMY_TOKEN or ALCHEMY_TOKEN to derive a safe RPC endpoint for the requested chain"
-        )
-    })?;
+    if chain.requires_alchemy_token() && alchemy_token.is_none() {
+        anyhow::bail!(
+            "FRAMKey needs FRAMKEY_ALCHEMY_TOKEN or ALCHEMY_TOKEN to derive a trusted Alchemy endpoint for this chain"
+        );
+    }
 
     if rpc_probe == ChainSwitchRpcProbe::VerifyEndpoint {
-        let endpoint_url = alchemy_endpoint_from_token(chain.alchemy_network, &alchemy_token)?;
+        let endpoint_url = trusted_chain_endpoint(chain, alchemy_token.as_deref())?;
         let timeout_ms = config
             .rpc
             .as_ref()
             .map(|rpc| rpc.timeout_ms)
             .unwrap_or(DEFAULT_RPC_TIMEOUT_MS);
-        verify_alchemy_chain_endpoint(chain, &endpoint_url, timeout_ms)
+        verify_supported_chain_endpoint(chain, &endpoint_url, timeout_ms)
             .with_context(|| "failed to verify target chain RPC before switching session")?;
     }
 
-    let updated = state.switch_session_chain(chain, &alchemy_token)?;
+    let updated = state.switch_session_chain(chain, alchemy_token.as_deref())?;
     Ok(json!({
         "operation": "switch_session_chain",
         "switched": true,
@@ -284,7 +284,7 @@ pub(crate) fn chain_management_provider_error(
             "method": method,
             "configuredChainId": configured_chain_id,
             "requestedChainId": requested_chain_id,
-            "supportedChains": supported_alchemy_chains_value(),
+            "supportedChains": supported_chains_value(),
         })),
     }
 }
@@ -416,45 +416,74 @@ pub(crate) fn normalize_chain_id(chain_id: &str) -> Result<String> {
     Ok(format!("0x{:x}", chain_id_u64(chain_id)?))
 }
 
-pub(crate) fn supported_alchemy_chain(chain_id: &str) -> Option<SupportedAlchemyChain> {
+pub(crate) fn supported_chain(chain_id: &str) -> Option<SupportedChain> {
     let normalized = normalize_chain_id(chain_id).ok()?;
-    SUPPORTED_ALCHEMY_CHAINS
+    SUPPORTED_CHAINS
         .iter()
         .copied()
         .find(|chain| chain.chain_id == normalized)
 }
 
 pub(crate) fn active_chain_value(chain_id: &str) -> Value {
-    if let Some(chain) = supported_alchemy_chain(chain_id) {
-        return supported_alchemy_chain_value(chain);
+    if let Some(chain) = supported_chain(chain_id) {
+        return supported_chain_value(chain);
     }
     json!({
         "chainId": chain_id,
         "name": "Custom",
         "alchemyNetwork": Value::Null,
+        "rpcProvider": Value::Null,
+        "rpcNetwork": Value::Null,
+        "rpcKind": Value::Null,
+        "nativeName": Value::Null,
         "nativeSymbol": Value::Null,
+        "blockExplorerUrl": Value::Null,
         "switchable": false,
     })
 }
 
-pub(crate) fn supported_alchemy_chains_value() -> Value {
+pub(crate) fn supported_chains_value() -> Value {
     Value::Array(
-        SUPPORTED_ALCHEMY_CHAINS
+        SUPPORTED_CHAINS
             .iter()
             .copied()
-            .map(supported_alchemy_chain_value)
+            .map(supported_chain_value)
             .collect(),
     )
 }
 
-pub(crate) fn supported_alchemy_chain_value(chain: SupportedAlchemyChain) -> Value {
+pub(crate) fn supported_chain_value(chain: SupportedChain) -> Value {
     json!({
         "chainId": chain.chain_id,
         "name": chain.name,
-        "alchemyNetwork": chain.alchemy_network,
+        "alchemyNetwork": chain.alchemy_network(),
+        "rpcProvider": chain.rpc_provider(),
+        "rpcNetwork": chain.rpc_network(),
+        "rpcKind": chain.rpc_kind(),
+        "nativeName": chain.native_name,
         "nativeSymbol": chain.native_symbol,
+        "blockExplorerUrl": chain.block_explorer_url,
         "switchable": true,
+        "capabilities": {
+            "trustedRpcEndpoint": true,
+            "alchemyTokenApi": chain.supports_alchemy_token_api(),
+        },
     })
+}
+
+pub(crate) fn trusted_chain_endpoint(
+    chain: SupportedChain,
+    alchemy_token: Option<&str>,
+) -> Result<String> {
+    match chain.rpc {
+        SupportedChainRpc::Alchemy { network } => {
+            let token = alchemy_token.ok_or_else(|| {
+                anyhow::anyhow!("trusted Alchemy endpoint requires an Alchemy token")
+            })?;
+            alchemy_endpoint_from_token(network, token)
+        }
+        SupportedChainRpc::StaticJsonRpc { endpoint_url, .. } => Ok(endpoint_url.to_owned()),
+    }
 }
 
 pub(crate) fn chain_id_decimal(chain_id: &str) -> Result<String> {

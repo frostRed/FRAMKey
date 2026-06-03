@@ -46,35 +46,25 @@ fn decodes_erc20_approve_with_unlimited_warning() {
             .iter()
             .any(|warning| warning.code == "unlimited_token_approval")
     );
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
     assert!(!review.policy.can_sign);
-    assert!(review.policy.override_allowed);
+    assert!(!review.policy.override_allowed);
     assert!(
         review
             .policy
             .blockers
             .iter()
-            .any(|blocker| blocker.code == "live_simulation_required" && blocker.overrideable)
+            .any(|blocker| blocker.code == "high_risk_unlimited_approval" && !blocker.overrideable)
     );
     assert!(
         review
             .policy
             .blockers
             .iter()
-            .any(|blocker| blocker.code == "high_risk_unlimited_approval" && blocker.overrideable)
+            .any(|blocker| blocker.code == "unknown_approval_authority" && !blocker.overrideable)
     );
-    assert!(
-        review
-            .policy
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == "unknown_approval_authority" && blocker.overrideable)
-    );
-    assert_eq!(review.risk.level, TransactionRiskLevel::High);
-    assert_eq!(review.risk.action, TransactionRiskAction::HighRiskApproval);
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
+    assert_eq!(review.risk.action, TransactionRiskAction::Blocked);
     assert!(risk_reason(&review, "high_risk_unlimited_approval").is_some());
     assert!(risk_reason(&review, "unknown_approval_authority").is_some());
     assert_eq!(review.trust.level, TransactionTrustLevel::Unrecognized);
@@ -231,7 +221,7 @@ fn recognizes_aave_v3_pool_recipient() {
 }
 
 #[test]
-fn unknown_active_approval_authority_requires_high_risk_override() {
+fn unknown_active_approval_authority_is_blocked() {
     let mut review = local_transaction_review(
         "eth_sendTransaction",
         &json!([
@@ -251,20 +241,17 @@ fn unknown_active_approval_authority_requires_high_risk_override() {
     );
     mark_live_simulated(&mut review);
 
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
     assert!(!review.policy.can_sign);
-    assert!(review.policy.override_allowed);
+    assert!(!review.policy.override_allowed);
     assert!(
         review
             .policy
             .blockers
             .iter()
-            .any(|blocker| blocker.code == "unknown_approval_authority" && blocker.overrideable)
+            .any(|blocker| blocker.code == "unknown_approval_authority" && !blocker.overrideable)
     );
-    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
     assert!(risk_reason(&review, "unknown_approval_authority").is_some());
     assert_eq!(review.trust.level, TransactionTrustLevel::Unrecognized);
 }
@@ -498,7 +485,7 @@ fn decodes_uniswap_v2_swap_path_intent() {
             {
                 "chainId": "0x1",
                 "from": "0x000000000000000000000000000000000000000a",
-                "to": "0x4444444444444444444444444444444444444444",
+                "to": "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
                 "value": "0x0",
                 "data": data
             }
@@ -518,9 +505,9 @@ fn decodes_uniswap_v2_swap_path_intent() {
     assert_eq!(decoded_arg(call, "pathFirst"), Some(token_in));
     assert_eq!(decoded_arg(call, "pathLast"), Some(token_out));
     assert_no_unknown_selector(report);
-    assert_live_simulation_only_override(&review);
-    assert_eq!(review.risk.level, TransactionRiskLevel::Caution);
-    assert_eq!(review.risk.action, TransactionRiskAction::HighRiskApproval);
+    assert_local_allowlist_allowed(&review);
+    assert_eq!(review.risk.level, TransactionRiskLevel::Low);
+    assert_eq!(review.risk.action, TransactionRiskAction::OrdinaryApproval);
     assert!(risk_reason(&review, "protocol_intent_decoded").is_some());
 }
 
@@ -541,7 +528,7 @@ fn malformed_uniswap_v2_dynamic_path_fails_closed() {
             {
                 "chainId": "0x1",
                 "from": "0x000000000000000000000000000000000000000a",
-                "to": "0x4444444444444444444444444444444444444444",
+                "to": "0xe592427a0aece92de3edee1f18e0157c05861564",
                 "value": "0x0",
                 "data": data
             }
@@ -590,7 +577,7 @@ fn decodes_uniswap_v3_exact_input_single_intent() {
             {
                 "chainId": "0x1",
                 "from": "0x000000000000000000000000000000000000000a",
-                "to": "0x4444444444444444444444444444444444444444",
+                "to": "0xe592427a0aece92de3edee1f18e0157c05861564",
                 "value": "0x0",
                 "data": data
             }
@@ -611,7 +598,7 @@ fn decodes_uniswap_v3_exact_input_single_intent() {
     assert_eq!(decoded_arg(call, "fee"), Some("3000"));
     assert_eq!(decoded_arg(call, "amountIn"), Some("1000000"));
     assert_no_unknown_selector(report);
-    assert_live_simulation_only_override(&review);
+    assert_local_allowlist_allowed(&review);
 }
 
 #[test]
@@ -651,7 +638,7 @@ fn live_uniswap_swap_with_safe_local_semantics_can_use_ordinary_approval() {
 }
 
 #[test]
-fn live_uniswap_zero_slippage_still_requires_high_risk_override() {
+fn live_uniswap_zero_slippage_is_blocked() {
     let from = "0x000000000000000000000000000000000000000a";
     let token_in = "0x1111111111111111111111111111111111111111";
     let token_out = "0x2222222222222222222222222222222222222222";
@@ -681,14 +668,11 @@ fn live_uniswap_zero_slippage_still_requires_high_risk_override() {
     );
     mark_live_simulated(&mut review);
 
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
     assert!(!review.policy.can_sign);
-    assert!(review.policy.override_allowed);
+    assert!(!review.policy.override_allowed);
     assert!(risk_reason(&review, "uniswap_zero_slippage_floor").is_some());
-    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
 }
 
 #[test]
@@ -713,7 +697,7 @@ fn decodes_uniswap_universal_router_execute_without_raw_payload() {
             {
                 "chainId": "0x1",
                 "from": from,
-                "to": "0x4444444444444444444444444444444444444444",
+                "to": "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
                 "value": "0x0",
                 "data": data
             }
@@ -743,7 +727,7 @@ fn decodes_uniswap_universal_router_execute_without_raw_payload() {
             .all(|argument| argument.value != input)
     );
     assert_no_unknown_selector(report);
-    assert_live_simulation_only_override(&review);
+    assert_local_allowlist_allowed(&review);
 }
 
 #[test]
@@ -786,7 +770,46 @@ fn live_supported_universal_router_swap_can_use_ordinary_approval() {
 }
 
 #[test]
-fn live_unsupported_universal_router_command_requires_high_risk_override() {
+fn live_universal_router_swap_without_deadline_is_blocked() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let input = universal_router_v3_exact_in_input(
+        from,
+        1_000_000,
+        990_000,
+        &uniswap_v3_path_hex(
+            "0x1111111111111111111111111111111111111111",
+            3000,
+            "0x2222222222222222222222222222222222222222",
+        ),
+        true,
+    );
+    let data = format!(
+        "0x24856bc3{}",
+        universal_router_execute_args("00", &[input.as_str()], None),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
+    assert!(!review.policy.can_sign);
+    assert!(risk_reason(&review, "swap_deadline_missing").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
+}
+
+#[test]
+fn live_unsupported_universal_router_command_is_blocked() {
     let data = format!(
         "0x3593564c{}",
         universal_router_execute_args("1f", &[""], Some(future_swap_deadline())),
@@ -806,12 +829,9 @@ fn live_unsupported_universal_router_command_requires_high_risk_override() {
     );
     mark_live_simulated(&mut review);
 
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
     assert!(risk_reason(&review, "universal_router_semantics_incomplete").is_some());
-    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
 }
 
 #[test]
@@ -878,6 +898,63 @@ fn decodes_universal_router_permit2_permit_and_transfer_summary() {
 }
 
 #[test]
+fn live_universal_router_permit2_bounded_permit_can_use_ordinary_approval() {
+    let mut review = universal_router_permit2_permit_review(
+        &abi_u256(1_000_000),
+        future_swap_deadline(),
+        future_swap_deadline(),
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Allowed);
+    assert!(review.policy.can_sign);
+    assert!(risk_reason(&review, "universal_router_permit2_unbounded_amount").is_none());
+    assert!(risk_reason(&review, "universal_router_permit2_deadline_too_far").is_none());
+}
+
+#[test]
+fn live_universal_router_permit2_max_amount_is_blocked() {
+    let mut review = universal_router_permit2_permit_review(
+        &max_u160_word(),
+        future_swap_deadline(),
+        future_swap_deadline(),
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
+    assert!(!review.policy.can_sign);
+    assert!(risk_reason(&review, "universal_router_permit2_unbounded_amount").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
+}
+
+#[test]
+fn live_universal_router_permit2_expiration_too_far_is_blocked() {
+    let mut review = universal_router_permit2_permit_review(
+        &abi_u256(1_000_000),
+        far_permit_deadline(),
+        future_swap_deadline(),
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
+    assert!(!review.policy.can_sign);
+    assert!(risk_reason(&review, "universal_router_permit2_deadline_too_far").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
+}
+
+#[test]
+fn live_universal_router_permit2_expired_sig_deadline_is_blocked() {
+    let mut review =
+        universal_router_permit2_permit_review(&abi_u256(1_000_000), future_swap_deadline(), 0);
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
+    assert!(!review.policy.can_sign);
+    assert!(risk_reason(&review, "universal_router_permit2_sig_deadline_invalid").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
+}
+
+#[test]
 fn decodes_aave_supply_intent() {
     let asset = "0x1111111111111111111111111111111111111111";
     let on_behalf_of = "0x000000000000000000000000000000000000000a";
@@ -894,7 +971,7 @@ fn decodes_aave_supply_intent() {
             {
                 "chainId": "0x1",
                 "from": "0x000000000000000000000000000000000000000a",
-                "to": "0x3333333333333333333333333333333333333333",
+                "to": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
                 "value": "0x0",
                 "data": data
             }
@@ -911,11 +988,76 @@ fn decodes_aave_supply_intent() {
     assert_eq!(decoded_arg(call, "amount"), Some("50000000"));
     assert_eq!(decoded_arg(call, "onBehalfOf"), Some(on_behalf_of));
     assert_no_unknown_selector(report);
-    assert_live_simulation_only_override(&review);
+    assert_local_allowlist_allowed(&review);
 }
 
 #[test]
-fn live_aave_borrow_requires_high_risk_override() {
+fn live_aave_collateral_enable_can_use_ordinary_approval() {
+    let data = format!(
+        "0x5a3b74b9{}{}",
+        abi_address("0x1111111111111111111111111111111111111111"),
+        abi_bool(true),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": "0x000000000000000000000000000000000000000a",
+                "to": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Allowed);
+    assert!(review.policy.can_sign);
+    assert!(risk_reason(&review, "aave_collateral_disable_risk").is_none());
+}
+
+#[test]
+fn live_aave_collateral_disable_with_no_debt_and_dry_run_can_use_ordinary_approval() {
+    let data = format!(
+        "0x5a3b74b9{}{}",
+        abi_address("0x1111111111111111111111111111111111111111"),
+        abi_bool(false),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": "0x000000000000000000000000000000000000000a",
+                "to": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    review.simulation.protocol_evidence = Some(json!({
+        "aave": {
+            "status": "ok",
+            "totalDebtBase": "0",
+            "healthFactor": "0",
+            "transactionDryRun": {
+                "status": "ok"
+            }
+        }
+    }));
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Allowed);
+    assert!(review.policy.can_sign);
+    assert!(risk_reason(&review, "aave_collateral_disable_risk").is_none());
+    assert!(risk_reason(&review, "aave_transaction_dry_run_missing").is_none());
+}
+
+#[test]
+fn live_aave_borrow_without_account_evidence_is_blocked() {
     let from = "0x000000000000000000000000000000000000000a";
     let data = format!(
         "0xa415bcad{}{}{}{}{}",
@@ -940,16 +1082,13 @@ fn live_aave_borrow_requires_high_risk_override() {
     );
     mark_live_simulated(&mut review);
 
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
     assert!(risk_reason(&review, "aave_borrow_health_factor_unknown").is_some());
-    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
 }
 
 #[test]
-fn live_aave_borrow_with_safe_current_account_data_still_requires_high_risk_override() {
+fn live_aave_borrow_with_safe_account_data_and_dry_run_can_use_ordinary_approval() {
     let from = "0x000000000000000000000000000000000000000a";
     let data = format!(
         "0xa415bcad{}{}{}{}{}",
@@ -975,25 +1114,26 @@ fn live_aave_borrow_with_safe_current_account_data_still_requires_high_risk_over
     review.simulation.protocol_evidence = Some(json!({
         "aave": {
             "status": "ok",
-            "healthFactor": "2000000000000000000"
+            "totalDebtBase": "1",
+            "healthFactor": "2000000000000000000",
+            "transactionDryRun": {
+                "status": "ok"
+            }
         }
     }));
     mark_live_simulated(&mut review);
 
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
-    assert!(!review.policy.can_sign);
-    assert!(review.policy.override_allowed);
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Allowed);
+    assert!(review.policy.can_sign);
+    assert!(!review.policy.override_allowed);
     assert!(risk_reason(&review, "aave_borrow_health_factor_unknown").is_none());
-    assert!(risk_reason(&review, "aave_post_transaction_health_factor_unknown").is_some());
+    assert!(risk_reason(&review, "aave_transaction_dry_run_missing").is_none());
     assert!(risk_reason(&review, "aave_health_factor_caution").is_none());
-    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+    assert_eq!(review.risk.level, TransactionRiskLevel::Low);
 }
 
 #[test]
-fn live_aave_withdraw_to_third_party_requires_high_risk_override() {
+fn live_aave_withdraw_to_third_party_is_blocked() {
     let from = "0x000000000000000000000000000000000000000a";
     let recipient = "0x000000000000000000000000000000000000000b";
     let data = format!(
@@ -1018,18 +1158,19 @@ fn live_aave_withdraw_to_third_party_requires_high_risk_override() {
     review.simulation.protocol_evidence = Some(json!({
         "aave": {
             "status": "ok",
-            "healthFactor": "2000000000000000000"
+            "totalDebtBase": "0",
+            "healthFactor": "2000000000000000000",
+            "transactionDryRun": {
+                "status": "ok"
+            }
         }
     }));
     mark_live_simulated(&mut review);
 
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
     assert!(risk_reason(&review, "aave_third_party_withdraw_recipient").is_some());
-    assert!(risk_reason(&review, "aave_post_transaction_health_factor_unknown").is_some());
-    assert_eq!(review.risk.level, TransactionRiskLevel::High);
+    assert!(risk_reason(&review, "aave_transaction_dry_run_missing").is_none());
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
 }
 
 #[test]
@@ -1067,6 +1208,48 @@ fn live_aave_borrow_with_unsafe_account_data_is_blocked() {
     assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
     assert!(!review.policy.can_sign);
     assert!(risk_reason(&review, "aave_health_factor_liquidation_risk").is_some());
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
+}
+
+#[test]
+fn live_aave_borrow_with_malformed_health_factor_is_blocked() {
+    let from = "0x000000000000000000000000000000000000000a";
+    let data = format!(
+        "0xa415bcad{}{}{}{}{}",
+        abi_address("0x1111111111111111111111111111111111111111"),
+        abi_u256(50_000_000),
+        abi_u256(2),
+        abi_u256(0),
+        abi_address(from),
+    );
+    let mut review = local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
+    );
+    review.simulation.protocol_evidence = Some(json!({
+        "aave": {
+            "status": "ok",
+            "totalDebtBase": "1",
+            "healthFactor": "not-a-number",
+            "transactionDryRun": {
+                "status": "ok"
+            }
+        }
+    }));
+    mark_live_simulated(&mut review);
+
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
+    assert!(!review.policy.can_sign);
+    assert!(risk_reason(&review, "aave_borrow_health_factor_unknown").is_some());
     assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
 }
 
@@ -1143,15 +1326,12 @@ fn warns_on_unknown_selector() {
             .policy
             .blockers
             .iter()
-            .any(|blocker| blocker.code == "unknown_calldata" && blocker.overrideable)
+            .any(|blocker| blocker.code == "unknown_calldata" && !blocker.overrideable)
     );
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
-    assert!(review.policy.override_allowed);
-    assert_eq!(review.risk.level, TransactionRiskLevel::High);
-    assert_eq!(review.risk.action, TransactionRiskAction::HighRiskApproval);
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Blocked);
+    assert!(!review.policy.override_allowed);
+    assert_eq!(review.risk.level, TransactionRiskLevel::Blocked);
+    assert_eq!(review.risk.action, TransactionRiskAction::Blocked);
     assert!(risk_reason(&review, "unknown_calldata").is_some());
 }
 
@@ -1247,9 +1427,13 @@ fn risk_summary_marks_live_simulated_request_low() {
         &json!([
             {
                 "from": "0x000000000000000000000000000000000000000a",
-                "to": "0x000000000000000000000000000000000000000b",
+                "to": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                 "value": "0x0",
-                "data": "0x"
+                "data": concat!(
+                    "0xa9059cbb",
+                    "000000000000000000000000000000000000000000000000000000000000000b",
+                    "00000000000000000000000000000000000000000000000000000000000f4240"
+                )
             }
         ]),
         "0x1",
@@ -1274,8 +1458,8 @@ fn risk_summary_marks_live_simulated_request_low() {
     assert_eq!(review.risk.action, TransactionRiskAction::OrdinaryApproval);
     assert!(risk_reason(&review, "live_simulation_present").is_some());
     assert!(review.impact.live_simulated);
-    assert!(!review.impact.provider_asset_changes);
-    assert_eq!(review.impact.title, "No asset movement reported");
+    assert!(review.impact.provider_asset_changes);
+    assert_eq!(review.impact.title, "Impact: 1 transfer");
 }
 
 #[test]
@@ -1324,7 +1508,16 @@ fn simulation_client_trait_is_swappable() {
         &FixtureClient,
         TransactionSimulationRequest {
             method: "eth_sendTransaction",
-            params: &json!([{"data": "0x"}]),
+            params: &json!([
+                {
+                    "to": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                    "data": concat!(
+                        "0xa9059cbb",
+                        "000000000000000000000000000000000000000000000000000000000000000b",
+                        "00000000000000000000000000000000000000000000000000000000000f4240"
+                    )
+                }
+            ]),
             default_chain_id: "0x1",
         },
     );
@@ -1333,20 +1526,12 @@ fn simulation_client_trait_is_swappable() {
         review.simulation.provider_evidence,
         Some(json!({"fixture": true}))
     );
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
-    assert!(review.policy.override_allowed);
-    assert!(
-        review
-            .policy
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == "live_simulation_required" && blocker.overrideable)
-    );
-    assert_eq!(review.risk.level, TransactionRiskLevel::Caution);
-    assert_eq!(review.risk.action, TransactionRiskAction::HighRiskApproval);
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Allowed);
+    assert!(!review.policy.override_allowed);
+    assert!(review.policy.blockers.is_empty());
+    assert_eq!(review.risk.level, TransactionRiskLevel::Low);
+    assert_eq!(review.risk.action, TransactionRiskAction::OrdinaryApproval);
+    assert!(risk_reason(&review, "local_allowlist_match").is_some());
 }
 
 #[test]
@@ -1433,9 +1618,13 @@ fn alchemy_rpc_adapter_posts_json_rpc_payload() {
     let request_params = json!([
         {
             "from": "0x000000000000000000000000000000000000000a",
-            "to": "0x000000000000000000000000000000000000000b",
+            "to": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
             "value": "0x0",
-            "data": "0x",
+            "data": concat!(
+                "0xa9059cbb",
+                "000000000000000000000000000000000000000000000000000000000000000b",
+                "00000000000000000000000000000000000000000000000000000000000f4240"
+            ),
         }
     ]);
 
@@ -1630,9 +1819,26 @@ fn future_swap_deadline() -> u128 {
         .saturating_add(60 * 60)
 }
 
+fn far_permit_deadline() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as u128)
+        .unwrap_or(0)
+        .saturating_add((90 * 24 * 60 * 60) + 1)
+}
+
 fn abi_address(value: &str) -> String {
     let address = value.strip_prefix("0x").unwrap_or(value);
     format!("{address:0>64}")
+}
+
+fn abi_word_hex(value: &str) -> String {
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    format!("{value:0>64}")
+}
+
+fn max_u160_word() -> String {
+    abi_word_hex("ffffffffffffffffffffffffffffffffffffffff")
 }
 
 fn abi_bytes_word(hex_bytes: &str) -> String {
@@ -1729,16 +1935,72 @@ fn universal_router_permit2_permit_input(
     sig_deadline: u128,
     signature_hex: &str,
 ) -> String {
+    universal_router_permit2_permit_input_with_amount_word(
+        token,
+        &abi_u256(amount),
+        expiration,
+        nonce,
+        spender,
+        sig_deadline,
+        signature_hex,
+    )
+}
+
+fn universal_router_permit2_permit_input_with_amount_word(
+    token: &str,
+    amount_word: &str,
+    expiration: u128,
+    nonce: u128,
+    spender: &str,
+    sig_deadline: u128,
+    signature_hex: &str,
+) -> String {
     format!(
         "{}{}{}{}{}{}{}{}",
         abi_address(token),
-        abi_u256(amount),
+        amount_word,
         abi_u256(expiration),
         abi_u256(nonce),
         abi_address(spender),
         abi_u256(sig_deadline),
         abi_u256(224),
         abi_dynamic_bytes(signature_hex),
+    )
+}
+
+fn universal_router_permit2_permit_review(
+    amount_word: &str,
+    expiration: u128,
+    sig_deadline: u128,
+) -> TransactionReviewReport {
+    let from = "0x000000000000000000000000000000000000000a";
+    let token = "0x1111111111111111111111111111111111111111";
+    let spender = "0x66a9893cc07d91d95644aedd05d03f95e1dba8af";
+    let permit_input = universal_router_permit2_permit_input_with_amount_word(
+        token,
+        amount_word,
+        expiration,
+        7,
+        spender,
+        sig_deadline,
+        &"11".repeat(65),
+    );
+    let data = format!(
+        "0x3593564c{}",
+        universal_router_execute_args("0a", &[permit_input.as_str()], Some(future_swap_deadline())),
+    );
+    local_transaction_review(
+        "eth_sendTransaction",
+        &json!([
+            {
+                "chainId": "0x1",
+                "from": from,
+                "to": "0x66a9893cc07d91d95644aedd05d03f95e1dba8af",
+                "value": "0x0",
+                "data": data
+            }
+        ]),
+        "0x1",
     )
 }
 
@@ -1818,18 +2080,11 @@ fn assert_no_unknown_selector(report: &TransactionSimulationReport) {
     );
 }
 
-fn assert_live_simulation_only_override(review: &TransactionReviewReport) {
-    assert_eq!(
-        review.policy.decision,
-        TransactionPolicyDecision::RequiresUserOverride
-    );
-    assert!(
-        review
-            .policy
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == "live_simulation_required" && blocker.overrideable)
-    );
+fn assert_local_allowlist_allowed(review: &TransactionReviewReport) {
+    assert_eq!(review.policy.decision, TransactionPolicyDecision::Allowed);
+    assert!(review.policy.can_sign);
+    assert!(!review.policy.override_allowed);
+    assert!(review.policy.blockers.is_empty());
     assert!(
         !review
             .policy

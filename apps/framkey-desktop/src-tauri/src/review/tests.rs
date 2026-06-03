@@ -6,6 +6,38 @@ use framkey_simulation::{
 };
 use serde_json::json;
 
+const TEST_SIGNER_ACCOUNT: &str = "0x0000000000000000000000000000000000000001";
+
+fn siwe_personal_sign_params(account: &str) -> serde_json::Value {
+    json!([
+        siwe_message(account, "example.test", "https://example.test", 1, 5 * 60),
+        account
+    ])
+}
+
+fn siwe_message(
+    account: &str,
+    domain: &str,
+    uri: &str,
+    chain_id: u64,
+    expiration_seconds_from_now: u64,
+) -> String {
+    let now = current_unix_seconds();
+    format!(
+        "{domain} wants you to sign in with your Ethereum account:\n\
+         {account}\n\n\
+         FRAMKey test sign-in\n\n\
+         URI: {uri}\n\
+         Version: 1\n\
+         Chain ID: {chain_id}\n\
+         Nonce: FRAMKey1\n\
+         Issued At: {}\n\
+         Expiration Time: {}",
+        format_rfc3339_seconds(now),
+        format_rfc3339_seconds(now.saturating_add(expiration_seconds_from_now))
+    )
+}
+
 #[test]
 fn summarizes_transaction_without_raw_calldata() {
     let params = json!([
@@ -26,15 +58,15 @@ fn summarizes_transaction_without_raw_calldata() {
         summary["simulation"]["transaction"]["selector"],
         "0x12345678"
     );
-    assert_eq!(summary["policy"]["decision"], "requires_user_override");
+    assert_eq!(summary["policy"]["decision"], "blocked");
     assert_eq!(summary["policy"]["canSign"], false);
-    assert_eq!(summary["policy"]["overrideAllowed"], true);
-    assert_eq!(summary["risk"]["level"], "high");
-    assert_eq!(summary["risk"]["action"], "high_risk_approval");
-    assert_eq!(summary["guidance"]["status"], "high_risk");
-    assert_eq!(summary["guidance"]["primaryAction"], "Approve High Risk");
-    assert_eq!(summary["guidance"]["requiresHighRisk"], true);
-    assert_eq!(summary["guidance"]["canApprove"], true);
+    assert_eq!(summary["policy"]["overrideAllowed"], false);
+    assert_eq!(summary["risk"]["level"], "blocked");
+    assert_eq!(summary["risk"]["action"], "blocked");
+    assert_eq!(summary["guidance"]["status"], "blocked");
+    assert_eq!(summary["guidance"]["primaryAction"], "Cannot Sign");
+    assert_eq!(summary["guidance"]["requiresHighRisk"], false);
+    assert_eq!(summary["guidance"]["canApprove"], false);
     assert_eq!(summary["impact"]["title"], "Impact: native value");
     assert_eq!(summary["impact"]["nativeValue"], true);
     assert_eq!(summary["impact"]["approvalCount"], 0);
@@ -83,10 +115,10 @@ fn transaction_summary_includes_display_only_asset_context() {
         "USDC"
     );
     assert_eq!(
-        summary["policy"]["decision"], "requires_user_override",
+        summary["policy"]["decision"], "blocked",
         "metadata is display-only and must not alter policy"
     );
-    assert_eq!(summary["risk"]["level"], "high");
+    assert_eq!(summary["risk"]["level"], "blocked");
     assert_eq!(summary["impact"]["approvalCount"], 1);
     assert_eq!(summary["impact"]["items"][0]["title"], "Token approval");
     assert_eq!(summary["trust"]["level"], "unrecognized");
@@ -351,7 +383,7 @@ fn approval_consumes_decision_token() {
             "request-1".to_owned(),
             "personal_sign".to_owned(),
             Some("https://example.test".to_owned()),
-            &json!(["0x4869", "0x0000000000000000000000000000000000000001"]),
+            &siwe_personal_sign_params(TEST_SIGNER_ACCOUNT),
             "0x1",
             None,
         )
@@ -368,6 +400,10 @@ fn approval_consumes_decision_token() {
     assert!(outcome.review_request.decision_token_consumed);
     assert!(outcome.signing_enabled);
     assert_eq!(outcome.broker_mode, "controlled_personal_sign");
+    assert_eq!(
+        personal_sign_signing_authorization(&outcome.review_request).unwrap(),
+        "controlled_personal_sign"
+    );
 
     let replay = queue.decide(
         &request.id,
@@ -625,7 +661,7 @@ fn transaction_approval_enters_controlled_signing_mode() {
 }
 
 #[test]
-fn ordinary_transaction_approval_cannot_authorize_override_required_policy() {
+fn ordinary_transaction_approval_cannot_authorize_blocked_policy() {
     let mut queue = ReviewQueue::new();
     let request = queue
         .capture(
@@ -646,14 +682,14 @@ fn ordinary_transaction_approval_cannot_authorize_override_required_policy() {
         )
         .unwrap_err();
 
-    assert!(error.to_string().contains("high-risk approval"));
+    assert!(error.to_string().contains("policy blocks signing"));
     let pending = queue.get(&request.id).unwrap();
     assert_eq!(pending.status, ReviewStatus::Pending);
     assert!(!pending.decision_token_consumed);
 }
 
 #[test]
-fn high_risk_transaction_approval_enters_override_mode() {
+fn high_risk_transaction_approval_is_rejected_by_default_policy() {
     let mut queue = ReviewQueue::new();
     let request = queue
         .capture(
@@ -666,31 +702,22 @@ fn high_risk_transaction_approval_enters_override_mode() {
         )
         .unwrap();
 
-    let outcome = queue
+    let error = queue
         .decide(
             &request.id,
             &request.decision_token,
             ReviewDecision::ApproveWithRisk,
         )
-        .unwrap();
+        .unwrap_err();
 
-    assert!(outcome.signing_enabled);
-    assert_eq!(
-        outcome.broker_mode,
-        "controlled_transaction_high_risk_override"
+    assert!(
+        error
+            .to_string()
+            .contains("does not allow high-risk override")
     );
-    assert_eq!(
-        outcome
-            .review_request
-            .decision
-            .as_ref()
-            .map(|record| record.decision),
-        Some(ReviewDecision::ApproveWithRisk)
-    );
-    assert_eq!(
-        transaction_signing_authorization(&outcome.review_request).unwrap(),
-        "controlled_transaction_high_risk_override"
-    );
+    let pending = queue.get(&request.id).unwrap();
+    assert_eq!(pending.status, ReviewStatus::Pending);
+    assert!(!pending.decision_token_consumed);
 }
 
 #[test]
@@ -754,7 +781,7 @@ fn signed_request_records_execution_metadata() {
             "request-1".to_owned(),
             "personal_sign".to_owned(),
             Some("https://example.test".to_owned()),
-            &json!(["0x4869", "0x0000000000000000000000000000000000000001"]),
+            &siwe_personal_sign_params(TEST_SIGNER_ACCOUNT),
             "0x1",
             None,
         )
@@ -814,6 +841,130 @@ fn rejects_malformed_personal_sign_hex_message() {
 }
 
 #[test]
+fn siwe_personal_sign_summary_is_signable() {
+    let summary = summarize_personal_sign(
+        &siwe_personal_sign_params(TEST_SIGNER_ACCOUNT),
+        Some("https://example.test"),
+        "0x1",
+    );
+
+    assert_eq!(summary["siwe"]["status"], "ok");
+    assert_eq!(summary["siwe"]["domain"], "example.test");
+    assert_eq!(summary["policy"]["canSign"], true);
+    assert_eq!(summary["decision"], "requires_trusted_approval");
+}
+
+#[test]
+fn arbitrary_personal_sign_summary_is_blocked() {
+    let summary = summarize_personal_sign(
+        &json!(["0x4869", TEST_SIGNER_ACCOUNT]),
+        Some("https://example.test"),
+        "0x1",
+    );
+
+    assert_eq!(summary["policy"]["canSign"], false);
+    assert_eq!(
+        summary["policy"]["blockers"][0]["code"],
+        "unrecognized_personal_sign_message"
+    );
+    assert_eq!(summary["decision"], "blocked_before_approval");
+}
+
+#[test]
+fn siwe_personal_sign_domain_must_match_origin() {
+    let params = json!([
+        siwe_message(
+            TEST_SIGNER_ACCOUNT,
+            "evil.test",
+            "https://example.test",
+            1,
+            5 * 60
+        ),
+        TEST_SIGNER_ACCOUNT
+    ]);
+    let summary = summarize_personal_sign(&params, Some("https://example.test"), "0x1");
+
+    assert_eq!(summary["policy"]["canSign"], false);
+    assert_eq!(
+        summary["policy"]["blockers"][0]["code"],
+        "siwe_domain_origin_mismatch"
+    );
+}
+
+#[test]
+fn siwe_personal_sign_account_must_match_param() {
+    let params = json!([
+        siwe_message(
+            "0x9999999999999999999999999999999999999999",
+            "example.test",
+            "https://example.test",
+            1,
+            5 * 60
+        ),
+        TEST_SIGNER_ACCOUNT
+    ]);
+    let summary = summarize_personal_sign(&params, Some("https://example.test"), "0x1");
+
+    assert_eq!(summary["policy"]["canSign"], false);
+    assert_eq!(
+        summary["policy"]["blockers"][0]["code"],
+        "siwe_account_mismatch"
+    );
+}
+
+#[test]
+fn siwe_personal_sign_requires_short_expiration() {
+    let params = json!([
+        siwe_message(
+            TEST_SIGNER_ACCOUNT,
+            "example.test",
+            "https://example.test",
+            1,
+            60 * 60
+        ),
+        TEST_SIGNER_ACCOUNT
+    ]);
+    let summary = summarize_personal_sign(&params, Some("https://example.test"), "0x1");
+
+    assert_eq!(summary["policy"]["canSign"], false);
+    assert_eq!(
+        summary["policy"]["blockers"][0]["code"],
+        "siwe_expiration_too_far"
+    );
+}
+
+#[test]
+fn arbitrary_personal_sign_approval_remains_blocked() {
+    let mut queue = ReviewQueue::new();
+    let request = queue
+        .capture(
+            "request-1".to_owned(),
+            "personal_sign".to_owned(),
+            Some("https://example.test".to_owned()),
+            &json!(["0x4869", TEST_SIGNER_ACCOUNT]),
+            "0x1",
+            None,
+        )
+        .unwrap();
+
+    let error = queue
+        .decide(
+            &request.id,
+            &request.decision_token,
+            ReviewDecision::Approve,
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("unrecognized_personal_sign_message")
+    );
+    let pending = queue.get(&request.id).unwrap();
+    assert_eq!(pending.status, ReviewStatus::Pending);
+    assert!(!pending.decision_token_consumed);
+}
+
+#[test]
 fn expired_request_cannot_be_approved() {
     let mut queue = ReviewQueue::new();
     let mut request = queue
@@ -864,7 +1015,13 @@ fn allowed_transaction_review() -> TransactionReviewReport {
         &json!([
             {
                 "from": "0x0000000000000000000000000000000000000001",
-                "data": "0x"
+                "to": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                "value": "0x0",
+                "data": concat!(
+                    "0xa9059cbb",
+                    "0000000000000000000000000000000000000000000000000000000000000002",
+                    "00000000000000000000000000000000000000000000000000000000000f4240"
+                )
             }
         ]),
         "0x1",

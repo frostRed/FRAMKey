@@ -7,8 +7,9 @@ mod types;
 
 pub(crate) use authorization::{blocked_reason, decision_broker_mode};
 pub use authorization::{
-    dangerous_method_kind, network_switch_authorization, signable_typed_data_intent,
-    transaction_signing_authorization, typed_data_signing_authorization,
+    dangerous_method_kind, network_switch_authorization, personal_sign_signing_authorization,
+    signable_personal_sign_intent, signable_typed_data_intent, transaction_signing_authorization,
+    typed_data_signing_authorization,
 };
 pub(crate) use ids::*;
 pub(crate) use payload::*;

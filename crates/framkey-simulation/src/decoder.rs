@@ -2540,14 +2540,3 @@ pub(crate) fn policy_blocker(code: impl Into<String>, message: impl Into<String>
         overrideable: false,
     }
 }
-
-pub(crate) fn overrideable_policy_blocker(
-    code: impl Into<String>,
-    message: impl Into<String>,
-) -> PolicyBlocker {
-    PolicyBlocker {
-        code: code.into(),
-        message: message.into(),
-        overrideable: true,
-    }
-}

@@ -19,6 +19,26 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+fn test_siwe_message(account: &str, domain: &str, uri: &str, chain_id: u64) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    format!(
+        "{domain} wants you to sign in with your Ethereum account:\n\
+         {account}\n\n\
+         FRAMKey test sign-in\n\n\
+         URI: {uri}\n\
+         Version: 1\n\
+         Chain ID: {chain_id}\n\
+         Nonce: FRAMKey1\n\
+         Issued At: {}\n\
+         Expiration Time: {}",
+        review::format_rfc3339_seconds(now),
+        review::format_rfc3339_seconds(now.saturating_add(5 * 60))
+    )
+}
+
 #[test]
 fn captures_non_personal_signing_methods_without_signing() {
     let state = AppState::new();
@@ -135,6 +155,7 @@ fn provider_status_hides_local_runtime_details_from_dapps() {
         endpoint_url: "https://eth-mainnet.g.alchemy.com/v2/secret-token".to_owned(),
         network: Some("eth-mainnet".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Alchemy,
     });
     let request = ProviderRequest {
         id: "public-status".to_owned(),
@@ -439,6 +460,8 @@ fn alchemy_token_configures_read_rpc_and_default_live_simulation() {
     let mut config = fixture_config();
     config.rpc = rpc_config_from_env(
         config.rpc.as_ref(),
+        &config.chain_id,
+        None,
         None,
         Some(token.to_owned()),
         None,
@@ -500,7 +523,9 @@ fn explicit_rpc_url_takes_priority_over_alchemy_token() {
     let endpoint_url = "https://example.invalid/rpc".to_owned();
     let rpc = rpc_config_from_env(
         None,
+        "0x1",
         Some(endpoint_url.clone()),
+        None,
         Some(token.to_owned()),
         Some("eth-sepolia".to_owned()),
         Some(12_000),
@@ -511,7 +536,95 @@ fn explicit_rpc_url_takes_priority_over_alchemy_token() {
     assert_eq!(rpc.endpoint_url, endpoint_url);
     assert_eq!(rpc.network.as_deref(), Some("eth-sepolia"));
     assert_eq!(rpc.timeout_ms, 12_000);
+    assert_eq!(rpc.provider(), "custom");
+    assert!(!rpc.supports_alchemy_token_api());
     assert!(!rpc.endpoint_url.contains(token));
+}
+
+#[test]
+fn json_rpc_config_does_not_enable_alchemy_extensions_from_network_slug() {
+    let rpc = ConfigRpc::JsonRpc {
+        rpc_url: "https://example.invalid/rpc".to_owned(),
+        network: Some(DEFAULT_ALCHEMY_NETWORK.to_owned()),
+        timeout_ms: None,
+    }
+    .into_runtime()
+    .unwrap();
+
+    assert_eq!(rpc.kind(), "json_rpc");
+    assert_eq!(rpc.provider(), "custom");
+    assert!(!rpc.supports_alchemy_token_api());
+}
+
+#[test]
+fn hyperevm_supported_chain_uses_static_json_rpc_without_alchemy_token() {
+    let chain = supported_chain(HYPEREVM_CHAIN_ID).unwrap();
+    assert_eq!(chain.name, "Hyperliquid");
+    assert_eq!(chain.native_symbol, "HYPE");
+    assert_eq!(chain.rpc_provider(), "hyperliquid");
+    assert_eq!(chain.rpc_network(), HYPEREVM_NETWORK);
+    assert!(!chain.requires_alchemy_token());
+
+    let rpc = rpc_config_from_env(
+        None,
+        HYPEREVM_CHAIN_ID,
+        None,
+        None,
+        Some("stray-alchemy-token".to_owned()),
+        None,
+        None,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(rpc.endpoint_url, HYPEREVM_RPC_URL);
+    assert_eq!(rpc.network.as_deref(), Some(HYPEREVM_NETWORK));
+    assert_eq!(rpc.kind(), "json_rpc");
+    assert_eq!(rpc.provider(), "hyperliquid");
+    assert!(!rpc.supports_alchemy_token_api());
+
+    let status = status_result(&DesktopConfig {
+        chain_id: HYPEREVM_CHAIN_ID.to_owned(),
+        rpc: Some(rpc),
+        ..fixture_config()
+    });
+    assert_eq!(status["network"]["chainId"], json!(HYPEREVM_CHAIN_ID));
+    assert_eq!(status["network"]["nativeSymbol"], json!("HYPE"));
+    assert_eq!(status["network"]["rpcProvider"], json!("hyperliquid"));
+    assert_eq!(status["network"]["alchemyNetwork"], Value::Null);
+    assert_eq!(status["rpc"]["kind"], json!("json_rpc"));
+    assert_eq!(status["rpc"]["provider"], json!("hyperliquid"));
+    assert_eq!(
+        status["rpc"]["capabilities"]["alchemyTokenApi"],
+        json!(false)
+    );
+    let serialized = serde_json::to_string(&status).unwrap();
+    assert!(!serialized.contains(HYPEREVM_RPC_URL));
+    assert!(!serialized.contains("stray-alchemy-token"));
+}
+
+#[test]
+fn switch_session_chain_to_hyperevm_needs_no_token_and_disables_alchemy_simulation() {
+    let mut config = fixture_config();
+    config.simulation = DesktopSimulationConfig::AlchemyAssetChanges {
+        endpoint_url: "https://eth-mainnet.g.alchemy.com/v2/token-for-test".to_owned(),
+        network: Some("eth-mainnet".to_owned()),
+        timeout_ms: 1_000,
+        default_gas: DEFAULT_SIMULATION_DEFAULT_GAS.to_owned(),
+    };
+    let chain = supported_chain(HYPEREVM_CHAIN_ID).unwrap();
+
+    config.switch_to_supported_chain(chain, None).unwrap();
+
+    assert_eq!(config.chain_id, HYPEREVM_CHAIN_ID);
+    let rpc = config.rpc.as_ref().unwrap();
+    assert_eq!(rpc.endpoint_url, HYPEREVM_RPC_URL);
+    assert_eq!(rpc.network.as_deref(), Some(HYPEREVM_NETWORK));
+    assert_eq!(rpc.provider(), "hyperliquid");
+    assert!(matches!(
+        config.simulation,
+        DesktopSimulationConfig::LocalDecoderOnly
+    ));
 }
 
 #[test]
@@ -545,6 +658,7 @@ fn rpc_health_checks_chain_and_block_without_leaking_url() {
         endpoint_url: rpc_url.clone(),
         network: Some("eth-mainnet".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Alchemy,
     });
 
     let health = rpc_health_snapshot(&config).unwrap();
@@ -579,6 +693,7 @@ fn rpc_health_reports_wrong_chain() {
         endpoint_url: rpc_url,
         network: Some("eth-sepolia".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Alchemy,
     });
 
     let health = rpc_health_snapshot(&config).unwrap();
@@ -995,6 +1110,7 @@ fn wallet_assets_queries_alchemy_token_balances_and_metadata() {
         endpoint_url: rpc_url,
         network: Some("fixture".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Alchemy,
     });
     state
         .remember_connected_account(fixture_connected_account(
@@ -1032,6 +1148,92 @@ fn wallet_assets_queries_alchemy_token_balances_and_metadata() {
             "alchemy_getTokenMetadata",
         ]
     );
+}
+
+#[test]
+fn wallet_assets_on_hyperevm_skips_alchemy_token_discovery() {
+    let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x56bc75e2d63100000",
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x2318f8e",
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x0000000000000000000000000000000000000000000000000000000000000012",
+        }),
+    ]);
+    let state = AppState::new();
+    let mut config = fixture_config();
+    config.chain_id = HYPEREVM_CHAIN_ID.to_owned();
+    config.rpc = Some(DesktopRpcConfig {
+        endpoint_url: rpc_url,
+        network: Some(HYPEREVM_NETWORK.to_owned()),
+        timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Hyperliquid,
+    });
+    state
+        .remember_connected_account(fixture_connected_account(
+            "0x0000000000000000000000000000000000000001",
+        ))
+        .unwrap();
+    state
+        .remember_watched_asset(WatchedAsset {
+            chain_id: HYPEREVM_CHAIN_ID.to_owned(),
+            asset_type: "erc20".to_owned(),
+            contract_address: "0x1111111111111111111111111111111111111111".to_owned(),
+            symbol: "TEST".to_owned(),
+            decimals: 18,
+            image: None,
+            origin: Some("https://hyperevm.example".to_owned()),
+            watched_at_unix_ms: now_unix_ms(),
+        })
+        .unwrap();
+
+    let assets = wallet_assets_snapshot(&state, &config).unwrap();
+    assert_eq!(assets["native"]["symbol"], json!("HYPE"));
+    assert_eq!(assets["native"]["balance"], json!("0x56bc75e2d63100000"));
+    assert_eq!(assets["blockNumber"], json!("0x2318f8e"));
+    assert_eq!(
+        assets["tokenScan"]["status"],
+        json!("token_discovery_unsupported")
+    );
+    assert_eq!(
+        assets["tokenScan"]["provider"],
+        json!("unsupported_json_rpc")
+    );
+    assert_eq!(assets["tokenScan"]["watched"], json!(1));
+    assert_eq!(assets["tokens"].as_array().unwrap().len(), 1);
+    assert_eq!(assets["tokens"][0]["metadata"]["symbol"], json!("TEST"));
+    assert_eq!(assets["tokens"][0]["metadata"]["decimals"], json!(18));
+    assert_eq!(
+        assets["tokens"][0]["metadata"]["metadataSource"],
+        json!("erc20_decimals_call")
+    );
+    assert_eq!(
+        assets["tokens"][0]["metadata"]["decimalsTrusted"],
+        json!(true)
+    );
+
+    let methods = (0..3)
+        .map(|_| {
+            let request: Value =
+                serde_json::from_str(&request_rx.recv_timeout(Duration::from_secs(1)).unwrap())
+                    .unwrap();
+            request["method"].as_str().unwrap().to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        methods,
+        vec!["eth_getBalance", "eth_blockNumber", "eth_call"]
+    );
+    assert!(request_rx.try_recv().is_err());
 }
 
 #[test]
@@ -1124,6 +1326,48 @@ fn eip1559_fee_history_defaults_are_conservative() {
 }
 
 #[test]
+fn eip1559_fee_history_falls_back_from_pending_to_latest() {
+    let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32000,
+                "message": "invalid block range"
+            },
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "oldestBlock": "0x1",
+                "baseFeePerGas": ["0x10", "0x20"],
+                "gasUsedRatio": [0.5],
+                "reward": [["0x4"]]
+            },
+        }),
+    ]);
+    let mut config = fixture_config();
+    config.rpc = Some(DesktopRpcConfig {
+        endpoint_url: rpc_url,
+        network: Some(HYPEREVM_NETWORK.to_owned()),
+        timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Hyperliquid,
+    });
+
+    let suggestion = eip1559_fee_suggestion(&config).unwrap();
+
+    assert_eq!(suggestion.next_base_fee_per_gas, "0x20");
+    assert_eq!(suggestion.max_priority_fee_per_gas, "0x4");
+    let request: Value = serde_json::from_str(&request_rx.recv().unwrap()).unwrap();
+    assert_eq!(request["method"], "eth_feeHistory");
+    assert_eq!(request["params"], json!(["0x1", "pending", [50]]));
+    let request: Value = serde_json::from_str(&request_rx.recv().unwrap()).unwrap();
+    assert_eq!(request["method"], "eth_feeHistory");
+    assert_eq!(request["params"], json!(["0x1", "latest", [50]]));
+}
+
+#[test]
 fn unsupported_transaction_envelopes_are_rejected_before_review() {
     let state = AppState::new();
     let config = fixture_config();
@@ -1201,6 +1445,7 @@ fn pending_nonce_reservation_advances_local_reuse() {
         endpoint_url: rpc_url,
         network: Some("fixture".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Custom,
     });
     let wallet = "0x000000000000000000000000000000000000000a";
     let request = ProviderRequest {
@@ -1295,6 +1540,7 @@ fn trusted_native_send_requires_review_and_records_activity() {
         endpoint_url: rpc_url,
         network: Some("fixture".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Custom,
     });
     state.load_and_connect_account(&config).unwrap();
     let request = NativeTransferRequest {
@@ -1377,17 +1623,25 @@ fn aave_borrow_review_attaches_account_health_evidence() {
         abi_u256_word(0),
         abi_address_word(from),
     );
-    let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "result": aave_account_data_result(2_000_000_000_000_000_000),
-    })]);
+    let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": aave_account_data_result(2_000_000_000_000_000_000),
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x",
+        }),
+    ]);
     let state = AppState::new();
     let mut config = fixture_config();
     config.rpc = Some(DesktopRpcConfig {
         endpoint_url: rpc_url.clone(),
         network: Some("fixture".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Custom,
     });
     let request = ProviderRequest {
         id: "aave-borrow-review".to_owned(),
@@ -1416,23 +1670,22 @@ fn aave_borrow_review_attaches_account_health_evidence() {
         json!("2000000000000000000")
     );
     assert_eq!(
-        review.summary["policy"]["decision"],
-        json!("requires_user_override")
+        review.summary["simulation"]["protocolEvidence"]["aave"]["transactionDryRun"]["status"],
+        json!("ok")
     );
-    assert!(policy_blocker(&review.summary, "live_simulation_required").is_some());
+    assert_eq!(review.summary["policy"]["decision"], json!("allowed"));
+    assert!(review.summary["policy"]["canSign"].as_bool().unwrap());
     assert!(policy_blocker(&review.summary, "aave_borrow_health_factor_unknown").is_none());
-    assert!(
-        policy_blocker(
-            &review.summary,
-            "aave_post_transaction_health_factor_unknown"
-        )
-        .is_some()
-    );
+    assert!(policy_blocker(&review.summary, "aave_transaction_dry_run_missing").is_none());
     assert!(policy_blocker(&review.summary, "aave_health_factor_caution").is_none());
 
     let rpc_request: Value = serde_json::from_str(&request_rx.recv().unwrap()).unwrap();
     assert_eq!(rpc_request["method"], "eth_call");
     assert_eq!(rpc_request["params"][0]["to"], json!(pool));
+    let dry_run_request: Value = serde_json::from_str(&request_rx.recv().unwrap()).unwrap();
+    assert_eq!(dry_run_request["method"], "eth_call");
+    assert_eq!(dry_run_request["params"][0]["to"], json!(pool));
+    assert_eq!(dry_run_request["params"][0]["data"], json!(data));
     assert!(
         rpc_request["params"][0]["data"]
             .as_str()
@@ -1451,6 +1704,7 @@ fn trusted_native_send_rejects_invalid_request_before_review() {
         endpoint_url: "http://127.0.0.1:9".to_owned(),
         network: Some("fixture".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Custom,
     });
 
     let error = send_native_transfer_from_trusted_ui(
@@ -1485,6 +1739,11 @@ fn trusted_native_send_rejects_invalid_request_before_review() {
 #[test]
 fn trusted_token_send_requires_review_and_records_activity() {
     let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x0000000000000000000000000000000000000000000000000000000000000006",
+        }),
         json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -1527,6 +1786,7 @@ fn trusted_token_send_requires_review_and_records_activity() {
         endpoint_url: rpc_url,
         network: Some("fixture".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Alchemy,
     });
     state.load_and_connect_account(&config).unwrap();
     let request = TokenTransferRequest {
@@ -1556,13 +1816,10 @@ fn trusted_token_send_requires_review_and_records_activity() {
         review.summary["simulation"]["decodedCall"]["function"],
         json!("transfer(address,uint256)")
     );
-    let decision = if review.summary["policy"]["canSign"] == json!(true) {
-        ReviewDecision::Approve
-    } else {
-        ReviewDecision::ApproveWithRisk
-    };
+    assert_eq!(review.summary["policy"]["decision"], json!("allowed"));
+    assert_eq!(review.summary["policy"]["canSign"], json!(true));
     state
-        .decide_review_request(&review.id, &review.decision_token, decision)
+        .decide_review_request(&review.id, &review.decision_token, ReviewDecision::Approve)
         .unwrap();
 
     let result = worker.join().unwrap().unwrap();
@@ -1576,7 +1833,7 @@ fn trusted_token_send_requires_review_and_records_activity() {
     assert_eq!(result["symbol"], json!("USDC"));
     assert_eq!(result["reviewOrigin"], json!(TRUSTED_UI_ORIGIN));
 
-    let requests = (0..5)
+    let requests = (0..6)
         .map(|_| serde_json::from_str::<Value>(&request_rx.recv().unwrap()).unwrap())
         .collect::<Vec<_>>();
     let methods = requests
@@ -1586,6 +1843,7 @@ fn trusted_token_send_requires_review_and_records_activity() {
     assert_eq!(
         methods,
         vec![
+            "eth_call",
             "eth_getTransactionCount",
             "eth_estimateGas",
             "eth_feeHistory",
@@ -1593,13 +1851,14 @@ fn trusted_token_send_requires_review_and_records_activity() {
             "eth_sendRawTransaction",
         ]
     );
+    assert_eq!(requests[0]["params"][0]["data"], json!("0x313ce567"));
     assert_eq!(
-        requests[1]["params"][0]["to"],
+        requests[2]["params"][0]["to"],
         json!("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
     );
-    assert_eq!(requests[1]["params"][0]["value"], json!("0x0"));
+    assert_eq!(requests[2]["params"][0]["value"], json!("0x0"));
     assert!(
-        requests[1]["params"][0]["data"]
+        requests[2]["params"][0]["data"]
             .as_str()
             .unwrap()
             .starts_with("0xa9059cbb")
@@ -1626,6 +1885,7 @@ fn trusted_token_send_rejects_invalid_request_before_review() {
         endpoint_url: "http://127.0.0.1:9".to_owned(),
         network: Some("fixture".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Custom,
     });
 
     let error = send_token_transfer_from_trusted_ui(
@@ -1661,6 +1921,47 @@ fn trusted_token_send_rejects_invalid_request_before_review() {
 
     assert!(error.to_string().contains("more than 6 decimal places"));
     assert!(state.review_queue_snapshot().unwrap().is_empty());
+}
+
+#[test]
+fn trusted_token_send_rejects_dapp_decimal_mismatch_before_review() {
+    let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "0x0000000000000000000000000000000000000000000000000000000000000012",
+    })]);
+    let state = AppState::new();
+    let mut config = fixture_config();
+    config.rpc = Some(DesktopRpcConfig {
+        endpoint_url: rpc_url,
+        network: Some("fixture".to_owned()),
+        timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Custom,
+    });
+
+    let error = send_token_transfer_from_trusted_ui(
+        &state,
+        &config,
+        TokenTransferRequest {
+            token_contract: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48".to_owned(),
+            to: "0x0000000000000000000000000000000000000001".to_owned(),
+            amount: "1".to_owned(),
+            decimals: Some(6),
+            symbol: Some("USDC".to_owned()),
+            chain_id: Some("0x1".to_owned()),
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("do not match trusted contract decimals")
+    );
+    assert!(state.review_queue_snapshot().unwrap().is_empty());
+    let rpc_request: Value = serde_json::from_str(&request_rx.recv().unwrap()).unwrap();
+    assert_eq!(rpc_request["method"], "eth_call");
+    assert_eq!(rpc_request["params"][0]["data"], json!("0x313ce567"));
 }
 
 #[test]
@@ -2049,14 +2350,17 @@ fn keychain_status_reports_signer_helper_transaction_capability() {
 fn mock_personal_sign_provider_flow_requires_review_approval() {
     let state = Arc::new(AppState::new());
     let config = fixture_config();
-    state.load_and_connect_account(&config).unwrap();
+    let account = state.load_and_connect_account(&config).unwrap();
     state
         .grant_account_permission("framkey://local-dapp".to_owned())
         .unwrap();
     let request = ProviderRequest {
         id: "personal-sign-smoke".to_owned(),
         method: "personal_sign".to_owned(),
-        params: json!(["0x4652414d4b6579", null]),
+        params: json!([
+            test_siwe_message(&account.address, "local-dapp", "framkey://local-dapp", 1),
+            account.address
+        ]),
         origin: Some("framkey://local-dapp".to_owned()),
     };
 
@@ -2085,6 +2389,42 @@ fn mock_personal_sign_provider_flow_requires_review_approval() {
         .unwrap();
     assert_eq!(signed.status, ReviewStatus::Signed);
     assert!(signed.execution.as_ref().unwrap().address.is_some());
+}
+
+#[test]
+fn mock_arbitrary_personal_sign_provider_flow_blocks_before_approval() {
+    let state = AppState::new();
+    let config = fixture_config();
+    let account = state.load_and_connect_account(&config).unwrap();
+    state
+        .grant_account_permission("framkey://local-dapp".to_owned())
+        .unwrap();
+    let request = ProviderRequest {
+        id: "personal-sign-blocked".to_owned(),
+        method: "personal_sign".to_owned(),
+        params: json!(["0x4652414d4b6579", account.address]),
+        origin: Some("framkey://local-dapp".to_owned()),
+    };
+
+    let response = handle_provider_request(&state, &config, &request).unwrap();
+    let ProviderResponse::Error(error) = response else {
+        panic!("expected arbitrary personal_sign to return provider error");
+    };
+    assert_eq!(error.code, 4200);
+    assert!(error.message.contains("blocked before signing"));
+
+    let review = state
+        .review_queue_snapshot()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.method == "personal_sign")
+        .unwrap();
+    assert_eq!(review.status, ReviewStatus::Pending);
+    assert_eq!(review.summary["policy"]["canSign"], false);
+    assert_eq!(
+        review.summary["policy"]["blockers"][0]["code"],
+        "unrecognized_personal_sign_message"
+    );
 }
 
 #[test]
@@ -2135,7 +2475,7 @@ fn mock_typed_data_provider_flow_requires_review_approval() {
 }
 
 #[test]
-fn mock_send_transaction_provider_flow_uses_high_risk_review_override() {
+fn mock_send_transaction_provider_flow_uses_ordinary_review_approval() {
     let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![
         json!({
             "jsonrpc": "2.0",
@@ -2180,6 +2520,7 @@ fn mock_send_transaction_provider_flow_uses_high_risk_review_override() {
         endpoint_url: rpc_url,
         network: Some("fixture".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Alchemy,
     });
     let request = ProviderRequest {
         id: "send-transaction-smoke".to_owned(),
@@ -2189,9 +2530,9 @@ fn mock_send_transaction_provider_flow_uses_high_risk_review_override() {
                 "to": "0x0000000000000000000000000000000000000001",
                 "value": "0x0",
                 "data": concat!(
-                    "0x095ea7b3",
+                    "0xa9059cbb",
                     "0000000000000000000000000000000000000000000000000000000000000002",
-                    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                    "00000000000000000000000000000000000000000000000000000000000f4240"
                 ),
                 "nonce": "0x0",
                 "gas": "0x5208",
@@ -2208,22 +2549,15 @@ fn mock_send_transaction_provider_flow_uses_high_risk_review_override() {
 
     let review = wait_for_pending_review(&state, "eth_sendTransaction");
     assert_eq!(review.kind, review::ReviewMethodKind::Transaction);
-    assert_eq!(
-        review.summary["policy"]["decision"],
-        json!("requires_user_override")
-    );
-    assert_eq!(review.summary["policy"]["overrideAllowed"], json!(true));
+    assert_eq!(review.summary["policy"]["decision"], json!("allowed"));
+    assert_eq!(review.summary["policy"]["overrideAllowed"], json!(false));
     assert_eq!(review.summary["assetContext"]["status"], json!("ok"));
     assert_eq!(
         review.summary["assetContext"]["tokens"][0]["metadata"]["symbol"],
         json!("FIX")
     );
     state
-        .decide_review_request(
-            &review.id,
-            &review.decision_token,
-            ReviewDecision::ApproveWithRisk,
-        )
+        .decide_review_request(&review.id, &review.decision_token, ReviewDecision::Approve)
         .unwrap();
 
     let response = worker.join().unwrap().unwrap();
@@ -2250,7 +2584,7 @@ fn mock_send_transaction_provider_flow_uses_high_risk_review_override() {
     assert_eq!(signed.status, ReviewStatus::Signed);
     assert_eq!(
         signed.decision.as_ref().map(|record| record.decision),
-        Some(ReviewDecision::ApproveWithRisk)
+        Some(ReviewDecision::Approve)
     );
 
     let activity = transaction_activity_snapshot(&state, &config, false).unwrap();
@@ -2284,6 +2618,51 @@ fn mock_send_transaction_provider_flow_uses_high_risk_review_override() {
     assert_eq!(
         rpc_request["params"][0],
         json!("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+}
+
+#[test]
+fn transaction_asset_context_on_hyperevm_skips_alchemy_metadata() {
+    let state = AppState::new();
+    let mut config = fixture_config();
+    config.chain_id = HYPEREVM_CHAIN_ID.to_owned();
+    config.rpc = Some(DesktopRpcConfig {
+        endpoint_url: HYPEREVM_RPC_URL.to_owned(),
+        network: Some(HYPEREVM_NETWORK.to_owned()),
+        timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Hyperliquid,
+    });
+    let request = ProviderRequest {
+        id: "hyperevm-approve-review".to_owned(),
+        method: "eth_sendTransaction".to_owned(),
+        params: json!([
+            {
+                "from": "0x1111111111111111111111111111111111111111",
+                "to": "0x2222222222222222222222222222222222222222",
+                "value": "0x0",
+                "data": concat!(
+                    "0x095ea7b3",
+                    "0000000000000000000000003333333333333333333333333333333333333333",
+                    "0000000000000000000000000000000000000000000000000000000000000001"
+                ),
+            }
+        ]),
+        origin: Some("https://hyperevm.example".to_owned()),
+    };
+
+    let review = state.capture_review_request(&config, &request).unwrap();
+
+    assert_eq!(
+        review.summary["assetContext"]["status"],
+        json!("metadata_unsupported")
+    );
+    assert_eq!(
+        review.summary["assetContext"]["provider"],
+        json!("unsupported_json_rpc")
+    );
+    assert_eq!(
+        review.summary["assetContext"]["tokens"][0]["metadataError"],
+        json!("Token metadata requires an Alchemy-backed RPC")
     );
 }
 
@@ -2476,6 +2855,7 @@ fn transaction_activity_guidance_explains_insufficient_funds_failure() {
         endpoint_url: rpc_url,
         network: Some("fixture".to_owned()),
         timeout_ms: 1_000,
+        provider: DesktopRpcProvider::Alchemy,
     });
     let request = ProviderRequest {
         id: "insufficient-funds".to_owned(),
@@ -2485,9 +2865,9 @@ fn transaction_activity_guidance_explains_insufficient_funds_failure() {
                 "to": "0x0000000000000000000000000000000000000001",
                 "value": "0x0",
                 "data": concat!(
-                    "0x095ea7b3",
+                    "0xa9059cbb",
                     "0000000000000000000000000000000000000000000000000000000000000002",
-                    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                    "00000000000000000000000000000000000000000000000000000000000f4240"
                 ),
                 "nonce": "0x0",
                 "gas": "0x5208",
@@ -2504,11 +2884,7 @@ fn transaction_activity_guidance_explains_insufficient_funds_failure() {
 
     let review = wait_for_pending_review(&state, "eth_sendTransaction");
     state
-        .decide_review_request(
-            &review.id,
-            &review.decision_token,
-            ReviewDecision::ApproveWithRisk,
-        )
+        .decide_review_request(&review.id, &review.decision_token, ReviewDecision::Approve)
         .unwrap();
 
     let response = worker.join().unwrap().unwrap();
@@ -2548,9 +2924,11 @@ fn transaction_activity_guidance_explains_insufficient_funds_failure() {
 fn switch_session_chain_updates_alchemy_rpc_without_leaking_token() {
     let mut config = fixture_config();
     let token = "switch-token-for-test";
-    let chain = supported_alchemy_chain("0x2105").unwrap();
+    let chain = supported_chain("0x2105").unwrap();
 
-    config.switch_to_alchemy_chain(chain, token).unwrap();
+    config
+        .switch_to_supported_chain(chain, Some(token))
+        .unwrap();
 
     assert_eq!(config.chain_id, "0x2105");
     let rpc = config.rpc.as_ref().unwrap();
@@ -2564,7 +2942,7 @@ fn switch_session_chain_updates_alchemy_rpc_without_leaking_token() {
     assert_eq!(status["network"]["alchemyNetwork"], json!("base-mainnet"));
     assert_eq!(
         status["supportedChains"].as_array().unwrap().len(),
-        SUPPORTED_ALCHEMY_CHAINS.len()
+        SUPPORTED_CHAINS.len()
     );
     let serialized = serde_json::to_string(&status).unwrap();
     assert!(!serialized.contains(token));
@@ -2624,6 +3002,59 @@ fn wallet_switch_ethereum_chain_requires_trusted_approval() {
 }
 
 #[test]
+fn wallet_switch_ethereum_chain_to_hyperevm_requires_approval_without_token() {
+    let state = Arc::new(AppState::new());
+    let config = fixture_config();
+    *state.config.lock().unwrap() = Some(config.clone());
+    let request = ProviderRequest {
+        id: "switch-hyperevm".to_owned(),
+        method: "wallet_switchEthereumChain".to_owned(),
+        params: json!([{"chainId": HYPEREVM_CHAIN_ID}]),
+        origin: Some("https://hyperevm.example".to_owned()),
+    };
+
+    let worker = thread::spawn({
+        let state = Arc::clone(&state);
+        let config = config.clone();
+        let request = request.clone();
+        move || {
+            handle_switch_chain_request_with_probe(
+                state.as_ref(),
+                &config,
+                &request,
+                None,
+                ChainSwitchRpcProbe::Skip,
+            )
+        }
+    });
+
+    let review = wait_for_pending_review(&state, "wallet_switchEthereumChain");
+    assert_eq!(review.kind, review::ReviewMethodKind::NetworkSwitch);
+    assert_eq!(review.summary["requestedChainId"], json!(HYPEREVM_CHAIN_ID));
+    assert_eq!(review.summary["rpcSource"], json!("trusted_chain_session"));
+    state
+        .decide_review_request(&review.id, &review.decision_token, ReviewDecision::Approve)
+        .unwrap();
+
+    let response = worker.join().unwrap().unwrap();
+    match response {
+        ProviderResponse::Result(value) => assert_eq!(value, Value::Null),
+        ProviderResponse::Error(error) => {
+            panic!("unexpected provider error: {}", error.message)
+        }
+    }
+
+    let active = state.config_snapshot().unwrap();
+    assert_eq!(active.chain_id, HYPEREVM_CHAIN_ID);
+    let rpc = active.rpc.as_ref().unwrap();
+    assert_eq!(rpc.endpoint_url, HYPEREVM_RPC_URL);
+    assert_eq!(rpc.network.as_deref(), Some(HYPEREVM_NETWORK));
+    assert_eq!(rpc.provider(), "hyperliquid");
+    let reviews = state.review_queue_snapshot().unwrap();
+    assert_eq!(reviews[0].status, ReviewStatus::Completed);
+}
+
+#[test]
 fn wallet_add_ethereum_chain_requires_trusted_approval_without_switching() {
     let state = Arc::new(AppState::new());
     let config = fixture_config();
@@ -2663,7 +3094,67 @@ fn wallet_add_ethereum_chain_requires_trusted_approval_without_switching() {
     assert_eq!(review.summary["intent"], json!("add_network"));
     assert_eq!(review.summary["requestedChainId"], json!("0x2105"));
     assert_eq!(review.summary["providedRpcUrlCount"], json!(1));
-    assert_eq!(review.summary["rpcSource"], json!("trusted_alchemy_only"));
+    assert_eq!(review.summary["rpcSource"], json!("trusted_chain_endpoint"));
+    state
+        .decide_review_request(&review.id, &review.decision_token, ReviewDecision::Approve)
+        .unwrap();
+
+    let response = worker.join().unwrap().unwrap();
+    match response {
+        ProviderResponse::Result(value) => assert_eq!(value, Value::Null),
+        ProviderResponse::Error(error) => {
+            panic!("unexpected provider error: {}", error.message)
+        }
+    }
+
+    let active = state.config_snapshot().unwrap();
+    assert_eq!(active.chain_id, "0x1");
+    assert!(active.rpc.is_none());
+    let reviews = state.review_queue_snapshot().unwrap();
+    assert_eq!(reviews[0].status, ReviewStatus::Completed);
+}
+
+#[test]
+fn wallet_add_ethereum_chain_hyperevm_requires_approval_without_token_or_switching() {
+    let state = Arc::new(AppState::new());
+    let config = fixture_config();
+    *state.config.lock().unwrap() = Some(config.clone());
+    let request = ProviderRequest {
+        id: "add-hyperevm".to_owned(),
+        method: "wallet_addEthereumChain".to_owned(),
+        params: json!([
+            {
+                "chainId": HYPEREVM_CHAIN_ID,
+                "chainName": "Hyperliquid",
+                "nativeCurrency": {"name": "HYPE", "symbol": "HYPE", "decimals": 18},
+                "rpcUrls": ["https://developer-provided-rpc.example/hyperevm"],
+                "blockExplorerUrls": ["https://hyperevmscan.io"]
+            }
+        ]),
+        origin: Some("https://hyperevm.example".to_owned()),
+    };
+
+    let worker = thread::spawn({
+        let state = Arc::clone(&state);
+        let config = config.clone();
+        let request = request.clone();
+        move || {
+            handle_add_chain_request_with_probe(
+                state.as_ref(),
+                &config,
+                &request,
+                None,
+                ChainSwitchRpcProbe::Skip,
+            )
+        }
+    });
+
+    let review = wait_for_pending_review(&state, "wallet_addEthereumChain");
+    assert_eq!(review.kind, review::ReviewMethodKind::NetworkSwitch);
+    assert_eq!(review.summary["intent"], json!("add_network"));
+    assert_eq!(review.summary["requestedChainId"], json!(HYPEREVM_CHAIN_ID));
+    assert_eq!(review.summary["providedRpcUrlCount"], json!(1));
+    assert_eq!(review.summary["rpcSource"], json!("trusted_chain_endpoint"));
     state
         .decide_review_request(&review.id, &review.decision_token, ReviewDecision::Approve)
         .unwrap();
@@ -2722,6 +3213,39 @@ fn trusted_ui_switch_session_chain_returns_updated_status() {
 }
 
 #[test]
+fn trusted_ui_switch_session_chain_to_hyperevm_needs_no_token() {
+    let state = AppState::new();
+    let config = fixture_config();
+    *state.config.lock().unwrap() = Some(config.clone());
+    let request = SwitchSessionChainRequest {
+        chain_id: HYPEREVM_CHAIN_ID.to_owned(),
+    };
+
+    let result = switch_session_chain_from_trusted_ui(
+        &state,
+        &config,
+        request,
+        None,
+        ChainSwitchRpcProbe::Skip,
+    )
+    .unwrap();
+
+    assert_eq!(result["operation"], json!("switch_session_chain"));
+    assert_eq!(result["switched"], json!(true));
+    assert_eq!(result["chainId"], json!(HYPEREVM_CHAIN_ID));
+    assert_eq!(result["network"]["name"], json!("Hyperliquid"));
+    assert_eq!(result["network"]["nativeSymbol"], json!("HYPE"));
+    assert_eq!(result["status"]["rpc"]["provider"], json!("hyperliquid"));
+    assert_eq!(
+        result["status"]["rpc"]["capabilities"]["alchemyTokenApi"],
+        json!(false)
+    );
+    let active = state.config_snapshot().unwrap();
+    assert_eq!(active.chain_id, HYPEREVM_CHAIN_ID);
+    assert_eq!(active.rpc.as_ref().unwrap().endpoint_url, HYPEREVM_RPC_URL);
+}
+
+#[test]
 fn recovery_smoke_pack_writes_files_and_validates_recommended_set() {
     let dir = std::env::temp_dir().join(format!(
         "framkey-desktop-recovery-smoke-{}-{}",
@@ -2761,12 +3285,12 @@ fn recovery_smoke_pack_writes_files_and_validates_recommended_set() {
 
 #[test]
 fn chain_switch_rpc_probe_requires_target_chain_id() {
-    let chain = supported_alchemy_chain("0xaa36a7").unwrap();
+    let chain = supported_chain("0xaa36a7").unwrap();
     let (rpc_url, request_rx) = spawn_rpc_body_sequence_server(vec![
         json!({"jsonrpc": "2.0", "id": 1, "result": "0xaa36a7"}),
     ]);
 
-    verify_alchemy_chain_endpoint(chain, &rpc_url, 1_000).unwrap();
+    verify_supported_chain_endpoint(chain, &rpc_url, 1_000).unwrap();
 
     let rpc_request: Value = serde_json::from_str(&request_rx.recv().unwrap()).unwrap();
     assert_eq!(rpc_request["method"], "eth_chainId");
@@ -2775,11 +3299,11 @@ fn chain_switch_rpc_probe_requires_target_chain_id() {
 
 #[test]
 fn chain_switch_rpc_probe_rejects_wrong_chain_id() {
-    let chain = supported_alchemy_chain("0xaa36a7").unwrap();
+    let chain = supported_chain("0xaa36a7").unwrap();
     let (rpc_url, _request_rx) =
         spawn_rpc_body_sequence_server(vec![json!({"jsonrpc": "2.0", "id": 1, "result": "0x1"})]);
 
-    let error = verify_alchemy_chain_endpoint(chain, &rpc_url, 1_000).unwrap_err();
+    let error = verify_supported_chain_endpoint(chain, &rpc_url, 1_000).unwrap_err();
     assert!(
         error
             .to_string()

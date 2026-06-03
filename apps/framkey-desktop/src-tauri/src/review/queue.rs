@@ -56,6 +56,15 @@ impl ReviewQueue {
     ) -> Result<ReviewRequest> {
         let kind = dangerous_method_kind(&method).expect("capture only called for review methods");
         let received_at_unix_ms = now_unix_ms();
+        let summary = summarize_review_request(
+            kind,
+            &method,
+            params,
+            chain_id,
+            origin.as_deref(),
+            transaction_review,
+            transaction_asset_context,
+        );
         let request = ReviewRequest {
             id: self.next_review_id(),
             broker_session_id: self.broker_session_id.clone(),
@@ -71,14 +80,7 @@ impl ReviewQueue {
             decision_token_consumed: false,
             execution: None,
             blocked_reason: blocked_reason(kind).to_owned(),
-            summary: summarize_review_request(
-                kind,
-                &method,
-                params,
-                chain_id,
-                transaction_review,
-                transaction_asset_context,
-            ),
+            summary,
             params_preview: truncate_value(params, 0),
         };
 

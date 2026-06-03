@@ -11,6 +11,7 @@ use crate::*;
 
 const DEFAULT_PRIORITY_FEE_PER_GAS: &str = "0x3b9aca00";
 const AAVE_GET_USER_ACCOUNT_DATA_SELECTOR: &str = "0xbf92857c";
+const ERC20_DECIMALS_SELECTOR: &str = "0x313ce567";
 const MAX_LEGACY_GAS_PRICE_WEI: u128 = 1_000_000_000_000;
 const MAX_EIP1559_MAX_FEE_PER_GAS_WEI: u128 = 1_000_000_000_000;
 const MAX_EIP1559_PRIORITY_FEE_PER_GAS_WEI: u128 = 100_000_000_000;
@@ -321,7 +322,14 @@ pub(crate) struct Eip1559FeeSuggestion {
 }
 
 pub(crate) fn eip1559_fee_suggestion(config: &DesktopConfig) -> Result<Eip1559FeeSuggestion> {
-    let result = rpc_result(config, "eth_feeHistory", json!(["0x1", "pending", [50]]))?;
+    let pending = rpc_result(config, "eth_feeHistory", json!(["0x1", "pending", [50]]));
+    let result = match pending {
+        Ok(result) => result,
+        Err(pending_error) => rpc_result(config, "eth_feeHistory", json!(["0x1", "latest", [50]]))
+            .with_context(|| {
+                format!("eth_feeHistory pending failed before latest fallback: {pending_error}")
+            })?,
+    };
     eip1559_fee_suggestion_from_fee_history(&result)
 }
 
@@ -390,6 +398,7 @@ fn validate_eip1559_fee_caps(max_fee_per_gas: &str, max_priority_fee_per_gas: &s
 
 pub(crate) fn enrich_aave_account_evidence(
     config: &DesktopConfig,
+    request: &ProviderRequest,
     review: &mut TransactionReviewReport,
 ) {
     let Some(target) = aave_account_evidence_target(&review.simulation) else {
@@ -417,6 +426,10 @@ pub(crate) fn enrich_aave_account_evidence(
         match fetch_aave_user_account_data(config, &target.pool, &target.account) {
             Ok(mut evidence) => {
                 evidence.insert("chainId".to_owned(), json!(review.simulation.chain_id));
+                evidence.insert(
+                    "transactionDryRun".to_owned(),
+                    fetch_aave_transaction_dry_run(config, request),
+                );
                 Value::Object(evidence)
             }
             Err(error) => json!({
@@ -557,6 +570,43 @@ fn fetch_aave_user_account_data(
     Ok(evidence)
 }
 
+fn fetch_aave_transaction_dry_run(config: &DesktopConfig, request: &ProviderRequest) -> Value {
+    let call_object = match transaction_eth_call_object_from_request(request) {
+        Ok(call_object) => call_object,
+        Err(error) => {
+            return json!({
+                "source": "eth_call:transaction",
+                "status": "request_unavailable",
+                "error": truncate_for_event(&error.to_string(), 180),
+            });
+        }
+    };
+    match rpc_result(config, "eth_call", json!([call_object, "latest"])) {
+        Ok(_) => json!({
+            "source": "eth_call:transaction",
+            "status": "ok",
+        }),
+        Err(error) => json!({
+            "source": "eth_call:transaction",
+            "status": "rpc_error",
+            "error": truncate_for_event(&error.to_string(), 180),
+        }),
+    }
+}
+
+fn transaction_eth_call_object_from_request(request: &ProviderRequest) -> Result<Value> {
+    let tx = transaction_params_object(&request.params)?;
+    let from = optional_string_field(tx, "from")?
+        .ok_or_else(|| anyhow::anyhow!("transaction dry run requires a from address"))?;
+    let to = optional_string_field(tx, "to")?
+        .ok_or_else(|| anyhow::anyhow!("transaction dry run requires a to address"))?;
+    let value = optional_string_field(tx, "value")?.unwrap_or_else(|| "0x0".to_owned());
+    let data = optional_string_field(tx, "data")?
+        .or(optional_string_field(tx, "input")?)
+        .unwrap_or_else(|| "0x".to_owned());
+    Ok(transaction_call_object(&from, Some(&to), &value, &data))
+}
+
 fn aave_user_account_data_call_data(account: &str) -> Result<String> {
     let account = account
         .parse::<EvmAddress>()
@@ -695,6 +745,50 @@ pub(crate) fn rpc_string_result(
         .as_str()
         .map(str::to_owned)
         .ok_or_else(|| anyhow::anyhow!("{method} returned a non-string result"))
+}
+
+pub(crate) fn trusted_erc20_decimals(config: &DesktopConfig, contract: &str) -> Result<u8> {
+    let contract = contract
+        .trim()
+        .parse::<EvmAddress>()
+        .map_err(|_| anyhow::anyhow!("token contract is not a valid EVM address"))?
+        .to_string();
+    let result = rpc_string_result(
+        config,
+        "eth_call",
+        json!([
+            {
+                "to": contract,
+                "data": ERC20_DECIMALS_SELECTOR
+            },
+            "latest"
+        ]),
+    )?;
+    decode_erc20_decimals_result(&result)
+}
+
+fn decode_erc20_decimals_result(result: &str) -> Result<u8> {
+    let hex = result
+        .strip_prefix("0x")
+        .ok_or_else(|| anyhow::anyhow!("ERC-20 decimals result must be 0x-prefixed"))?;
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        anyhow::bail!("ERC-20 decimals result must contain one uint256 word");
+    }
+    let mut value = 0_u16;
+    for byte in hex.bytes() {
+        let nibble = u16::from(
+            hex_nibble_value(byte)
+                .ok_or_else(|| anyhow::anyhow!("ERC-20 decimals result contains invalid hex"))?,
+        );
+        value = value
+            .checked_mul(16)
+            .and_then(|value| value.checked_add(nibble))
+            .ok_or_else(|| anyhow::anyhow!("ERC-20 decimals value is too large"))?;
+        if value > u16::from(u8::MAX) {
+            anyhow::bail!("ERC-20 decimals must be between 0 and 255");
+        }
+    }
+    Ok(u8::try_from(value).expect("checked decimals range"))
 }
 
 pub(crate) fn bump_hex_quantity(

@@ -16,7 +16,7 @@ pub(crate) fn status_result(config: &DesktopConfig) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "chainId": config.chain_id,
         "network": active_chain_value(&config.chain_id),
-        "supportedChains": supported_alchemy_chains_value(),
+        "supportedChains": supported_chains_value(),
         "wallet": config.wallet.describe(),
         "device": config.device.describe(),
         "keychain": {
@@ -34,13 +34,13 @@ pub(crate) fn status_result(config: &DesktopConfig) -> Value {
             "requestReview": true,
             "approvalBroker": "controlled_personal_sign",
             "typedDataApprovalBroker": "controlled_typed_data_signing",
-            "personalSign": "approval_required",
+            "personalSign": "siwe_approval_required",
             "sendTransaction": config.wallet.send_transaction_capability(),
             "nativeSend": config.wallet.send_transaction_capability(),
             "tokenSend": config.wallet.send_transaction_capability(),
             "signTypedData": "permit_approval_required",
-            "networkAdd": "trusted_approval_known_alchemy_chains",
-            "networkSwitch": "trusted_approval_known_alchemy_chains",
+            "networkAdd": "trusted_approval_known_chains",
+            "networkSwitch": "trusted_approval_known_chains",
             "watchAsset": "trusted_approval_erc20_persistent_local",
             "simulation": config.simulation.capability_value(),
             "rpcProxy": config.rpc.is_some(),
@@ -51,7 +51,7 @@ pub(crate) fn status_result(config: &DesktopConfig) -> Value {
         "trustModel": {
             "trustedWalletUi": true,
             "untrustedDappWebView": true,
-            "signingEnabled": "personal_sign_and_permit_typed_data_after_approval",
+            "signingEnabled": "siwe_personal_sign_and_permit_typed_data_after_approval",
         }
     })
 }
@@ -62,7 +62,7 @@ pub(crate) fn provider_status_result(config: &DesktopConfig) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "chainId": config.chain_id,
         "network": active_chain_value(&config.chain_id),
-        "supportedChains": supported_alchemy_chains_value(),
+        "supportedChains": supported_chains_value(),
         "wallet": config.wallet.describe(),
         "capabilities": {
             "readOnlyAccounts": true,
@@ -70,11 +70,11 @@ pub(crate) fn provider_status_result(config: &DesktopConfig) -> Value {
             "requestReview": true,
             "approvalBroker": "controlled_personal_sign",
             "typedDataApprovalBroker": "controlled_typed_data_signing",
-            "personalSign": "approval_required",
+            "personalSign": "siwe_approval_required",
             "sendTransaction": config.wallet.send_transaction_capability(),
             "signTypedData": "permit_approval_required",
-            "networkAdd": "trusted_approval_known_alchemy_chains",
-            "networkSwitch": "trusted_approval_known_alchemy_chains",
+            "networkAdd": "trusted_approval_known_chains",
+            "networkSwitch": "trusted_approval_known_chains",
             "watchAsset": "trusted_approval_erc20_persistent_local",
             "simulation": config.simulation.capability_value(),
             "rpcProxy": config.rpc.is_some(),
@@ -85,7 +85,7 @@ pub(crate) fn provider_status_result(config: &DesktopConfig) -> Value {
             "trustedWalletUi": true,
             "untrustedDappWebView": true,
             "localRuntimeDetailsExposed": false,
-            "signingEnabled": "personal_sign_and_permit_typed_data_after_approval",
+            "signingEnabled": "siwe_personal_sign_and_permit_typed_data_after_approval",
         }
     })
 }
@@ -96,7 +96,7 @@ pub(crate) fn rpc_health_snapshot(config: &DesktopConfig) -> Result<Value> {
     let Some(_rpc) = &config.rpc else {
         return Ok(json!({
             "operation": "rpc_health",
-            "provider": "alchemy",
+            "provider": rpc_provider_for_config(config),
             "configured": false,
             "healthy": false,
             "status": "missing",
@@ -111,7 +111,7 @@ pub(crate) fn rpc_health_snapshot(config: &DesktopConfig) -> Result<Value> {
             "rpcUrlExposed": false,
             "error": {
                 "scope": "rpc",
-                "message": "Alchemy RPC is not configured",
+                "message": "RPC is not configured",
             },
         }));
     };
@@ -196,7 +196,7 @@ pub(crate) fn rpc_health_result(
 ) -> Value {
     json!({
         "operation": "rpc_health",
-        "provider": "alchemy",
+        "provider": rpc_provider_for_config(config),
         "configured": config.rpc.is_some(),
         "healthy": healthy,
         "status": status,
@@ -234,7 +234,7 @@ pub(crate) fn wallet_assets_snapshot(state: &AppState, config: &DesktopConfig) -
     if config.rpc.is_none() {
         errors.push(json!({
             "scope": "rpc",
-            "message": "Alchemy RPC is not configured",
+            "message": "RPC is not configured",
         }));
         return Ok(wallet_assets_result(
             config,
@@ -271,15 +271,21 @@ pub(crate) fn wallet_assets_snapshot(state: &AppState, config: &DesktopConfig) -
         }
     };
 
-    let token_discovery = match alchemy_token_discovery(config, &address) {
-        Ok(discovery) => discovery,
-        Err(error) => {
-            errors.push(json!({
-                "scope": "tokens",
-                "message": error.to_string(),
-            }));
-            PortfolioTokenDiscovery::empty("token_query_failed")
+    let token_discovery = match config.rpc.as_ref() {
+        Some(rpc) if rpc.supports_alchemy_token_api() => {
+            match alchemy_token_discovery(config, &address) {
+                Ok(discovery) => discovery,
+                Err(error) => {
+                    errors.push(json!({
+                        "scope": "tokens",
+                        "message": error.to_string(),
+                    }));
+                    PortfolioTokenDiscovery::empty("token_query_failed")
+                }
+            }
         }
+        Some(_) => PortfolioTokenDiscovery::empty("token_discovery_unsupported"),
+        None => PortfolioTokenDiscovery::empty("rpc_missing"),
     };
 
     Ok(wallet_assets_result(
@@ -306,7 +312,7 @@ pub(crate) fn wallet_assets_result(
     errors: Vec<Value>,
 ) -> Value {
     let watched_count = watched_assets.len();
-    let tokens = merge_watched_portfolio_tokens(token_discovery.tokens, watched_assets);
+    let tokens = merge_watched_portfolio_tokens(config, token_discovery.tokens, watched_assets);
     json!({
         "address": address,
         "chainId": config.chain_id,
@@ -314,14 +320,14 @@ pub(crate) fn wallet_assets_result(
         "blockNumber": block_number,
         "native": {
             "assetKind": "native",
-            "name": "Ether",
-            "symbol": "ETH",
+            "name": native_name_for_chain(&config.chain_id),
+            "symbol": native_symbol_for_chain(&config.chain_id),
             "decimals": 18,
             "balance": native_balance,
         },
         "tokens": tokens,
         "tokenScan": {
-            "provider": "alchemy_getTokenBalances",
+            "provider": token_scan_provider(config),
             "status": token_discovery.status,
             "tokenSpec": "erc20",
             "maxCount": PORTFOLIO_TOKEN_BALANCE_MAX_COUNT,
@@ -344,6 +350,7 @@ pub(crate) fn wallet_assets_result(
 }
 
 pub(crate) fn merge_watched_portfolio_tokens(
+    config: &DesktopConfig,
     mut tokens: Vec<Value>,
     watched_assets: Vec<WatchedAsset>,
 ) -> Vec<Value> {
@@ -368,6 +375,10 @@ pub(crate) fn merge_watched_portfolio_tokens(
             continue;
         }
         seen.insert(key, tokens.len());
+        let trusted_decimals = trusted_erc20_decimals(config, &asset.contract_address).ok();
+        let decimals = trusted_decimals
+            .map(u64::from)
+            .unwrap_or(u64::from(asset.decimals));
         tokens.push(json!({
             "assetKind": "erc20",
             "contractAddress": asset.contract_address,
@@ -375,8 +386,15 @@ pub(crate) fn merge_watched_portfolio_tokens(
             "metadata": {
                 "name": Value::Null,
                 "symbol": asset.symbol,
-                "decimals": asset.decimals,
+                "decimals": decimals,
                 "logoAvailable": false,
+                "metadataSource": if trusted_decimals.is_some() {
+                    "erc20_decimals_call"
+                } else {
+                    "wallet_watchAsset"
+                },
+                "decimalsTrusted": trusted_decimals.is_some(),
+                "watchAssetDecimals": asset.decimals,
             },
             "metadataError": Value::Null,
             "watched": true,
@@ -500,9 +518,32 @@ pub(crate) fn send_token_transfer_from_trusted_ui(
 }
 
 pub(crate) fn native_symbol_for_chain(chain_id: &str) -> String {
-    supported_alchemy_chain(chain_id)
+    supported_chain(chain_id)
         .map(|chain| chain.native_symbol.to_owned())
         .unwrap_or_else(|| "ETH".to_owned())
+}
+
+pub(crate) fn native_name_for_chain(chain_id: &str) -> String {
+    supported_chain(chain_id)
+        .map(|chain| chain.native_name.to_owned())
+        .unwrap_or_else(|| "Ether".to_owned())
+}
+
+pub(crate) fn rpc_provider_for_config(config: &DesktopConfig) -> &'static str {
+    config
+        .rpc
+        .as_ref()
+        .map(DesktopRpcConfig::provider)
+        .or_else(|| supported_chain(&config.chain_id).map(SupportedChain::rpc_provider))
+        .unwrap_or("rpc")
+}
+
+pub(crate) fn token_scan_provider(config: &DesktopConfig) -> &'static str {
+    match config.rpc.as_ref() {
+        Some(rpc) if rpc.supports_alchemy_token_api() => "alchemy_getTokenBalances",
+        Some(_) => "unsupported_json_rpc",
+        None => "none",
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -597,6 +638,8 @@ pub(crate) fn alchemy_token_discovery(
                         "symbol": Value::Null,
                         "decimals": Value::Null,
                         "logoAvailable": false,
+                        "metadataSource": Value::Null,
+                        "decimalsTrusted": false,
                     }),
                     json!(truncate_for_event(&error.to_string(), 160)),
                 ),
@@ -608,6 +651,8 @@ pub(crate) fn alchemy_token_discovery(
                     "symbol": Value::Null,
                     "decimals": Value::Null,
                     "logoAvailable": false,
+                    "metadataSource": Value::Null,
+                    "decimalsTrusted": false,
                 }),
                 Value::Null,
             )
@@ -637,11 +682,15 @@ pub(crate) fn alchemy_token_discovery(
 
 pub(crate) fn alchemy_token_metadata(config: &DesktopConfig, contract: &str) -> Result<Value> {
     let result = rpc_result(config, "alchemy_getTokenMetadata", json!([contract]))?;
+    let decimals = token_metadata_decimals(result.get("decimals"));
+    let decimals_trusted = decimals.is_number();
     Ok(json!({
         "name": token_metadata_text(result.get("name"), 80),
         "symbol": token_metadata_text(result.get("symbol"), 24),
-        "decimals": token_metadata_decimals(result.get("decimals")),
+        "decimals": decimals,
         "logoAvailable": result.get("logo").and_then(Value::as_str).is_some(),
+        "metadataSource": "alchemy_getTokenMetadata",
+        "decimalsTrusted": decimals_trusted,
     }))
 }
 
@@ -690,7 +739,7 @@ pub(crate) fn transaction_asset_context(
     if config.rpc.is_none() {
         return Some(json!({
             "status": "rpc_missing",
-            "provider": "alchemy_getTokenMetadata",
+            "provider": "none",
             "metadataLimit": TRANSACTION_TOKEN_METADATA_LIMIT,
             "tokens": contracts
                 .into_iter()
@@ -698,13 +747,36 @@ pub(crate) fn transaction_asset_context(
                     asset_kind,
                     contract,
                     Value::Null,
-                    Some("Alchemy RPC is not configured".to_owned()),
+                    Some("RPC is not configured".to_owned()),
                 ))
                 .collect::<Vec<_>>(),
             "errors": [{
                 "scope": "rpc",
-                "message": "Alchemy RPC is not configured",
+                "message": "RPC is not configured",
             }],
+        }));
+    }
+
+    if !config
+        .rpc
+        .as_ref()
+        .is_some_and(DesktopRpcConfig::supports_alchemy_token_api)
+    {
+        return Some(json!({
+            "status": "metadata_unsupported",
+            "provider": "unsupported_json_rpc",
+            "metadataLimit": TRANSACTION_TOKEN_METADATA_LIMIT,
+            "tokens": contracts
+                .into_iter()
+                .take(TRANSACTION_TOKEN_METADATA_LIMIT)
+                .map(|(asset_kind, contract)| transaction_token_context_value(
+                    asset_kind,
+                    contract,
+                    Value::Null,
+                    Some("Token metadata requires an Alchemy-backed RPC".to_owned()),
+                ))
+                .collect::<Vec<_>>(),
+            "errors": [],
         }));
     }
 
