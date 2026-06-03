@@ -8,6 +8,7 @@ const walletHomeBalance = document.querySelector("#wallet-home-balance");
 const walletHomeAddress = document.querySelector("#wallet-home-address");
 const walletHomeNetwork = document.querySelector("#wallet-home-network");
 const walletHomeReadiness = document.querySelector("#wallet-home-readiness");
+const walletHomeGuidance = document.querySelector("#wallet-home-guidance");
 const walletHomeAccount = document.querySelector("#wallet-home-account");
 const walletHomeRpc = document.querySelector("#wallet-home-rpc");
 const walletHomeAssets = document.querySelector("#wallet-home-assets");
@@ -47,6 +48,17 @@ const activityCount = document.querySelector("#activity-count");
 const activityReceiptTracking = document.querySelector("#activity-receipt-tracking");
 const activityPersistence = document.querySelector("#activity-persistence");
 const transactionActivity = document.querySelector("#transaction-activity");
+const activityHomeTitle = document.querySelector("#activity-home-title");
+const activityHomeSubtitle = document.querySelector("#activity-home-subtitle");
+const activityHomeState = document.querySelector("#activity-home-state");
+const activityLatestOutcome = document.querySelector("#activity-latest-outcome");
+const activityLatestOutcomeDetail = document.querySelector("#activity-latest-outcome-detail");
+const activityReceiptState = document.querySelector("#activity-receipt-state");
+const activityReceiptDetail = document.querySelector("#activity-receipt-detail");
+const activityStorageState = document.querySelector("#activity-storage-state");
+const activityStorageDetail = document.querySelector("#activity-storage-detail");
+const activityNextAction = document.querySelector("#activity-next-action");
+const activityNextDetail = document.querySelector("#activity-next-detail");
 const capabilities = document.querySelector("#capabilities");
 const output = document.querySelector("#output");
 const reviewCount = document.querySelector("#review-count");
@@ -66,6 +78,25 @@ const defiHomeState = document.querySelector("#defi-home-state");
 const defiReviewCallout = document.querySelector("#defi-review-callout");
 const defiReviewCalloutTitle = document.querySelector("#defi-review-callout-title");
 const defiReviewCalloutDetail = document.querySelector("#defi-review-callout-detail");
+const defiCurrentApp = document.querySelector("#defi-current-app");
+const defiCurrentOrigin = document.querySelector("#defi-current-origin");
+const defiAccessState = document.querySelector("#defi-access-state");
+const defiAccessDetail = document.querySelector("#defi-access-detail");
+const defiNextAction = document.querySelector("#defi-next-action");
+const defiNextDetail = document.querySelector("#defi-next-detail");
+const defiLatestResult = document.querySelector("#defi-latest-result");
+const defiLatestResultDetail = document.querySelector("#defi-latest-result-detail");
+const defiCockpitApp = document.querySelector("#defi-cockpit-app");
+const defiCockpitAccess = document.querySelector("#defi-cockpit-access");
+const defiCockpitNext = document.querySelector("#defi-cockpit-next");
+const defiCockpitResult = document.querySelector("#defi-cockpit-result");
+const defiPrimaryApproval = document.querySelector("#defi-primary-approval");
+const defiPrimaryApprovalTitle = document.querySelector("#defi-primary-approval-title");
+const defiPrimaryApprovalDetail = document.querySelector("#defi-primary-approval-detail");
+const defiPrimaryApprovalImpact = document.querySelector("#defi-primary-approval-impact");
+const defiPrimaryApprovalApprove = document.querySelector("#defi-primary-approval-approve");
+const defiPrimaryApprovalReject = document.querySelector("#defi-primary-approval-reject");
+const defiPrimaryApprovalDetails = document.querySelector("#defi-primary-approval-details");
 const defiStepRpc = document.querySelector("#defi-step-rpc");
 const defiStepProvider = document.querySelector("#defi-step-provider");
 const defiStepConnect = document.querySelector("#defi-step-connect");
@@ -130,6 +161,8 @@ let latestProviderEvents = [];
 let latestReviewRequests = [];
 let lastPendingReviewKey = "";
 let latestTransactionActivity = [];
+let latestActivityPersistence = null;
+let defiPrimaryApprovalRequest = null;
 let transactionActivitySmokeReported = false;
 let walletSendAutosmokeStarted = false;
 let receiptAutoRefreshTimer = null;
@@ -382,6 +415,7 @@ function updateWorkspaceReviewCounts() {
 function renderProductOverview() {
   renderWalletProductOverview();
   renderDefiProductOverview();
+  renderActivityProductOverview();
   renderRecoveryProductOverview();
 }
 
@@ -412,8 +446,8 @@ function renderWalletProductOverview() {
       ? walletConnectionErrorText(connectionError)
     : address
       ? shortAddress(address)
-      : "Connect the vault to load the account";
-  walletHomeNetwork.textContent = latestStatus?.network?.name ?? networkName.textContent ?? "Ethereum";
+      : "Unlock the vault to load the account";
+  walletHomeNetwork.textContent = walletHomeNetworkLabel();
   walletHomeAccount.textContent = address ? "Connected" : connectionError ? "Connection failed" : "Disconnected";
   walletHomeRpc.textContent = latestRpcHealth
     ? rpcHealthSummaryText(latestRpcHealth)
@@ -461,16 +495,28 @@ function renderWalletProductOverview() {
   }
   walletHomeReadiness.textContent = readiness;
   walletHomeReadiness.dataset.tone = tone;
+  if (walletHomeGuidance) {
+    walletHomeGuidance.textContent = walletHomeGuidanceText({
+      address,
+      authorizingKeychain,
+      connecting,
+      connectionError,
+      disconnecting,
+      helperReady,
+      pendingCount: pending.length,
+      rpcHealthy,
+    });
+  }
   walletActionConnectButton.textContent = connecting
-    ? "Connecting..."
+    ? "Unlocking..."
     : disconnecting
       ? "Disconnecting..."
       : address
         ? "Disconnect"
-        : "Connect";
+        : "Unlock";
   walletActionConnectButton.dataset.mode = address ? "disconnect" : "connect";
   walletActionConnectButton.disabled = connectionPending;
-  connectCardButton.textContent = address ? "Vault Connected" : "Connect Vault";
+  connectCardButton.textContent = address ? "Wallet Unlocked" : "Unlock Wallet";
   connectCardButton.disabled = connectionPending || Boolean(address);
   authorizeKeychainHelperButton.textContent = authorizingKeychain
     ? "Repairing..."
@@ -478,6 +524,48 @@ function renderWalletProductOverview() {
   authorizeKeychainHelperButton.disabled =
     authorizingKeychain || connectionPending || Boolean(latestStatus?.wallet?.mock) || !helperReady;
   walletActionSendButton.disabled = !address || connectionPending;
+}
+
+function walletHomeNetworkLabel() {
+  const label = latestStatus?.network?.name ?? networkName.textContent;
+  return label && label !== "-" ? label : "Ethereum";
+}
+
+function walletHomeGuidanceText({
+  address,
+  authorizingKeychain,
+  connecting,
+  connectionError,
+  disconnecting,
+  helperReady,
+  pendingCount,
+  rpcHealthy,
+}) {
+  if (connecting) {
+    return "Reading the vault and preparing the local unlock.";
+  }
+  if (disconnecting) {
+    return "Clearing the local wallet session.";
+  }
+  if (authorizingKeychain) {
+    return "macOS is preparing signing access for this build.";
+  }
+  if (connectionError) {
+    return "Reconnect the vault or repair signing access from System.";
+  }
+  if (pendingCount > 0) {
+    return "A wallet approval is waiting in this trusted window.";
+  }
+  if (!helperReady) {
+    return "Signing setup needs attention before real approvals.";
+  }
+  if (!rpcHealthy) {
+    return "Network status needs a check before DeFi activity.";
+  }
+  if (address) {
+    return "Ready for trusted sends and DeFi approvals.";
+  }
+  return "Unlock the vault to load the wallet.";
 }
 
 function renderDefiProductOverview() {
@@ -491,11 +579,24 @@ function renderDefiProductOverview() {
   const dappOpen = Boolean(latestDappSession?.open);
   const target = dappOpen ? (latestDappSession?.targetLabel ?? activeDappTarget ?? "App") : "No app open";
   const origin = connectedOrigin ?? latestDappSession?.origin ?? null;
+  const latestTx = lastItem(latestReviewRequests.filter((request) => request.kind === "transaction"));
+  const nextAction = nextSessionAction({
+    walletReady: Boolean(latestStatus?.wallet),
+    rpcReady,
+    providerReady: providerInjected,
+    accountReady: Boolean(latestAccount?.address || connectedOrigin),
+    connectedOrigin,
+    pending,
+    latestTransaction: latestTx,
+    latestActivity: latestTransactionActivity[0],
+  });
 
-  defiHomeTitle.textContent = !dappOpen || target === "Local Test" ? "Choose an app" : target;
+  defiHomeTitle.textContent = !dappOpen || target === "Local Test" ? "Choose a DeFi app" : target;
   defiHomeSubtitle.textContent = connectedOrigin
-    ? `${shortOrigin(connectedOrigin)} is connected. Review every request here before it can use the wallet.`
-    : "Open an app, connect inside that app, then approve wallet requests here.";
+    ? `${shortOrigin(connectedOrigin)} has wallet access. Every signature and transaction still stops here.`
+    : dappOpen
+      ? "Connect from the app, then approve wallet access in FRAMKey."
+      : "Pick an app or open a trusted URL.";
 
   let state = "Ready";
   let tone = "good";
@@ -503,10 +604,10 @@ function renderDefiProductOverview() {
     state = `${pending.length} approval`;
     tone = "warn";
   } else if (!rpcReady) {
-    state = "RPC issue";
+    state = "Network issue";
     tone = "bad";
   } else if (!providerInjected) {
-    state = "Open dApp";
+    state = "Open app";
     tone = "busy";
   } else if (!connectedOrigin && origin) {
     state = "Connect";
@@ -515,12 +616,24 @@ function renderDefiProductOverview() {
   defiHomeState.textContent = state;
   defiHomeState.dataset.tone = tone;
   renderDefiReviewCallout(pending);
+  renderDefiCockpit({
+    connectedOrigin,
+    dappOpen,
+    origin,
+    pending,
+    providerInjected,
+    rpcReady,
+    target,
+    nextAction,
+    latestActivity: latestTransactionActivity[0],
+  });
+  renderDefiPrimaryApproval(pending);
 
-  setJourneyStep(defiStepRpc, rpcReady ? "good" : "bad", rpcReady ? "Healthy" : "Needs RPC");
+  setJourneyStep(defiStepRpc, rpcReady ? "good" : "bad", rpcReady ? "Ready" : "Check network");
   setJourneyStep(
     defiStepProvider,
     providerInjected ? "good" : "warn",
-    providerInjected ? "Injected" : "Open app",
+    providerInjected ? "Ready" : "Open app",
   );
   setJourneyStep(
     defiStepConnect,
@@ -539,7 +652,7 @@ function renderDefiReviewCallout(pending) {
     return;
   }
   const request = pending[0] ?? null;
-  defiReviewCallout.hidden = !request;
+  defiReviewCallout.hidden = !request || Boolean(defiPrimaryApproval);
   if (!request) {
     return;
   }
@@ -549,6 +662,218 @@ function renderDefiReviewCallout(pending) {
   defiReviewCalloutDetail.textContent = `${request.origin ?? "unknown origin"} · ${
     request.method ?? "wallet request"
   }`;
+}
+
+function renderDefiCockpit({
+  connectedOrigin,
+  dappOpen,
+  origin,
+  pending,
+  providerInjected,
+  rpcReady,
+  target,
+  nextAction,
+  latestActivity,
+}) {
+  if (!defiCurrentApp) {
+    return;
+  }
+
+  setCardTone(defiCockpitApp, dappOpen ? (providerInjected ? "good" : "warn") : "idle");
+  defiCurrentApp.textContent = dappOpen ? target : "No app open";
+  defiCurrentOrigin.textContent = dappOpen
+    ? origin
+      ? `${shortOrigin(origin)}`
+      : "App loading"
+    : "Choose Uniswap, Aave, or enter a URL.";
+
+  const connected = Boolean(connectedOrigin);
+  setCardTone(defiCockpitAccess, connected ? "good" : dappOpen ? "warn" : "idle");
+  defiAccessState.textContent = connected ? "Connected" : "Not connected";
+  defiAccessDetail.textContent = connected
+    ? `${shortOrigin(connectedOrigin)} can ask for approvals. Nothing signs automatically.`
+    : dappOpen
+      ? "Waiting for an account request from the app."
+      : "No app can see the wallet yet.";
+
+  const nextTone = pending.length > 0 ? "warn" : !rpcReady ? "bad" : providerInjected && connected ? "good" : "warn";
+  setCardTone(defiCockpitNext, nextTone);
+  defiNextAction.textContent = pending.length > 0 ? "Review approval" : nextAction;
+  defiNextDetail.textContent =
+    pending.length > 0
+      ? `${pending.length} approval${pending.length === 1 ? "" : "s"} waiting.`
+      : "Access, signatures, and transactions are approved separately.";
+
+  setCardTone(defiCockpitResult, activityOutcomeTone(latestActivity));
+  defiLatestResult.textContent = latestActivity
+    ? transactionActivityStatusLabel(latestActivity)
+    : pending.length > 0
+      ? "Approval pending"
+      : "No app activity";
+  defiLatestResultDetail.textContent = latestActivity
+    ? transactionActivityDetail(latestActivity)
+    : pending.length > 0
+      ? "Approve or reject to continue."
+      : "Approvals and transaction results appear here.";
+}
+
+function renderDefiPrimaryApproval(pending) {
+  if (!defiPrimaryApproval) {
+    return;
+  }
+  const request = pending[0] ?? null;
+  defiPrimaryApprovalRequest = request;
+  defiPrimaryApproval.hidden = !request;
+  if (!request) {
+    return;
+  }
+
+  defiPrimaryApproval.dataset.tone = primaryApprovalTone(request);
+  defiPrimaryApprovalTitle.textContent = reviewIntentTitle(request);
+  defiPrimaryApprovalDetail.textContent = primaryApprovalDetail(request);
+  defiPrimaryApprovalImpact.replaceChildren(
+    ...primaryApprovalBadges(request).map((badge) => approvalBadge(badge.label, badge.tone)),
+  );
+
+  const approveAction = approveActionForRequest(request);
+  defiPrimaryApprovalApprove.textContent = approveAction.label;
+  defiPrimaryApprovalApprove.disabled = approveAction.disabled;
+  defiPrimaryApprovalApprove.title = approveAction.disabledReason ?? "";
+  if (approveAction.tone) {
+    defiPrimaryApprovalApprove.dataset.tone = approveAction.tone;
+  } else {
+    delete defiPrimaryApprovalApprove.dataset.tone;
+  }
+  defiPrimaryApprovalReject.disabled = false;
+}
+
+function primaryApprovalTone(request) {
+  if (request.kind === "transaction") {
+    return transactionRiskTone(request.summary?.risk, request.summary?.policy);
+  }
+  if (request.kind === "typed_data" && !typedDataSigningAllowed(request)) {
+    return "bad";
+  }
+  if (request.kind === "personal_sign" || request.kind === "typed_data") {
+    return "warn";
+  }
+  return "good";
+}
+
+function primaryApprovalDetail(request) {
+  const origin = shortOrigin(request.origin) || "This app";
+  const summary = request.summary ?? {};
+  if (request.kind === "account_connection") {
+    return `${origin} wants to see your wallet address. This does not allow signing or moving funds.`;
+  }
+  if (request.kind === "network_switch") {
+    const action = summary.intent === "add_network" ? "add a supported network" : "switch the active network";
+    return `${origin} wants to ${action}. FRAMKey ignores dApp-provided RPC URLs and uses the trusted endpoint.`;
+  }
+  if (request.kind === "watch_asset") {
+    return `${origin} wants to add ${valueOrDash(summary.symbol)} to the trusted Assets view. This does not grant token control.`;
+  }
+  if (request.kind === "personal_sign") {
+    const message = summary.message ?? {};
+    return `${origin} wants a wallet signature for: ${valueOrDash(message.preview ?? message.utf8Preview)}`;
+  }
+  if (request.kind === "typed_data") {
+    const typedData = summary.typedData ?? {};
+    const permit = typedData.permit ?? {};
+    return `${origin} wants token permission: ${typedPermitIntentLabel(
+      typedData.intent ?? typedData.primaryType,
+    )}: ${typedPermitAmountLabel(permit)} for ${shortAddress(permit.spender)}.`;
+  }
+  if (request.kind === "transaction") {
+    const guidance = summary.guidance;
+    if (guidance?.message) {
+      return guidance.message;
+    }
+    const impact = summary.impact?.title;
+    const risk = summary.risk?.title;
+    return [risk, impact].filter(Boolean).join(". ") || `${origin} wants to submit a transaction.`;
+  }
+  return `${origin} is requesting a wallet action.`;
+}
+
+function primaryApprovalBadges(request) {
+  const summary = request.summary ?? {};
+  const badges = [{ label: shortOrigin(request.origin) || "Unknown app", tone: "idle" }];
+  if (request.kind === "transaction") {
+    badges.push({
+      label: transactionRiskLevel(summary.risk, summary.policy),
+      tone: transactionRiskTone(summary.risk, summary.policy),
+    });
+    badges.push({
+      label: transactionRiskActionLabel(summary.risk?.action, summary.policy),
+      tone: transactionRiskTone(summary.risk, summary.policy),
+    });
+    if (summary.impact) {
+      badges.push({
+        label: transactionImpactBadgeLabel(summary.impact),
+        tone: summary.impact.approvalCount > 0 ? "warn" : "good",
+      });
+    }
+    const protocol = transactionProtocolLabel(summary.simulation);
+    if (protocol !== "-") {
+      badges.push({ label: protocol, tone: "idle" });
+    }
+    if (summary.trust?.title) {
+      badges.push({ label: summary.trust.title, tone: transactionTrustTone(summary.trust) });
+    }
+    return badges.slice(0, 5);
+  }
+  if (request.kind === "typed_data") {
+    const typedData = summary.typedData ?? {};
+    const permit = typedData.permit ?? {};
+    badges.push({ label: typedPermitIntentLabel(typedData.intent ?? typedData.primaryType), tone: "warn" });
+    badges.push({ label: typedPermitTokenLabel(permit), tone: "idle" });
+    badges.push({
+      label: typedDataSigningAllowed(request) ? "Approval required" : "Blocked",
+      tone: typedDataSigningAllowed(request) ? "warn" : "bad",
+    });
+    return badges;
+  }
+  if (request.kind === "account_connection") {
+    badges.push({ label: "Address only", tone: "good" });
+    badges.push({ label: "No signing grant", tone: "good" });
+    return badges;
+  }
+  if (request.kind === "personal_sign") {
+    badges.push({ label: "Signature", tone: "warn" });
+    badges.push({ label: `${summary.message?.bytes ?? summary.message?.chars ?? 0} bytes`, tone: "idle" });
+    return badges;
+  }
+  badges.push({ label: request.method ?? "wallet request", tone: "idle" });
+  return badges;
+}
+
+function transactionImpactBadgeLabel(impact) {
+  const transferCount = impact?.transferCount ?? 0;
+  const approvalCount = impact?.approvalCount ?? 0;
+  if (approvalCount > 0 && transferCount > 0) {
+    return `${transferCount} transfer, ${approvalCount} approval`;
+  }
+  if (approvalCount > 0) {
+    return `${approvalCount} token approval${approvalCount === 1 ? "" : "s"}`;
+  }
+  if (transferCount > 0) {
+    return `${transferCount} transfer${transferCount === 1 ? "" : "s"}`;
+  }
+  return "No asset movement";
+}
+
+function approvalBadge(label, tone = "idle") {
+  const badge = document.createElement("span");
+  badge.dataset.tone = tone;
+  badge.textContent = label;
+  return badge;
+}
+
+function setCardTone(element, tone) {
+  if (element) {
+    element.dataset.tone = tone;
+  }
 }
 
 function setJourneyStep(element, tone, label) {
@@ -579,6 +904,215 @@ function renderRecoveryProductOverview() {
   recoveryHomePack.textContent = backupCreated ? "Created" : "Waiting";
   recoveryHomePlacement.textContent = placement.badge;
   recoveryHomeDrill.textContent = placement.tone === "good" ? "Ready" : "Waiting";
+}
+
+function renderActivityProductOverview() {
+  if (!activityHomeTitle) {
+    return;
+  }
+
+  const latest = latestTransactionActivity[0] ?? null;
+  const outcome = activityOutcomeSummary(latest);
+  const receipt = activityReceiptSummary(latestTransactionActivity);
+  const storage = activityStorageSummary(latestActivityPersistence);
+  const next = activityNextActionSummary(latest, receipt);
+
+  activityHomeTitle.textContent = latest ? outcome.title : "No wallet activity yet";
+  activityHomeSubtitle.textContent = latest
+    ? outcome.detail
+    : "Approved dApp transactions and trusted sends will appear here.";
+  activityHomeState.textContent = latest ? outcome.state : "Empty";
+  activityHomeState.dataset.tone = latest ? outcome.tone : "idle";
+
+  activityLatestOutcome.textContent = outcome.title;
+  activityLatestOutcomeDetail.textContent = outcome.detail;
+  setCardTone(document.querySelector("#activity-cockpit-outcome"), outcome.tone);
+
+  activityReceiptState.textContent = receipt.title;
+  activityReceiptDetail.textContent = receipt.detail;
+  setCardTone(document.querySelector("#activity-cockpit-receipt"), receipt.tone);
+
+  activityStorageState.textContent = storage.title;
+  activityStorageDetail.textContent = storage.detail;
+  setCardTone(document.querySelector("#activity-cockpit-storage"), storage.tone);
+
+  activityNextAction.textContent = next.title;
+  activityNextDetail.textContent = next.detail;
+  setCardTone(document.querySelector("#activity-cockpit-next"), next.tone);
+}
+
+function activityOutcomeSummary(item) {
+  if (!item) {
+    return {
+      title: "No transaction",
+      detail: "Nothing has been approved or submitted.",
+      state: "Empty",
+      tone: "idle",
+    };
+  }
+  const status = transactionActivityStatusLabel({
+    status: item.receipt?.status ?? item.receiptStatus ?? item.status,
+  });
+  const hash = item.transactionHash ? ` · ${shortHash(item.transactionHash)}` : "";
+  return {
+    title: status,
+    detail: transactionActivityDetail(item) + hash,
+    state: status,
+    tone: activityOutcomeTone(item),
+  };
+}
+
+function transactionActivityDetail(item) {
+  if (!item) {
+    return "No app activity";
+  }
+  if (item.error) {
+    return `${shortOrigin(item.origin) || "unknown app"} · ${item.error}`;
+  }
+  const call = item.call ?? "eth_sendTransaction";
+  const value = item.value ? ` · ${formatNativeBalance(item.value)}` : "";
+  const receipt = item.transactionHash ? ` · ${transactionReceiptLabel(item)}` : "";
+  return `${shortOrigin(item.origin) || "unknown app"} · ${call}${value}${receipt}`;
+}
+
+function activityOutcomeTone(item) {
+  if (!item) {
+    return "idle";
+  }
+  const status = item.receipt?.status ?? item.receiptStatus ?? item.status;
+  if (["confirmed", "included", "broadcast"].includes(status)) {
+    return "good";
+  }
+  if (["review_pending", "approved"].includes(status)) {
+    return "warn";
+  }
+  if (["failed", "rejected", "expired", "reverted"].includes(status)) {
+    return "bad";
+  }
+  return "idle";
+}
+
+function activityReceiptSummary(items) {
+  const refreshable = refreshableReceiptItems(items);
+  const latestReceipt = latestTransactionReceiptState(items);
+  if (receiptAutoRefreshInFlight) {
+    return {
+      title: "Checking receipt",
+      detail: "FRAMKey is asking the trusted RPC for the latest transaction status.",
+      tone: "busy",
+    };
+  }
+  if (latestReceiptRefreshError && refreshable.length > 0) {
+    return {
+      title: "Receipt check needs retry",
+      detail: latestReceiptRefreshError.message ?? "Receipt status is unavailable right now.",
+      tone: "warn",
+    };
+  }
+  if (refreshable.length > 0) {
+    return {
+      title: `${refreshable.length} pending`,
+      detail: latestReceipt?.checkedAt
+        ? `Waiting for confirmation; last checked ${formatTime(latestReceipt.checkedAt)}.`
+        : "Waiting for the network to include the transaction.",
+      tone: "warn",
+    };
+  }
+  if (latestReceipt?.status === "confirmed" || latestReceipt?.status === "included") {
+    return {
+      title: "Confirmed",
+      detail: latestReceipt.checkedAt
+        ? `Latest receipt checked ${formatTime(latestReceipt.checkedAt)}.`
+        : "Latest receipt is confirmed.",
+      tone: "good",
+    };
+  }
+  if (latestReceipt?.status === "reverted") {
+    return {
+      title: "Reverted",
+      detail: latestReceipt.checkedAt
+        ? `Latest receipt checked ${formatTime(latestReceipt.checkedAt)}.`
+        : "The network reported a reverted transaction.",
+      tone: "bad",
+    };
+  }
+  return {
+    title: "No pending receipt",
+    detail: "Broadcast transactions are checked automatically.",
+    tone: "idle",
+  };
+}
+
+function activityStorageSummary(persistence) {
+  if (persistence?.warning) {
+    return {
+      title: "Save needs attention",
+      detail: persistence.warning,
+      tone: "warn",
+    };
+  }
+  if (!persistence?.enabled) {
+    return {
+      title: "Local session only",
+      detail: "History is available while this app session is open.",
+      tone: "idle",
+    };
+  }
+  if (persistence.restored && Number(persistence.itemsRestored) > 0) {
+    return {
+      title: `${persistence.itemsRestored} restored`,
+      detail: "Sanitized transaction history was restored from local trusted state.",
+      tone: "good",
+    };
+  }
+  if (persistence.lastSavedAtUnixMs) {
+    return {
+      title: "Saved",
+      detail: `Last saved ${formatTime(persistence.lastSavedAtUnixMs)}.`,
+      tone: "good",
+    };
+  }
+  return {
+    title: "Ready",
+    detail: "Sanitized activity can be saved locally.",
+    tone: "good",
+  };
+}
+
+function activityNextActionSummary(latest, receipt) {
+  if (latest?.guidance) {
+    return {
+      title: userActionLabel(latest.guidance.primaryAction, "Review result"),
+      detail: latest.guidance.nextStep ?? latest.guidance.message ?? "Open the transaction details below.",
+      tone: latest.guidance.tone ?? activityOutcomeTone(latest),
+    };
+  }
+  if (receipt.tone === "warn") {
+    return {
+      title: "Wait for network",
+      detail: receipt.detail,
+      tone: "warn",
+    };
+  }
+  if (latest && activityOutcomeTone(latest) === "good") {
+    return {
+      title: "Refresh app",
+      detail: "Return to the dApp and refresh its state if the result is not visible yet.",
+      tone: "good",
+    };
+  }
+  if (latest && activityOutcomeTone(latest) === "bad") {
+    return {
+      title: "Inspect failure",
+      detail: "Use the failure message below before retrying from the dApp.",
+      tone: "bad",
+    };
+  }
+  return {
+    title: "Use an app",
+    detail: "Approve a transaction to start tracking it here.",
+    tone: "warn",
+  };
 }
 
 async function refreshStatus() {
@@ -948,6 +1482,7 @@ async function refreshTransactionActivity(showOutput = true, refreshReceipts = f
     clearReceiptAutoRefreshTimer();
     receiptAutoRefreshInFlight = true;
     renderReceiptTrackingState();
+    renderProductOverview();
   }
   try {
     const response = await invokeQuiet("framkey_transaction_activity", {
@@ -977,6 +1512,7 @@ async function refreshTransactionActivity(showOutput = true, refreshReceipts = f
       receiptAutoRefreshInFlight = false;
       scheduleReceiptAutoRefresh(latestTransactionActivity);
       renderReceiptTrackingState();
+      renderProductOverview();
     }
   }
 }
@@ -2331,6 +2867,7 @@ function renderTokenSendError(error) {
 function renderTransactionActivity(activity) {
   const items = activity.items ?? [];
   latestTransactionActivity = items;
+  latestActivityPersistence = activity.persistence ?? null;
   activityCount.textContent = `${items.length} transactions`;
   transactionActivity.replaceChildren();
 
@@ -2376,10 +2913,12 @@ function renderTransactionActivity(activity) {
   scheduleReceiptAutoRefresh(items);
   renderReceiptTrackingState(items);
   renderActivityPersistenceState(activity.persistence);
+  renderProductOverview();
 }
 
 function renderTransactionActivityBaseline() {
   latestTransactionActivity = [];
+  latestActivityPersistence = null;
   clearReceiptAutoRefreshTimer();
   activityCount.textContent = "0 transactions";
   renderReceiptTrackingState([]);
@@ -2389,6 +2928,7 @@ function renderTransactionActivityBaseline() {
   empty.className = "review-empty";
   empty.textContent = "No transaction activity";
   transactionActivity.append(empty);
+  renderProductOverview();
 }
 
 function scheduleReceiptAutoRefresh(items = latestTransactionActivity) {
@@ -2568,7 +3108,7 @@ function renderTransactionActivityGuidance(guidance) {
   const title = document.createElement("strong");
   title.textContent = guidance.title ?? "Transaction guidance";
   const action = document.createElement("span");
-  action.textContent = guidance.primaryAction ?? "Review";
+  action.textContent = userActionLabel(guidance.primaryAction, "Review");
   header.append(title, action);
 
   const message = document.createElement("p");
@@ -2690,7 +3230,7 @@ function portfolioSummaryText(portfolio) {
 function renderReviewQueue(queue) {
   const requests = queue.requests ?? [];
   latestReviewRequests = requests;
-  reviewCount.textContent = `${requests.length} captured`;
+  reviewCount.textContent = `${requests.length} approval${requests.length === 1 ? "" : "s"}`;
   updateWorkspaceReviewCounts();
   updatePendingReviewSurface(requests);
   reviewList.replaceChildren();
@@ -2700,7 +3240,7 @@ function renderReviewQueue(queue) {
   if (requests.length === 0) {
     const empty = document.createElement("div");
     empty.className = "review-empty";
-    empty.textContent = "No captured requests";
+    empty.textContent = "No wallet approvals waiting";
     reviewList.append(empty);
     return;
   }
@@ -2757,7 +3297,7 @@ function renderConnectedSites(value) {
   if (origins.length === 0) {
     const empty = document.createElement("li");
     empty.className = "connected-site-empty";
-    empty.textContent = "No dApps connected";
+    empty.textContent = "No sites connected";
     connectedSites.append(empty);
     return;
   }
@@ -3350,18 +3890,18 @@ function nextSessionAction({
     return activityAction;
   }
   if (!walletReady) {
-    return "Refresh wallet status";
+    return "Unlock wallet";
   }
   if (!rpcReady) {
-    return "Configure RPC";
+    return "Check network";
   }
   if (!providerReady) {
-    return "Open Uniswap or Aave";
+    return "Choose an app";
   }
   if (!connectedOrigin) {
-    return accountReady ? "Approve dApp connection" : "Connect account";
+    return accountReady ? "Connect in app" : "Unlock wallet";
   }
-  return "Use dApp";
+  return "Use app";
 }
 
 function nextSessionActionFromActivity(activity) {
@@ -5067,16 +5607,16 @@ function renderReviewRequest(request) {
   const title = document.createElement("div");
   title.className = "review-title";
   const method = document.createElement("strong");
-  method.textContent = request.method ?? "unknown_method";
+  method.textContent = reviewIntentTitle(request);
   const meta = document.createElement("span");
-  meta.textContent = `${request.id ?? "-"} · ${request.origin ?? "unknown origin"} · expires ${formatTime(
+  meta.textContent = `${request.origin ?? "unknown origin"} · ${request.method ?? "wallet request"} · expires ${formatTime(
     request.expiresAtUnixMs,
   )}`;
   title.append(method, meta);
 
   const status = document.createElement("span");
   status.className = "review-status";
-  status.textContent = request.status ?? "blocked";
+  status.textContent = String(request.status ?? "blocked").replaceAll("_", " ");
   status.dataset.status = request.status ?? "pending";
 
   header.append(title, status);
@@ -5086,7 +5626,7 @@ function renderReviewRequest(request) {
   const rawSummary = document.createElement("details");
   rawSummary.className = "review-params";
   const rawSummaryLabel = document.createElement("summary");
-  rawSummaryLabel.textContent = "Raw review summary";
+  rawSummaryLabel.textContent = "Technical summary";
   const rawSummaryBody = document.createElement("pre");
   rawSummaryBody.textContent = JSON.stringify(request.summary ?? {}, null, 2);
   rawSummary.append(rawSummaryLabel, rawSummaryBody);
@@ -5100,7 +5640,7 @@ function renderReviewRequest(request) {
   const params = document.createElement("details");
   params.className = "review-params";
   const paramsSummary = document.createElement("summary");
-  paramsSummary.textContent = "Params preview";
+  paramsSummary.textContent = "Request data";
   const paramsBody = document.createElement("pre");
   paramsBody.textContent = JSON.stringify(request.paramsPreview ?? null, null, 2);
   params.append(paramsSummary, paramsBody);
@@ -5287,24 +5827,44 @@ function renderReviewSynopsis(request) {
 
 function reviewIntentTitle(request) {
   if (request.kind === "account_connection") {
-    return "Connect Account";
+    return "Connect Wallet";
   }
   if (request.kind === "network_switch") {
-    return request.summary?.intent === "add_network" ? "Add Network" : "Switch Network";
+    return request.summary?.intent === "add_network" ? "Add Network" : "Change Network";
   }
   if (request.kind === "watch_asset") {
     return "Add Token";
   }
   if (request.kind === "transaction") {
-    return "Transaction Request";
+    return transactionRequestTitle(request.summary);
   }
   if (request.kind === "personal_sign") {
-    return "Message Signature";
+    return "Sign Message";
   }
   if (request.kind === "typed_data") {
-    return "Typed Data Request";
+    return "Approve Token Permission";
   }
   return request.method ?? "Blocked Request";
+}
+
+function transactionRequestTitle(summary) {
+  const impact = summary?.impact;
+  const approvalCount = impact?.approvalCount ?? 0;
+  const transferCount = impact?.transferCount ?? 0;
+  const protocol = transactionProtocolLabel(summary?.simulation);
+  if (approvalCount > 0 && transferCount === 0) {
+    return "Token Approval";
+  }
+  if (approvalCount > 0 && transferCount > 0) {
+    return "Swap With Approval";
+  }
+  if (transferCount > 0) {
+    return protocol !== "-" ? `${protocol} Transaction` : "Send Transaction";
+  }
+  if (protocol !== "-") {
+    return `${protocol} Transaction`;
+  }
+  return "Review Transaction";
 }
 
 function reviewIntentSubtitle(request) {
@@ -5755,28 +6315,28 @@ function approveActionForRequest(request) {
     return { label: "Add Token", decision: "approve", disabled: false };
   }
   if (request.kind === "personal_sign") {
-    return { label: "Approve Sign", decision: "approve", disabled: false };
+    return { label: "Sign Message", decision: "approve", disabled: false };
   }
   if (request.kind === "transaction") {
     const policy = request.summary?.policy;
     const guidance = request.summary?.guidance;
     if (policy?.canSign) {
       return {
-        label: guidance?.primaryAction ?? "Approve Transaction",
+        label: userActionLabel(guidance?.primaryAction, "Approve & Send"),
         decision: "approve",
         disabled: false,
       };
     }
     if (policy?.overrideAllowed) {
       return {
-        label: guidance?.primaryAction ?? "Approve High Risk",
+        label: userActionLabel(guidance?.primaryAction, "Approve with Caution"),
         decision: "approve_with_risk",
         disabled: false,
         tone: "danger",
       };
     }
     return {
-      label: guidance?.primaryAction ?? "Cannot Sign",
+      label: userActionLabel(guidance?.primaryAction, "Cannot approve"),
       decision: "approve",
       disabled: true,
       disabledReason: guidance?.nextStep ?? guidance?.message ?? "Transaction policy blocks signing",
@@ -5784,11 +6344,23 @@ function approveActionForRequest(request) {
   }
   if (request.kind === "typed_data") {
     if (typedDataSigningAllowed(request)) {
-      return { label: "Approve Permit", decision: "approve", disabled: false };
+      return { label: "Approve Permission", decision: "approve", disabled: false };
     }
     return { label: "Blocked", decision: "approve", disabled: true };
   }
   return { label: "Approve Dry Run", decision: "approve", disabled: false };
+}
+
+function userActionLabel(value, fallback) {
+  const labels = {
+    "Approve Transaction": "Approve & Send",
+    "Approve High Risk": "Approve with Caution",
+    "Cannot Sign": "Cannot approve",
+    "Ready for ordinary approval": "Ready to approve",
+    "High-risk approval": "Caution required",
+    "Ordinary approval": "Ready to approve",
+  };
+  return labels[value] ?? value ?? fallback;
 }
 
 function renderSimulationReport(simulation, policy, assetContext = null) {
@@ -6109,26 +6681,26 @@ function formatReviewReason(request) {
   const status = request.status ?? "pending";
   if (status === "approved") {
     if (request.kind === "account_connection") {
-      return `Connection approved; granting account access. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+      return "Connection approved; the app can now see this account.";
     }
     if (request.kind === "network_switch") {
       const action = request.summary?.intent === "add_network" ? "Network add" : "Network switch";
-      return `${action} approved. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+      return `${action} approved; applying trusted network settings.`;
     }
     if (request.kind === "watch_asset") {
-      return `Token add approved. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+      return "Token add approved; it will appear in the trusted Assets view.";
     }
     if (request.kind === "personal_sign") {
-      return `Approved locally; waiting for signing service. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+      return "Approved locally; waiting for the signing service.";
     }
     if (request.kind === "typed_data") {
-      return `Permit typed-data approved; waiting for signing service. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+      return "Permit approved locally; waiting for the signing service.";
     }
     if (request.kind === "transaction") {
       const highRisk = request.decision?.decision === "approve_with_risk";
-      return `${highRisk ? "High-risk transaction approved" : "Transaction approved"}; waiting for signing/broadcast. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+      return `${highRisk ? "High-risk transaction approved" : "Transaction approved"}; waiting for signing and broadcast.`;
     }
-    return `Approved locally as dry run. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+    return "Approved locally.";
   }
   if (status === "completed") {
     if (request.kind === "account_connection") {
@@ -6164,12 +6736,12 @@ function formatReviewReason(request) {
     return `Signing failed: ${request.execution?.error ?? "unknown error"}`;
   }
   if (status === "rejected") {
-    return `Rejected locally. Token consumed: ${request.decisionTokenConsumed ? "yes" : "no"}`;
+    return "Rejected locally; the app cannot continue this request.";
   }
   if (status === "expired") {
     return "Expired before approval.";
   }
-  return `${request.blockedReason ?? "blocked"} · token ${request.decisionTokenConsumed ? "used" : "unused"}`;
+  return request.blockedReason ?? "Waiting for your decision.";
 }
 
 function valueOrDash(value) {
@@ -6578,6 +7150,26 @@ walletActionDefiButton.addEventListener("click", () => {
 defiReviewCallout?.addEventListener("click", () => {
   focusReviewPanel();
 });
+defiPrimaryApprovalApprove?.addEventListener("click", () => {
+  if (!defiPrimaryApprovalRequest) {
+    return;
+  }
+  const action = approveActionForRequest(defiPrimaryApprovalRequest);
+  if (action.disabled) {
+    focusReviewPanel();
+    return;
+  }
+  decideReviewRequest(defiPrimaryApprovalRequest, action.decision).catch(() => {});
+});
+defiPrimaryApprovalReject?.addEventListener("click", () => {
+  if (!defiPrimaryApprovalRequest) {
+    return;
+  }
+  decideReviewRequest(defiPrimaryApprovalRequest, "reject").catch(() => {});
+});
+defiPrimaryApprovalDetails?.addEventListener("click", () => {
+  focusReviewPanel();
+});
 for (const tab of workspaceTabs) {
   tab.addEventListener("click", () => {
     setActiveWorkspace(tab.dataset.workspaceTab);
@@ -6627,7 +7219,9 @@ defiActionAaveButton.addEventListener("click", () => {
   openDapp("aave", "Aave").catch(() => {});
 });
 defiActionConnectButton.addEventListener("click", () => {
-  openDapp("local", "Local Test").catch(() => {});
+  dappUrl.focus();
+  dappUrl.select();
+  document.querySelector(".defi-browser-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
 });
 openLocalDappButton.addEventListener("click", () => {
   openDapp("local", "Local Test").catch(() => {});

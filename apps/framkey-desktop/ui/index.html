@@ -32,7 +32,7 @@
           aria-selected="false"
           data-workspace-tab="defi"
         >
-          <span>Apps</span>
+          <span>DeFi</span>
           <span class="workspace-tab-count" data-workspace-count="defi" hidden>0</span>
         </button>
         <button
@@ -87,14 +87,15 @@
                 <p id="wallet-home-address">No account loaded</p>
               </div>
               <div class="product-actions">
-                <button id="wallet-action-connect" type="button">Connect</button>
+                <button id="wallet-action-connect" type="button">Unlock</button>
                 <button id="wallet-action-send" type="button">Send</button>
-                <button id="wallet-action-defi" type="button">Apps</button>
+                <button id="wallet-action-defi" type="button">DeFi</button>
               </div>
             </article>
             <aside class="home-signal-card">
               <span class="eyebrow">Status</span>
               <strong id="wallet-home-readiness">Checking</strong>
+              <p id="wallet-home-guidance">Unlock the vault to use wallet actions.</p>
               <div class="product-status-grid">
                 <article>
                   <span>Account</span>
@@ -278,7 +279,40 @@
           </div>
         </div>
 
-        <div class="panel activity-panel workspace-panel" data-workspace="activity">
+        <section class="activity-home-panel workspace-panel task-workspace-panel" data-workspace="activity">
+          <div class="workspace-command-strip activity-command-strip">
+            <div>
+              <span class="eyebrow">Activity</span>
+              <h2 id="activity-home-title">No wallet activity yet</h2>
+              <p id="activity-home-subtitle">Approved dApp transactions and trusted sends will appear here.</p>
+            </div>
+            <span id="activity-home-state" class="product-state-pill" data-tone="idle">Empty</span>
+          </div>
+          <div class="activity-cockpit" aria-label="Activity status">
+            <article id="activity-cockpit-outcome" class="apps-cockpit-card" data-tone="idle">
+              <span>Latest outcome</span>
+              <strong id="activity-latest-outcome">No transaction</strong>
+              <small id="activity-latest-outcome-detail">Nothing has been approved or submitted.</small>
+            </article>
+            <article id="activity-cockpit-receipt" class="apps-cockpit-card" data-tone="idle">
+              <span>Network status</span>
+              <strong id="activity-receipt-state">No pending receipt</strong>
+              <small id="activity-receipt-detail">Broadcast transactions are checked automatically.</small>
+            </article>
+            <article id="activity-cockpit-storage" class="apps-cockpit-card" data-tone="idle">
+              <span>History</span>
+              <strong id="activity-storage-state">Local session only</strong>
+              <small id="activity-storage-detail">Sanitized history is restored when available.</small>
+            </article>
+            <article id="activity-cockpit-next" class="apps-cockpit-card" data-tone="warn">
+              <span>Next action</span>
+              <strong id="activity-next-action">Use an app</strong>
+              <small id="activity-next-detail">Approve a transaction to start tracking it here.</small>
+            </article>
+          </div>
+        </section>
+
+        <div class="panel activity-panel workspace-panel" data-workspace="defi activity">
           <div class="panel-header">
             <h2>Recent wallet activity</h2>
             <div class="panel-actions">
@@ -299,9 +333,9 @@
         <section class="defi-home-panel workspace-panel task-workspace-panel" data-workspace="defi">
           <div class="workspace-command-strip apps-command-strip">
             <div>
-              <span class="eyebrow">Apps</span>
-              <h2 id="defi-home-title">Choose an app</h2>
-              <p id="defi-home-subtitle">Open the app first. Wallet access is approved only inside FRAMKey.</p>
+              <span class="eyebrow">DeFi</span>
+              <h2 id="defi-home-title">Choose a DeFi app</h2>
+              <p id="defi-home-subtitle">FRAMKey stays between apps and your wallet.</p>
             </div>
             <span id="defi-home-state" class="product-state-pill">Ready</span>
           </div>
@@ -310,21 +344,56 @@
             <strong id="defi-review-callout-title">Review request</strong>
             <small id="defi-review-callout-detail">Open the approval card</small>
           </button>
+          <section id="defi-primary-approval" class="apps-primary-approval" hidden>
+            <div class="apps-primary-approval-copy">
+              <span class="eyebrow">Approval</span>
+              <strong id="defi-primary-approval-title">Review request</strong>
+              <p id="defi-primary-approval-detail">Check what the app wants before approving.</p>
+              <div id="defi-primary-approval-impact" class="approval-impact-row"></div>
+            </div>
+            <div class="apps-primary-approval-actions">
+              <button id="defi-primary-approval-approve" type="button">Approve</button>
+              <button id="defi-primary-approval-reject" type="button">Reject</button>
+              <button id="defi-primary-approval-details" type="button">Details</button>
+            </div>
+          </section>
+          <div class="apps-cockpit" aria-label="DeFi status">
+            <article id="defi-cockpit-app" class="apps-cockpit-card" data-tone="idle">
+              <span>Current app</span>
+              <strong id="defi-current-app">No app open</strong>
+              <small id="defi-current-origin">Choose Uniswap, Aave, or enter a URL.</small>
+            </article>
+            <article id="defi-cockpit-access" class="apps-cockpit-card" data-tone="idle">
+              <span>Wallet access</span>
+              <strong id="defi-access-state">Not connected</strong>
+              <small id="defi-access-detail">No app can see the wallet yet.</small>
+            </article>
+            <article id="defi-cockpit-next" class="apps-cockpit-card" data-tone="warn">
+              <span>Next action</span>
+              <strong id="defi-next-action">Open an app</strong>
+              <small id="defi-next-detail">Use FRAMKey for every approval.</small>
+            </article>
+            <article id="defi-cockpit-result" class="apps-cockpit-card" data-tone="idle">
+              <span>Latest result</span>
+              <strong id="defi-latest-result">No app activity</strong>
+              <small id="defi-latest-result-detail">Transactions and signatures will appear here.</small>
+            </article>
+          </div>
           <div class="app-card-grid user-action-grid">
             <button id="defi-action-uniswap" class="app-card app-card-uniswap" type="button">
               <span class="app-card-mark">U</span>
               <strong>Uniswap</strong>
-              <small>Swap tokens</small>
+              <small>Swap</small>
             </button>
             <button id="defi-action-aave" class="app-card app-card-aave" type="button">
               <span class="app-card-mark">A</span>
               <strong>Aave</strong>
-              <small>Lend and borrow</small>
+              <small>Earn / borrow</small>
             </button>
-            <button id="defi-action-connect" class="app-card app-card-local" type="button">
-              <span class="app-card-mark">T</span>
-              <strong>Test App</strong>
-              <small>Try the wallet flow</small>
+            <button id="defi-action-connect" class="app-card app-card-custom" type="button">
+              <span class="app-card-mark">URL</span>
+              <strong>Custom URL</strong>
+              <small>Open any app</small>
             </button>
           </div>
           <div class="journey-steps compact-progress">
@@ -335,17 +404,17 @@
             </article>
             <article id="defi-step-provider" data-tone="idle">
               <span>2</span>
-              <strong>Wallet</strong>
+              <strong>App</strong>
               <small>Waiting</small>
             </article>
             <article id="defi-step-connect" data-tone="idle">
               <span>3</span>
-              <strong>Connect</strong>
+              <strong>Access</strong>
               <small>Not connected</small>
             </article>
             <article id="defi-step-review" data-tone="idle">
               <span>4</span>
-              <strong>Review</strong>
+              <strong>Approval</strong>
               <small>Clear</small>
             </article>
           </div>
@@ -353,7 +422,7 @@
 
         <div class="panel defi-browser-panel workspace-panel" data-workspace="defi">
           <div class="panel-header">
-            <h2>Open another app</h2>
+            <h2>App window</h2>
           </div>
           <div class="browser-launcher">
             <input
@@ -364,9 +433,9 @@
               spellcheck="false"
               autocomplete="off"
               value="https://app.uniswap.org/"
-              aria-label="dApp URL"
+              aria-label="DeFi app URL"
             />
-            <button id="open-custom-dapp" type="button">Open</button>
+            <button id="open-custom-dapp" type="button">Open URL</button>
           </div>
           <div class="actions browser-actions">
             <button id="open-uniswap" type="button">Open Uniswap</button>
@@ -379,18 +448,21 @@
             <button id="dapp-nav-reload" type="button">Reload</button>
             <button id="dapp-nav-home" type="button">Home</button>
           </div>
-          <dl class="facts browser-facts">
-            <dt>Target</dt>
-            <dd id="dapp-current-target">No app open</dd>
-            <dt>Origin</dt>
-            <dd id="dapp-current-origin">-</dd>
-            <dt>URL</dt>
-            <dd id="dapp-current-url">-</dd>
-            <dt>Load</dt>
-            <dd id="dapp-load-status">Not loaded</dd>
-            <dt>Updated</dt>
-            <dd id="dapp-updated">-</dd>
-          </dl>
+          <details class="app-window-details">
+            <summary>Window details</summary>
+            <dl class="facts browser-facts">
+              <dt>Target</dt>
+              <dd id="dapp-current-target">No app open</dd>
+              <dt>Origin</dt>
+              <dd id="dapp-current-origin">-</dd>
+              <dt>URL</dt>
+              <dd id="dapp-current-url">-</dd>
+              <dt>Load</dt>
+              <dd id="dapp-load-status">Not loaded</dd>
+              <dt>Updated</dt>
+              <dd id="dapp-updated">-</dd>
+            </dl>
+          </details>
         </div>
 
         <div class="panel session-panel workspace-panel" data-workspace="diagnostics">
@@ -425,7 +497,7 @@
 
         <div class="panel connected-sites-panel workspace-panel" data-workspace="defi diagnostics">
           <div class="panel-header">
-            <h2>Connected Apps</h2>
+            <h2>Sites with wallet access</h2>
             <button id="refresh-connections" type="button">Refresh</button>
           </div>
           <ul id="connected-sites" class="connected-sites"></ul>
@@ -623,14 +695,14 @@
 
         <div class="panel review-panel workspace-panel" data-workspace="wallet defi recovery activity diagnostics">
           <div class="panel-header">
-            <h2>Approval requests</h2>
+            <h2>Approvals</h2>
             <div class="panel-actions">
               <button id="refresh-review" type="button">Refresh</button>
               <button id="clear-review" type="button">Clear</button>
             </div>
           </div>
           <div class="review-meta">
-            <span id="review-count">0 requests</span>
+            <span id="review-count">0 approvals</span>
           </div>
           <div id="review-list" class="review-list"></div>
         </div>
