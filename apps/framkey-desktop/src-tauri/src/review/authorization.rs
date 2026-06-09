@@ -19,6 +19,7 @@ pub fn dangerous_method_kind(method: &str) -> Option<ReviewMethodKind> {
         | "eth_signTypedData_v3"
         | "eth_signTypedData_v4" => Some(ReviewMethodKind::TypedData),
         "eth_sendTransaction" | "eth_signTransaction" => Some(ReviewMethodKind::Transaction),
+        "framkey_btcSendTransaction" => Some(ReviewMethodKind::BtcTransaction),
         _ => None,
     }
 }
@@ -29,6 +30,9 @@ pub(crate) fn blocked_reason(kind: ReviewMethodKind) -> &'static str {
         ReviewMethodKind::NetworkSwitch => "network switching requires trusted approval",
         ReviewMethodKind::WatchAsset => "adding watched assets requires trusted approval",
         ReviewMethodKind::Transaction => "transaction signing requires trusted policy approval",
+        ReviewMethodKind::BtcTransaction => {
+            "BTC transaction signing requires trusted PSBT/UTXO policy approval"
+        }
         ReviewMethodKind::PersonalSign
         | ReviewMethodKind::EthSign
         | ReviewMethodKind::TypedData => "message signing requires trusted approval",
@@ -69,6 +73,12 @@ pub(crate) fn decision_broker_mode(
             ReviewMethodKind::Transaction,
             ReviewDecision::Approve | ReviewDecision::ApproveWithRisk,
         ) => transaction_broker_mode_for_decision(request, decision),
+        (ReviewMethodKind::BtcTransaction, ReviewDecision::Approve) => {
+            btc_transaction_broker_mode_for_decision(request, decision)
+        }
+        (ReviewMethodKind::BtcTransaction, ReviewDecision::ApproveWithRisk) => {
+            bail!("BTC transaction signing does not support high-risk approval")
+        }
         (_, ReviewDecision::Approve) => Ok("dry_run"),
         (_, ReviewDecision::ApproveWithRisk) => {
             bail!("high-risk approval is only valid for transactions")
@@ -88,6 +98,26 @@ pub fn transaction_signing_authorization(request: &ReviewRequest) -> Result<&'st
         })?
         .decision;
     transaction_broker_mode_for_decision(request, decision)
+}
+
+pub fn btc_transaction_signing_authorization(request: &ReviewRequest) -> Result<&'static str> {
+    if request.status != ReviewStatus::Approved {
+        bail!(
+            "BTC transaction review request {} is not approved",
+            request.id
+        );
+    }
+    let decision = request
+        .decision
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "BTC transaction review request {} has no decision",
+                request.id
+            )
+        })?
+        .decision;
+    btc_transaction_broker_mode_for_decision(request, decision)
 }
 
 pub fn typed_data_signing_authorization(request: &ReviewRequest) -> Result<&'static str> {
@@ -361,6 +391,37 @@ pub(crate) fn transaction_policy_flags(request: &ReviewRequest) -> Result<(bool,
     let can_sign = policy_bool(policy, "canSign", request)?;
     let override_allowed = policy_bool(policy, "overrideAllowed", request)?;
     Ok((can_sign, override_allowed))
+}
+
+pub(crate) fn btc_transaction_broker_mode_for_decision(
+    request: &ReviewRequest,
+    decision: ReviewDecision,
+) -> Result<&'static str> {
+    if request.kind != ReviewMethodKind::BtcTransaction {
+        bail!("review request {} is not a BTC transaction", request.id);
+    }
+    let can_sign = request
+        .summary
+        .get("policy")
+        .and_then(Value::as_object)
+        .and_then(|policy| policy.get("canSign"))
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "BTC transaction review request {} is missing policy.canSign",
+                request.id
+            )
+        })?;
+    match decision {
+        ReviewDecision::Approve if can_sign => Ok("controlled_btc_transaction_signing"),
+        ReviewDecision::Approve => bail!("BTC transaction policy blocks signing"),
+        ReviewDecision::ApproveWithRisk => {
+            bail!("BTC transaction signing does not support high-risk approval")
+        }
+        ReviewDecision::Reject => {
+            bail!("BTC transaction review request {} was rejected", request.id)
+        }
+    }
 }
 
 pub(crate) fn policy_bool(

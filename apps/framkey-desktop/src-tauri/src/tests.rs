@@ -142,6 +142,43 @@ fn mock_status_reports_mock_transaction_capability() {
 }
 
 #[test]
+fn status_reports_btc_testnet4_choice_and_controlled_send_strategy() {
+    let config = fixture_config();
+    let status = status_result(&config);
+
+    assert_eq!(status["btc"]["testNetwork"]["selected"], "bitcoin-testnet4");
+    assert_eq!(
+        status["btc"]["testNetwork"]["signet"]["status"],
+        "reserved_controlled_integration_testnet"
+    );
+    assert_eq!(status["btc"]["balanceRpc"]["status"], "enabled");
+    assert_eq!(
+        status["btc"]["psbtUtxo"]["status"],
+        "enabled_controlled_trusted_ui"
+    );
+
+    let networks = status["supportedNetworks"]
+        .as_array()
+        .expect("supported networks");
+    let btc_testnet = networks
+        .iter()
+        .find(|network| network["network"] == json!("bitcoin-testnet4"))
+        .expect("btc testnet4 network");
+    assert_eq!(btc_testnet["defaultAccount"], json!(true));
+    assert_eq!(btc_testnet["selectedTestNetwork"], json!(true));
+
+    let signet = networks
+        .iter()
+        .find(|network| network["network"] == json!("bitcoin-signet"))
+        .expect("btc signet network");
+    assert_eq!(signet["defaultAccount"], json!(false));
+    assert_eq!(
+        signet["capabilities"]["status"],
+        "reserved_controlled_integration_testnet"
+    );
+}
+
+#[test]
 fn provider_status_hides_local_runtime_details_from_dapps() {
     let state = AppState::new();
     let mut config = fixture_config();
@@ -2058,6 +2095,7 @@ fn repeated_trusted_get_account_uses_connected_session_without_loading_vault() {
     state
         .remember_connected_account(DesktopAccount {
             address: "0x0000000000000000000000000000000000000001".to_owned(),
+            accounts: json!([]),
             wallet: json!({
                 "kind": "keychain_vault",
                 "mock": false,
@@ -2102,6 +2140,345 @@ fn repeated_trusted_get_account_uses_connected_session_without_loading_vault() {
     assert_eq!(account["signerHelper"], Value::Null);
     let serialized = serde_json::to_string(&account).unwrap();
     assert!(!serialized.contains("should-not-remain"));
+}
+
+#[test]
+fn mock_wallet_account_exposes_btc_receive_balance_and_controlled_send() {
+    let state = AppState::new();
+    let config = fixture_config();
+
+    let account = state.load_account(&config).unwrap();
+    let accounts = account.accounts.as_array().expect("accounts array");
+
+    let evm = accounts
+        .iter()
+        .find(|account| account["family"] == json!("evm"))
+        .expect("evm account");
+    assert_eq!(evm["address"], json!(account.address));
+    assert_eq!(evm["capabilities"]["dappProvider"], json!(true));
+
+    let btc_accounts: Vec<_> = accounts
+        .iter()
+        .filter(|account| account["family"] == json!("btc"))
+        .collect();
+    assert_eq!(btc_accounts.len(), 2);
+
+    let btc = btc_accounts
+        .iter()
+        .copied()
+        .find(|account| account["network"] == json!("bitcoin-mainnet"))
+        .expect("btc mainnet account");
+    assert_eq!(btc["network"], json!("bitcoin-mainnet"));
+    assert!(
+        btc["address"]
+            .as_str()
+            .expect("btc address")
+            .starts_with("bc1q")
+    );
+    assert_eq!(btc["capabilities"]["receive"], json!(true));
+    assert_eq!(btc["capabilities"]["balance"], json!(true));
+    assert_eq!(btc["capabilities"]["send"], json!(true));
+    assert_eq!(btc["capabilities"]["psbtSign"], json!(true));
+    assert_eq!(
+        btc["capabilities"]["balanceStatus"],
+        json!("enabled_esplora_utxo_index")
+    );
+
+    let btc_testnet = btc_accounts
+        .iter()
+        .copied()
+        .find(|account| account["network"] == json!("bitcoin-testnet4"))
+        .expect("btc testnet4 account");
+    assert_eq!(btc_testnet["selectedTestNetwork"], json!(true));
+    assert!(
+        btc_testnet["address"]
+            .as_str()
+            .expect("btc testnet address")
+            .starts_with("tb1q")
+    );
+    assert_eq!(btc_testnet["capabilities"]["receive"], json!(true));
+    assert_eq!(btc_testnet["capabilities"]["balance"], json!(true));
+    assert_eq!(btc_testnet["capabilities"]["send"], json!(true));
+    assert_eq!(btc_testnet["capabilities"]["psbtSign"], json!(true));
+}
+
+#[test]
+fn btc_balance_snapshot_reads_esplora_utxos() {
+    let utxos = json!([
+        {
+            "txid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "vout": 0,
+            "value": 12_345,
+            "status": {
+                "confirmed": true,
+                "block_height": 10,
+                "block_hash": "bbbb",
+                "block_time": 123,
+            },
+        },
+        {
+            "txid": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "vout": 1,
+            "value": 2_000,
+            "status": {
+                "confirmed": false,
+            },
+        },
+    ]);
+    let (esplora_url, request_rx) =
+        spawn_esplora_sequence_server(vec![EsploraResponse::json(utxos)]);
+    let state = AppState::new();
+    let mut config = fixture_config();
+    config.btc.mainnet_esplora_url = Some(esplora_url);
+    let account = state.load_and_connect_account(&config).unwrap();
+    let btc = account
+        .accounts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|account| account["network"] == json!("bitcoin-mainnet"))
+        .unwrap()
+        .clone();
+
+    let result = btc_balance_snapshot(
+        &state,
+        &config,
+        BtcBalanceRequest {
+            network: "bitcoin-mainnet".to_owned(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(result["network"], json!("bitcoin-mainnet"));
+    assert_eq!(result["address"], btc["address"]);
+    assert_eq!(result["confirmedSat"], json!(12_345));
+    assert_eq!(result["unconfirmedSat"], json!(2_000));
+    assert_eq!(result["spendableSat"], json!(12_345));
+    let request = request_rx.recv().unwrap();
+    assert_eq!(request.method, "GET");
+    assert!(request.path.starts_with(&format!(
+        "/address/{}/utxo",
+        btc["address"].as_str().unwrap()
+    )));
+}
+
+#[test]
+fn btc_balance_requires_connected_account_session() {
+    let state = AppState::new();
+    let config = fixture_config();
+
+    let error = btc_balance_snapshot(
+        &state,
+        &config,
+        BtcBalanceRequest {
+            network: "bitcoin-mainnet".to_owned(),
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("wallet account is not connected")
+    );
+}
+
+#[test]
+fn trusted_btc_send_requires_review_signs_and_broadcasts() {
+    let state = Arc::new(AppState::new());
+    let mut config = fixture_config();
+    let account = state.load_and_connect_account(&config).unwrap();
+    let btc = account
+        .accounts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|account| account["network"] == json!("bitcoin-testnet4"))
+        .unwrap()
+        .clone();
+    let btc_address = btc["address"].as_str().unwrap().to_owned();
+    let utxos = json!([
+        {
+            "txid": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "vout": 0,
+            "value": 20_000,
+            "status": {
+                "confirmed": true,
+                "block_height": 100,
+            },
+        },
+    ]);
+    let (esplora_url, request_rx) = spawn_esplora_sequence_server(vec![
+        EsploraResponse::json(utxos),
+        EsploraResponse::computed_txid(),
+        EsploraResponse::json(json!([])),
+    ]);
+    config.btc.testnet4_esplora_url = Some(esplora_url);
+
+    let worker_state = Arc::clone(&state);
+    let worker_config = config.clone();
+    let worker = thread::spawn(move || {
+        send_btc_transfer_from_trusted_ui(
+            &worker_state,
+            &worker_config,
+            BtcTransferRequest {
+                network: "bitcoin-testnet4".to_owned(),
+                to_address: btc_address,
+                amount_sat: "1000".to_owned(),
+                fee_rate_sat_vb: Some(2),
+            },
+        )
+    });
+
+    let review = wait_for_pending_review(&state, "framkey_btcSendTransaction");
+    assert_eq!(review.kind, review::ReviewMethodKind::BtcTransaction);
+    assert_eq!(review.origin.as_deref(), Some(TRUSTED_UI_ORIGIN));
+    assert_eq!(review.summary["network"], json!("bitcoin-testnet4"));
+    assert_eq!(review.summary["policy"]["canSign"], json!(true));
+    state
+        .decide_review_request(&review.id, &review.decision_token, ReviewDecision::Approve)
+        .unwrap();
+
+    let result = worker.join().unwrap().unwrap();
+    assert_eq!(result["operation"], json!("send_btc_transfer"));
+    assert_eq!(result["status"], json!("broadcast"));
+    assert_eq!(result["network"], json!("bitcoin-testnet4"));
+    assert_eq!(result["amountSat"], json!(1000));
+    assert_eq!(result["transactionId"].as_str().unwrap().len(), 64);
+
+    let first = request_rx.recv().unwrap();
+    assert_eq!(first.method, "GET");
+    let second = request_rx.recv().unwrap();
+    assert_eq!(second.method, "POST");
+    assert_eq!(second.path, "/tx");
+    assert!(second.body.len() > 100);
+
+    let activity = state.transaction_activity_snapshot().unwrap();
+    assert_eq!(activity.len(), 1);
+    assert_eq!(activity[0].method, "framkey_btcSendTransaction");
+    assert_eq!(activity[0].status, "broadcast");
+    assert_eq!(activity[0].chain_id.as_deref(), Some("bitcoin-testnet4"));
+    assert_eq!(activity[0].receipt_status, None);
+}
+
+#[test]
+fn trusted_btc_send_requires_connected_account_session() {
+    let state = AppState::new();
+    let config = fixture_config();
+
+    let error = send_btc_transfer_from_trusted_ui(
+        &state,
+        &config,
+        BtcTransferRequest {
+            network: "bitcoin-testnet4".to_owned(),
+            to_address: "tb1q3w0hl5vxesce4rq0x6rpk6q4drj58mtcx7kwku".to_owned(),
+            amount_sat: "1000".to_owned(),
+            fee_rate_sat_vb: Some(2),
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("wallet account is not connected")
+    );
+    assert!(state.review_queue_snapshot().unwrap().is_empty());
+}
+
+#[test]
+fn provider_rejects_btc_send_method_without_review_capture() {
+    let state = AppState::new();
+    let config = fixture_config();
+    state
+        .remember_connected_account(fixture_connected_account(
+            "0x0000000000000000000000000000000000000001",
+        ))
+        .unwrap();
+    state
+        .grant_account_permission("https://dapp.example".to_owned())
+        .unwrap();
+    let request = ProviderRequest {
+        id: "btc-from-dapp".to_owned(),
+        method: "framkey_btcSendTransaction".to_owned(),
+        params: json!({}),
+        origin: Some("https://dapp.example".to_owned()),
+    };
+
+    let error = match handle_provider_request(&state, &config, &request) {
+        Ok(_) => panic!("expected BTC provider method to be unsupported"),
+        Err(error) => error,
+    };
+
+    assert!(error.to_string().contains("trusted UI-only"));
+    assert!(state.review_queue_snapshot().unwrap().is_empty());
+}
+
+#[test]
+fn btc_broadcast_failure_redacts_backend_body() {
+    let state = Arc::new(AppState::new());
+    let mut config = fixture_config();
+    let account = state.load_and_connect_account(&config).unwrap();
+    let btc = account
+        .accounts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|account| account["network"] == json!("bitcoin-testnet4"))
+        .unwrap()
+        .clone();
+    let btc_address = btc["address"].as_str().unwrap().to_owned();
+    let utxos = json!([
+        {
+            "txid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "vout": 0,
+            "value": 20_000,
+            "status": {
+                "confirmed": true,
+                "block_height": 100,
+            },
+        },
+    ]);
+    let leaked_body = "backend echoed signed transaction raw hex 020000000001...";
+    let (esplora_url, _request_rx) = spawn_esplora_sequence_server(vec![
+        EsploraResponse::json(utxos),
+        EsploraResponse::error(400, leaked_body),
+    ]);
+    config.btc.testnet4_esplora_url = Some(esplora_url);
+
+    let worker_state = Arc::clone(&state);
+    let worker_config = config.clone();
+    let worker = thread::spawn(move || {
+        send_btc_transfer_from_trusted_ui(
+            &worker_state,
+            &worker_config,
+            BtcTransferRequest {
+                network: "bitcoin-testnet4".to_owned(),
+                to_address: btc_address,
+                amount_sat: "1000".to_owned(),
+                fee_rate_sat_vb: Some(2),
+            },
+        )
+    });
+
+    let review = wait_for_pending_review(&state, "framkey_btcSendTransaction");
+    state
+        .decide_review_request(&review.id, &review.decision_token, ReviewDecision::Approve)
+        .unwrap();
+
+    let error = worker.join().unwrap().unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("HTTP 400"));
+    assert!(!message.contains(leaked_body));
+    let activity = state.transaction_activity_snapshot().unwrap();
+    assert_eq!(activity[0].status, "failed");
+    assert!(
+        !activity[0]
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains(leaked_body)
+    );
 }
 
 #[test]
@@ -3998,6 +4375,7 @@ fn fixture_config() -> DesktopConfig {
         },
         simulation: DesktopSimulationConfig::LocalDecoderOnly,
         rpc: None,
+        btc: DesktopBtcConfig::default(),
     }
 }
 
@@ -4034,6 +4412,7 @@ fn policy_blocker<'a>(summary: &'a Value, code: &str) -> Option<&'a Value> {
 fn fixture_connected_account(address: &str) -> DesktopAccount {
     DesktopAccount {
         address: address.to_owned(),
+        accounts: json!([]),
         wallet: json!({
             "kind": "test_connected_session",
             "mock": true,
@@ -4260,6 +4639,104 @@ fn spawn_rpc_body_sequence_server(
         }
     });
     (format!("http://{address}"), request_rx)
+}
+
+#[derive(Debug, Clone)]
+struct EsploraHttpRequest {
+    method: String,
+    path: String,
+    body: String,
+}
+
+enum EsploraResponse {
+    Json(Value),
+    ComputedTxid,
+    Error { status: u16, body: String },
+}
+
+impl EsploraResponse {
+    fn json(value: Value) -> Self {
+        Self::Json(value)
+    }
+
+    fn computed_txid() -> Self {
+        Self::ComputedTxid
+    }
+
+    fn error(status: u16, body: &str) -> Self {
+        Self::Error {
+            status,
+            body: body.to_owned(),
+        }
+    }
+}
+
+fn spawn_esplora_sequence_server(
+    responses: Vec<EsploraResponse>,
+) -> (String, std::sync::mpsc::Receiver<EsploraHttpRequest>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (request_tx, request_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        for response in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            let request = loop {
+                let read = stream.read(&mut chunk).unwrap();
+                if read == 0 {
+                    panic!("connection closed before request was complete");
+                }
+                buffer.extend_from_slice(&chunk[..read]);
+                if let Some(request) = http_request_from_buffer(&buffer) {
+                    break request;
+                }
+            };
+            request_tx.send(request.clone()).unwrap();
+
+            let (status, content_type, body) = match response {
+                EsploraResponse::Json(value) => (200, "application/json", value.to_string()),
+                EsploraResponse::ComputedTxid => (
+                    200,
+                    "text/plain",
+                    framkey_btc::transaction_id_from_raw_hex(&request.body).unwrap(),
+                ),
+                EsploraResponse::Error { status, body } => (status, "text/plain", body),
+            };
+            let http_response = format!(
+                "HTTP/1.1 {status} OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(http_response.as_bytes()).unwrap();
+        }
+    });
+    (format!("http://{address}"), request_rx)
+}
+
+fn http_request_from_buffer(buffer: &[u8]) -> Option<EsploraHttpRequest> {
+    let marker = b"\r\n\r\n";
+    let header_end = buffer
+        .windows(marker.len())
+        .position(|window| window == marker)?
+        + marker.len();
+    let headers = String::from_utf8_lossy(&buffer[..header_end]);
+    let request_line = headers.lines().next()?;
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next()?.to_owned();
+    let path = request_parts.next()?.to_owned();
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())?
+        })
+        .unwrap_or(0);
+    if buffer.len() < header_end + content_length {
+        return None;
+    }
+    let body = String::from_utf8(buffer[header_end..header_end + content_length].to_vec()).ok()?;
+    Some(EsploraHttpRequest { method, path, body })
 }
 
 fn request_body_from_http(buffer: &[u8]) -> Option<String> {

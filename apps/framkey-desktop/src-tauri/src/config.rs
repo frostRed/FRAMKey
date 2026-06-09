@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use framkey_btc::{BTC_DEFAULT_FEE_RATE_SAT_VB, BTC_MAX_FEE_RATE_SAT_VB, BtcNetwork};
 use framkey_crypto::SecretBytes;
 use framkey_device::{FileImageDevice, VaultDevice};
 use framkey_evm::EvmAddress;
@@ -24,6 +25,8 @@ use crate::*;
 pub(crate) struct MockWalletSnapshot {
     pub(crate) secret: SecretBytes<32>,
     pub(crate) address: String,
+    pub(crate) btc_mainnet_address: String,
+    pub(crate) btc_testnet4_address: String,
     pub(crate) secret_hash: String,
 }
 
@@ -42,6 +45,7 @@ pub(crate) struct DesktopConfig {
     pub(crate) helper: SignerHelperConfig,
     pub(crate) simulation: DesktopSimulationConfig,
     pub(crate) rpc: Option<DesktopRpcConfig>,
+    pub(crate) btc: DesktopBtcConfig,
 }
 
 impl DesktopConfig {
@@ -75,6 +79,7 @@ impl DesktopConfig {
             },
             simulation: DesktopSimulationConfig::LocalDecoderOnly,
             rpc: None,
+            btc: DesktopBtcConfig::default(),
         })
     }
 
@@ -114,6 +119,9 @@ impl DesktopConfig {
         }
         if let Some(rpc) = file.rpc {
             self.rpc = Some(rpc.into_runtime()?);
+        }
+        if let Some(btc) = file.btc {
+            self.btc.apply_file(btc);
         }
         Ok(())
     }
@@ -168,6 +176,7 @@ impl DesktopConfig {
             self.wallet = parse_wallet_mode(&wallet_mode)?;
         }
         self.apply_rpc_env()?;
+        self.btc.apply_env()?;
         self.apply_simulation_env(file_simulation_explicit)?;
         Ok(())
     }
@@ -182,6 +191,7 @@ impl DesktopConfig {
         if let Some(rpc) = &self.rpc {
             rpc.validate()?;
         }
+        self.btc.validate()?;
         Ok(())
     }
 
@@ -508,6 +518,105 @@ pub(crate) struct DesktopRpcConfig {
     pub(crate) provider: DesktopRpcProvider,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct DesktopBtcConfig {
+    pub(crate) mainnet_esplora_url: Option<String>,
+    pub(crate) testnet4_esplora_url: Option<String>,
+    pub(crate) timeout_ms: u64,
+}
+
+impl Default for DesktopBtcConfig {
+    fn default() -> Self {
+        Self {
+            mainnet_esplora_url: Some(DEFAULT_BTC_MAINNET_ESPLORA_URL.to_owned()),
+            testnet4_esplora_url: Some(DEFAULT_BTC_TESTNET4_ESPLORA_URL.to_owned()),
+            timeout_ms: DEFAULT_BTC_ESPLORA_TIMEOUT_MS,
+        }
+    }
+}
+
+impl DesktopBtcConfig {
+    pub(crate) fn apply_file(&mut self, file: ConfigBtc) {
+        if let Some(mainnet) = file.mainnet_esplora_url {
+            self.mainnet_esplora_url = optional_btc_endpoint(mainnet);
+        }
+        if let Some(testnet4) = file.testnet4_esplora_url {
+            self.testnet4_esplora_url = optional_btc_endpoint(testnet4);
+        }
+        if let Some(timeout_ms) = file.timeout_ms {
+            self.timeout_ms = timeout_ms;
+        }
+    }
+
+    pub(crate) fn apply_env(&mut self) -> Result<()> {
+        if let Some(url) = env_string("FRAMKEY_BTC_MAINNET_ESPLORA_URL") {
+            self.mainnet_esplora_url = optional_btc_endpoint(url);
+        }
+        if let Some(url) = env_string("FRAMKEY_BTC_TESTNET4_ESPLORA_URL") {
+            self.testnet4_esplora_url = optional_btc_endpoint(url);
+        }
+        if let Some(timeout_ms) = env_u64("FRAMKEY_BTC_ESPLORA_TIMEOUT_MS")? {
+            self.timeout_ms = timeout_ms;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn endpoint_for_network(&self, network: BtcNetwork) -> Option<&str> {
+        match network {
+            BtcNetwork::Mainnet => self.mainnet_esplora_url.as_deref(),
+            BtcNetwork::Testnet4 => self.testnet4_esplora_url.as_deref(),
+            BtcNetwork::Signet | BtcNetwork::Regtest => None,
+        }
+    }
+
+    pub(crate) fn describe_network(&self, network: BtcNetwork) -> Value {
+        let endpoint = self.endpoint_for_network(network);
+        json!({
+            "kind": "esplora_http",
+            "configured": endpoint.is_some(),
+            "network": network.id(),
+            "timeoutMs": self.timeout_ms,
+            "endpointPublic": endpoint.map(public_btc_endpoint_kind),
+            "privacy": if endpoint.is_some() {
+                "address_queries_are_sent_to_configured_indexer"
+            } else {
+                "not_configured"
+            },
+        })
+    }
+
+    pub(crate) fn validate(&self) -> Result<()> {
+        if let Some(endpoint) = &self.mainnet_esplora_url {
+            validate_rpc_endpoint(endpoint)?;
+        }
+        if let Some(endpoint) = &self.testnet4_esplora_url {
+            validate_rpc_endpoint(endpoint)?;
+        }
+        if self.timeout_ms == 0 || self.timeout_ms > 30_000 {
+            anyhow::bail!("BTC Esplora timeout must be between 1 and 30000 ms");
+        }
+        Ok(())
+    }
+}
+
+fn optional_btc_endpoint(value: String) -> Option<String> {
+    let value = value.trim();
+    match value {
+        "disabled" | "off" | "none" | "null" => None,
+        _ => Some(value.trim_end_matches('/').to_owned()),
+    }
+}
+
+fn public_btc_endpoint_kind(endpoint: &str) -> &'static str {
+    if endpoint.contains("blockstream.info") {
+        "blockstream_public"
+    } else if endpoint.contains("mempool.space") {
+        "mempool_space_public"
+    } else {
+        "custom"
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DesktopRpcProvider {
     Alchemy,
@@ -830,6 +939,7 @@ impl SignerHelperSandbox {
 #[derive(Debug, Clone)]
 pub(crate) struct DesktopAccount {
     pub(crate) address: String,
+    pub(crate) accounts: Value,
     pub(crate) wallet: Value,
     pub(crate) metadata: Value,
     pub(crate) keychain: Option<Value>,
@@ -852,6 +962,8 @@ pub(crate) struct ConfigFile {
     pub(crate) simulation: Option<ConfigSimulation>,
     #[serde(default)]
     pub(crate) rpc: Option<ConfigRpc>,
+    #[serde(default)]
+    pub(crate) btc: Option<ConfigBtc>,
 }
 
 impl ConfigFile {
@@ -1013,6 +1125,17 @@ impl ConfigRpc {
             }),
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConfigBtc {
+    #[serde(default)]
+    pub(crate) mainnet_esplora_url: Option<String>,
+    #[serde(default)]
+    pub(crate) testnet4_esplora_url: Option<String>,
+    #[serde(default)]
+    pub(crate) timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1207,6 +1330,35 @@ pub(crate) struct NativeTransferRequest {
     pub(crate) chain_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BtcBalanceRequest {
+    pub(crate) network: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NormalizedBtcBalanceRequest {
+    pub(crate) network: BtcNetwork,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BtcTransferRequest {
+    pub(crate) network: String,
+    pub(crate) to_address: String,
+    pub(crate) amount_sat: String,
+    #[serde(default)]
+    pub(crate) fee_rate_sat_vb: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NormalizedBtcTransferRequest {
+    pub(crate) network: BtcNetwork,
+    pub(crate) to_address: String,
+    pub(crate) amount_sat: u64,
+    pub(crate) fee_rate_sat_vb: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NormalizedNativeTransferRequest {
     pub(crate) to: String,
@@ -1238,6 +1390,40 @@ pub(crate) struct NormalizedTokenTransferRequest {
     pub(crate) symbol: Option<String>,
     pub(crate) data: String,
     pub(crate) chain_id: String,
+}
+
+impl BtcBalanceRequest {
+    pub(crate) fn normalized(&self) -> Result<NormalizedBtcBalanceRequest> {
+        let network = self.network.trim().parse::<BtcNetwork>()?;
+        if !network.is_user_visible_default() {
+            anyhow::bail!("BTC balance is enabled only for mainnet and Testnet4 accounts");
+        }
+        Ok(NormalizedBtcBalanceRequest { network })
+    }
+}
+
+impl BtcTransferRequest {
+    pub(crate) fn normalized(&self) -> Result<NormalizedBtcTransferRequest> {
+        let network = self.network.trim().parse::<BtcNetwork>()?;
+        if !network.is_user_visible_default() {
+            anyhow::bail!("BTC send is enabled only for mainnet and Testnet4 accounts");
+        }
+        let to_address = self.to_address.trim();
+        if to_address.is_empty() || to_address.chars().any(char::is_control) {
+            anyhow::bail!("BTC recipient address is malformed");
+        }
+        let amount_sat = parse_btc_sats(&self.amount_sat)?;
+        let fee_rate_sat_vb = self.fee_rate_sat_vb.unwrap_or(BTC_DEFAULT_FEE_RATE_SAT_VB);
+        if fee_rate_sat_vb == 0 || fee_rate_sat_vb > BTC_MAX_FEE_RATE_SAT_VB {
+            anyhow::bail!("BTC fee rate must be between 1 and {BTC_MAX_FEE_RATE_SAT_VB} sat/vB");
+        }
+        Ok(NormalizedBtcTransferRequest {
+            network,
+            to_address: to_address.to_owned(),
+            amount_sat,
+            fee_rate_sat_vb,
+        })
+    }
 }
 
 impl NativeTransferRequest {
@@ -1278,6 +1464,24 @@ impl NativeTransferRequest {
             chain_id,
         })
     }
+}
+
+pub(crate) fn parse_btc_sats(value: &str) -> Result<u64> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.starts_with('+')
+        || value.starts_with('-')
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        anyhow::bail!("BTC amount must be a whole number of satoshis");
+    }
+    let sat = value
+        .parse::<u64>()
+        .with_context(|| format!("failed to parse BTC satoshi amount {value}"))?;
+    if sat == 0 {
+        anyhow::bail!("BTC amount must be greater than zero");
+    }
+    Ok(sat)
 }
 
 impl TokenTransferRequest {

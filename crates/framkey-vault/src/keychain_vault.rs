@@ -65,7 +65,7 @@ fn build_keychain_encrypted_save_image_inner(
 ) -> Result<KeychainEncryptedVaultImage> {
     validate_keychain_wrapper_binding(keychain_item_id)?;
 
-    let wallet_type = WalletType::EvmEoaSecp256k1;
+    let wallet_type = WalletType::Secp256k1SingleKey;
     let wallet_secret = random_wallet_secret(wallet_type)?;
     let dek = SecretBytes::new(random_array::<32>()?);
     let wallet_id = WalletId(random_array::<16>()?);

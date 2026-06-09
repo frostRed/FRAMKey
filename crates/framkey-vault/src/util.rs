@@ -1,10 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use framkey_btc::validate_private_key_bytes as validate_btc_private_key_bytes;
 use framkey_core::{
     FramkeyError, Generation, PolicyId, Result, UnixTimestamp, WalletId, WalletType,
 };
 use framkey_crypto::{SecretBytes, decode_hex_array, encode_hex, random_array};
-use framkey_evm::validate_private_key_bytes;
+use framkey_evm::validate_private_key_bytes as validate_evm_private_key_bytes;
 use framkey_recovery::RecoveryBackupFile;
 
 use crate::types::{DekWrapper, VaultFile, validate_keychain_item_id};
@@ -19,9 +20,11 @@ pub(crate) fn current_unix_timestamp() -> UnixTimestamp {
 
 pub(crate) fn random_wallet_secret(wallet_type: WalletType) -> Result<SecretBytes<32>> {
     match wallet_type {
-        WalletType::EvmEoaSecp256k1 => loop {
+        wallet_type if wallet_type.uses_secp256k1_secret() => loop {
             let candidate = random_array::<32>()?;
-            if validate_private_key_bytes(&candidate).is_ok() {
+            if validate_evm_private_key_bytes(&candidate).is_ok()
+                && validate_btc_private_key_bytes(&candidate).is_ok()
+            {
                 break Ok(SecretBytes::new(candidate));
             }
         },
@@ -139,6 +142,7 @@ pub(crate) fn validate_keychain_wrapper_binding(keychain_item_id: &str) -> Resul
 pub(crate) fn wallet_type_name(wallet_type: WalletType) -> &'static str {
     match wallet_type {
         WalletType::EvmEoaSecp256k1 => "evm_eoa_secp256k1",
+        WalletType::Secp256k1SingleKey => "secp256k1_single_key",
         _ => "unknown",
     }
 }

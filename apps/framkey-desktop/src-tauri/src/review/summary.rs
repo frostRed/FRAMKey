@@ -46,7 +46,53 @@ pub(crate) fn summarize_review_request(
             transaction_review,
             transaction_asset_context,
         ),
+        ReviewMethodKind::BtcTransaction => summarize_btc_transaction(params),
     }
+}
+
+pub(crate) fn summarize_btc_transaction(params: &Value) -> Value {
+    let object = params.as_object();
+    let policy = object
+        .and_then(|object| object.get("policy"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "canSign": false,
+                "blockers": [{
+                    "code": "missing_btc_policy",
+                    "message": "BTC transaction review is missing a trusted PSBT policy summary",
+                }],
+            })
+        });
+    let can_sign = policy
+        .get("canSign")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    json!({
+        "intent": "btc_transaction",
+        "network": object.and_then(|object| object.get("network")).cloned().unwrap_or(Value::Null),
+        "fromAddress": object.and_then(|object| object.get("fromAddress")).cloned().unwrap_or(Value::Null),
+        "toAddress": object.and_then(|object| object.get("toAddress")).cloned().unwrap_or(Value::Null),
+        "amountSat": object.and_then(|object| object.get("amountSat")).cloned().unwrap_or(Value::Null),
+        "feeSat": object.and_then(|object| object.get("feeSat")).cloned().unwrap_or(Value::Null),
+        "feeRateSatVb": object.and_then(|object| object.get("feeRateSatVb")).cloned().unwrap_or(Value::Null),
+        "inputValueSat": object.and_then(|object| object.get("inputValueSat")).cloned().unwrap_or(Value::Null),
+        "changeSat": object.and_then(|object| object.get("changeSat")).cloned().unwrap_or(Value::Null),
+        "estimatedVbytes": object.and_then(|object| object.get("estimatedVbytes")).cloned().unwrap_or(Value::Null),
+        "inputCount": object
+            .and_then(|object| object.get("selectedUtxos"))
+            .and_then(Value::as_array)
+            .map(|items| json!(items.len()))
+            .unwrap_or(Value::Null),
+        "outputs": object.and_then(|object| object.get("outputs")).cloned().unwrap_or(Value::Null),
+        "policy": policy,
+        "simulation": "not_applicable",
+        "decision": if can_sign {
+            "requires_trusted_approval"
+        } else {
+            "blocked_before_approval"
+        },
+    })
 }
 
 pub(crate) fn summarize_network_management(

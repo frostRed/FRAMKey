@@ -15,6 +15,20 @@ mod tests {
 
         let decoded: WalletType = serde_json::from_str(&encoded).unwrap();
         assert_eq!(decoded, WalletType::EvmEoaSecp256k1);
+
+        let encoded = serde_json::to_string(&WalletType::Secp256k1SingleKey).unwrap();
+        assert_eq!(encoded, r#""secp256k1_single_key""#);
+
+        let decoded: WalletType = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, WalletType::Secp256k1SingleKey);
+    }
+
+    #[test]
+    fn wallet_type_declares_chain_family_capabilities() {
+        assert!(WalletType::EvmEoaSecp256k1.supports_evm_eoa());
+        assert!(WalletType::EvmEoaSecp256k1.supports_btc_single_key());
+        assert!(WalletType::Secp256k1SingleKey.supports_evm_eoa());
+        assert!(WalletType::Secp256k1SingleKey.supports_btc_single_key());
     }
 
     #[test]

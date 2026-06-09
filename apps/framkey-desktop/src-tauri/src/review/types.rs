@@ -14,6 +14,7 @@ pub enum ReviewMethodKind {
     EthSign,
     TypedData,
     Transaction,
+    BtcTransaction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

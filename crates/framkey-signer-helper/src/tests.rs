@@ -1,4 +1,5 @@
 use crate::{
+    handler::chain_accounts_from_secret,
     io::classify_error,
     recovery::validate_recovery_files_drill,
     validation::{
@@ -7,6 +8,8 @@ use crate::{
         validate_typed_data_request,
     },
 };
+use framkey_core::WalletType;
+use framkey_crypto::SecretBytes;
 use framkey_evm::EvmAddress;
 use framkey_ipc::{
     IpcErrorCode, MAX_SIGNER_HELPER_PERSONAL_SIGN_MESSAGE_BYTES,
@@ -167,6 +170,34 @@ fn accepts_matching_expected_address() {
     let expected =
         parse_expected_address(Some("0x0000000000000000000000000000000000000001")).unwrap();
     validate_expected_address(actual, expected).unwrap();
+}
+
+#[test]
+fn derives_public_evm_and_btc_accounts_for_multichain_secret() {
+    let secret = SecretBytes::new([1; 32]);
+    let accounts = chain_accounts_from_secret(WalletType::Secp256k1SingleKey, &secret).unwrap();
+
+    let evm = accounts
+        .iter()
+        .find(|account| account.family == "evm")
+        .expect("evm account");
+    assert!(evm.address.starts_with("0x"));
+    assert_eq!(evm.address_type, "eoa");
+
+    let btc = accounts
+        .iter()
+        .find(|account| account.family == "btc" && account.network == "bitcoin-mainnet")
+        .expect("btc mainnet account");
+    assert_eq!(btc.network, "bitcoin-mainnet");
+    assert_eq!(btc.address_type, "p2wpkh");
+    assert!(btc.address.starts_with("bc1q"));
+
+    let btc_testnet = accounts
+        .iter()
+        .find(|account| account.family == "btc" && account.network == "bitcoin-testnet4")
+        .expect("btc testnet4 account");
+    assert_eq!(btc_testnet.address_type, "p2wpkh");
+    assert!(btc_testnet.address.starts_with("tb1q"));
 }
 
 #[test]

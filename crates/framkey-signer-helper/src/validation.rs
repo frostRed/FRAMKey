@@ -1,13 +1,15 @@
 use anyhow::Result;
+use framkey_btc::{BtcNetwork, validate_p2wpkh_address};
 use framkey_core::FramkeyError;
 use framkey_evm::{
     EvmAddress, EvmTransaction, EvmTransactionKind, typed_data_v4_hash, validate_transaction,
 };
 use framkey_ipc::{
-    MAX_SIGNER_HELPER_PERSONAL_SIGN_MESSAGE_BYTES, MAX_SIGNER_HELPER_SAVE_IMAGE_BYTES,
-    MAX_SIGNER_HELPER_TRANSACTION_DATA_BYTES, MAX_SIGNER_HELPER_TYPED_DATA_BYTES,
-    MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES,
+    MAX_SIGNER_HELPER_BTC_PSBT_BYTES, MAX_SIGNER_HELPER_PERSONAL_SIGN_MESSAGE_BYTES,
+    MAX_SIGNER_HELPER_SAVE_IMAGE_BYTES, MAX_SIGNER_HELPER_TRANSACTION_DATA_BYTES,
+    MAX_SIGNER_HELPER_TYPED_DATA_BYTES, MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES, SignerBtcPsbt,
 };
+use std::str::FromStr;
 
 pub(crate) fn validate_save_image_size(size: usize) -> Result<()> {
     if !(MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES..=MAX_SIGNER_HELPER_SAVE_IMAGE_BYTES).contains(&size) {
@@ -84,6 +86,25 @@ pub(crate) fn validate_sign_transaction_request(
         max_priority_fee_per_gas: transaction.max_priority_fee_per_gas.clone(),
     })?;
     Ok(())
+}
+
+pub(crate) fn validate_sign_btc_psbt_request(
+    psbt: &SignerBtcPsbt,
+    expected_address: &str,
+) -> Result<BtcNetwork> {
+    if psbt.bytes.is_empty() {
+        return Err(FramkeyError::invalid_data("BTC PSBT cannot be empty").into());
+    }
+    if psbt.bytes.len() > MAX_SIGNER_HELPER_BTC_PSBT_BYTES {
+        return Err(FramkeyError::invalid_data(format!(
+            "BTC PSBT exceeds {} bytes",
+            MAX_SIGNER_HELPER_BTC_PSBT_BYTES
+        ))
+        .into());
+    }
+    let network = BtcNetwork::from_str(&psbt.network)?;
+    validate_p2wpkh_address(expected_address, network)?;
+    Ok(network)
 }
 
 pub(crate) fn parse_expected_address(

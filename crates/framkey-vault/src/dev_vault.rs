@@ -20,7 +20,7 @@ pub fn build_dev_encrypted_save_image(
     label: &str,
     dev_kek: &SecretBytes<32>,
 ) -> Result<DevEncryptedVaultImage> {
-    let wallet_type = WalletType::EvmEoaSecp256k1;
+    let wallet_type = WalletType::Secp256k1SingleKey;
     let wallet_secret = random_wallet_secret(wallet_type)?;
     let dek = SecretBytes::new(random_array::<32>()?);
     let wallet_id = WalletId(random_array::<16>()?);

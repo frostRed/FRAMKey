@@ -68,6 +68,10 @@ pub(crate) fn handle_provider_request(
                 handle_send_transaction_request(state, config, request)
             }
         }
+        "framkey_btcSendTransaction" => Err(anyhow::anyhow!(
+            "unsupported FRAMKey provider method {}; BTC send is trusted UI-only",
+            request.method
+        )),
         method if dangerous_method_kind(method).is_some() => {
             if let Some(response) = signing_permission_error_response(state, request)? {
                 Ok(response)

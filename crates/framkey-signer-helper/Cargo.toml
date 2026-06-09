@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 blake3.workspace = true
+framkey-btc = { path = "../framkey-btc" }
 framkey-core = { path = "../framkey-core" }
 framkey-crypto = { path = "../framkey-crypto" }
 framkey-evm = { path = "../framkey-evm" }

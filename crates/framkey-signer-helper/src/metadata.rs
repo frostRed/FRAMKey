@@ -40,6 +40,7 @@ pub(crate) fn metadata_to_ipc(
 fn wallet_type_name(wallet_type: WalletType) -> &'static str {
     match wallet_type {
         WalletType::EvmEoaSecp256k1 => "evm_eoa_secp256k1",
+        WalletType::Secp256k1SingleKey => "secp256k1_single_key",
         _ => "unknown",
     }
 }

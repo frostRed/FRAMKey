@@ -118,6 +118,17 @@
           </div>
         </section>
 
+        <div class="panel multichain-panel workspace-panel" data-workspace="wallet">
+          <div class="panel-header">
+            <h2>Accounts</h2>
+            <span id="multichain-summary" class="mini-pill" data-tone="idle">Unlock required</span>
+          </div>
+          <div id="multichain-accounts" class="multichain-accounts">
+            <div class="review-empty">Unlock the vault to show chain accounts</div>
+          </div>
+          <div id="btc-strategy" class="btc-strategy"></div>
+        </div>
+
         <div class="panel portfolio-panel workspace-panel" data-workspace="wallet">
           <div class="panel-header">
             <h2>Assets</h2>
@@ -174,6 +185,63 @@
           </form>
           <div id="native-send-detail" class="native-send-detail">
             <span>Approval stays in this trusted window before signing.</span>
+          </div>
+        </div>
+
+        <div class="panel btc-send-panel workspace-panel" data-workspace="wallet">
+          <div class="panel-header">
+            <h2>Send BTC</h2>
+            <span id="btc-send-status" class="mini-pill" data-tone="idle">Idle</span>
+          </div>
+          <form id="btc-send-form" class="native-send-form">
+            <label class="field-label" for="btc-send-network">
+              <span>Network</span>
+              <select id="btc-send-network" class="url-input">
+                <option value="bitcoin-mainnet">Bitcoin</option>
+                <option value="bitcoin-testnet4">Bitcoin Testnet4</option>
+              </select>
+            </label>
+            <label class="field-label" for="btc-send-to">
+              <span>Recipient</span>
+              <input
+                id="btc-send-to"
+                class="url-input"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                inputmode="text"
+                placeholder="bc1q... or tb1q..."
+              />
+            </label>
+            <label class="field-label" for="btc-send-amount-sat">
+              <span>Sats</span>
+              <input
+                id="btc-send-amount-sat"
+                class="small-input native-send-amount"
+                type="text"
+                inputmode="numeric"
+                spellcheck="false"
+                autocomplete="off"
+                placeholder="10000"
+              />
+            </label>
+            <label class="field-label" for="btc-send-fee-rate">
+              <span>sat/vB</span>
+              <input
+                id="btc-send-fee-rate"
+                class="small-input native-send-amount"
+                type="number"
+                inputmode="numeric"
+                min="1"
+                max="1000"
+                step="1"
+                value="2"
+              />
+            </label>
+            <button id="btc-send-submit" type="submit">Review</button>
+          </form>
+          <div id="btc-send-detail" class="native-send-detail">
+            <span>Only trusted UI PSBT sends are enabled. dApps cannot request BTC signing.</span>
           </div>
         </div>
 

@@ -141,6 +141,7 @@ impl ReviewQueue {
                 | "controlled_typed_data_signing"
                 | "controlled_transaction_signing"
                 | "controlled_transaction_high_risk_override"
+                | "controlled_btc_transaction_signing"
         );
 
         Ok(ReviewDecisionOutcome {

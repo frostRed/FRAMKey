@@ -1,3 +1,4 @@
+mod btc;
 mod chains;
 mod commands;
 mod config;
@@ -13,6 +14,7 @@ mod state;
 mod transactions;
 mod wallet;
 
+pub(crate) use btc::*;
 pub(crate) use chains::*;
 pub(crate) use commands::*;
 pub(crate) use config::*;
@@ -58,8 +60,10 @@ fn main() {
             framkey_rpc_health,
             framkey_authorize_keychain_helper,
             framkey_wallet_assets,
+            framkey_btc_balance,
             framkey_send_native_transfer,
             framkey_send_token_transfer,
+            framkey_send_btc_transfer,
             framkey_switch_session_chain,
             framkey_recovery_state,
             framkey_clear_recovery_state,

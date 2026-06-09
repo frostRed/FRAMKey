@@ -9,12 +9,16 @@ use std::{
 use crate::review;
 use crate::*;
 use anyhow::{Context, Result};
+use framkey_btc::{BtcNetwork, p2wpkh_account_from_secret, sign_p2wpkh_psbt};
 use framkey_crypto::{SecretBytes, encode_hex, random_array};
 use framkey_evm::{
     EvmAddress, EvmTransaction, address_from_secret, personal_sign, sign_transaction,
     sign_typed_data_v4,
 };
-use framkey_ipc::{SignerPersonalSignResponse, SignerSignTypedDataResponse, SignerVaultMetadata};
+use framkey_ipc::{
+    SignerPersonalSignResponse, SignerSignBtcPsbtResponse, SignerSignTypedDataResponse,
+    SignerVaultMetadata,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -44,6 +48,7 @@ pub(crate) struct AppState {
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectedAccountSession {
     pub(crate) address: String,
+    pub(crate) accounts: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,20 +60,21 @@ pub(crate) struct PendingNonceReservation {
 }
 
 impl ConnectedAccountSession {
-    pub(crate) fn new(address: String) -> Result<Self> {
+    pub(crate) fn new(address: String, accounts: Value) -> Result<Self> {
         let _address = address
             .parse::<EvmAddress>()
             .map_err(|_| anyhow::anyhow!("connected account address is not a valid EVM address"))?;
-        Ok(Self { address })
+        Ok(Self { address, accounts })
     }
 
     pub(crate) fn from_account(account: &DesktopAccount) -> Result<Self> {
-        Self::new(account.address.clone())
+        Self::new(account.address.clone(), account.accounts.clone())
     }
 
     pub(crate) fn to_minimal_account(&self) -> DesktopAccount {
         DesktopAccount {
             address: self.address.clone(),
+            accounts: self.accounts.clone(),
             wallet: json!({
                 "kind": "connected_session",
                 "scope": "address_only",
@@ -279,7 +285,10 @@ impl AppState {
                 transaction_asset_context,
             )?
         };
-        if review.kind == review::ReviewMethodKind::Transaction {
+        if matches!(
+            review.kind,
+            review::ReviewMethodKind::Transaction | review::ReviewMethodKind::BtcTransaction
+        ) {
             self.record_transaction_review(&review)?;
         }
         Ok(review)
@@ -290,15 +299,22 @@ impl AppState {
             DesktopWalletConfig::KeychainVault => load_keychain_account(config),
             DesktopWalletConfig::MockInMemory => {
                 let wallet = self.mock_wallet()?;
+                let accounts = desktop_accounts_value(
+                    config,
+                    &wallet.address,
+                    Some(&wallet.btc_mainnet_address),
+                    Some(&wallet.btc_testnet4_address),
+                );
                 Ok(DesktopAccount {
                     address: wallet.address,
+                    accounts,
                     wallet: json!({
                         "kind": "mock_in_memory",
                         "mock": true,
                         "lifetime": "process",
                     }),
                     metadata: json!({
-                        "walletType": "evm_eoa_secp256k1",
+                        "walletType": "secp256k1_single_key",
                         "walletSecretHash": wallet.secret_hash,
                     }),
                     keychain: None,
@@ -539,7 +555,7 @@ impl AppState {
                 parity_shards: 0,
                 wallet_id: "mock_in_memory".to_owned(),
                 generation: 0,
-                wallet_type: "evm_eoa_secp256k1".to_owned(),
+                wallet_type: "secp256k1_single_key".to_owned(),
                 payload_hash_valid: true,
                 recovered_shard_count: 0,
                 wallet_secret_hash: Some(wallet.secret_hash),
@@ -580,7 +596,7 @@ impl AppState {
                 parity_shards: 0,
                 wallet_id: "mock_in_memory".to_owned(),
                 generation: 0,
-                wallet_type: "evm_eoa_secp256k1".to_owned(),
+                wallet_type: "secp256k1_single_key".to_owned(),
                 payload_hash_valid: true,
                 recovered_shard_count: 0,
                 wallet_secret_hash: Some(wallet.secret_hash),
@@ -602,6 +618,55 @@ impl AppState {
         Ok(DesktopSignedTransaction::from(signed))
     }
 
+    pub(crate) fn sign_btc_psbt_with_mock_wallet(
+        &self,
+        network: BtcNetwork,
+        psbt_bytes: Vec<u8>,
+        expected_address: String,
+    ) -> Result<SignerSignBtcPsbtResponse> {
+        let wallet = self.mock_wallet()?;
+        let expected = match network {
+            BtcNetwork::Mainnet => &wallet.btc_mainnet_address,
+            BtcNetwork::Testnet4 => &wallet.btc_testnet4_address,
+            BtcNetwork::Signet | BtcNetwork::Regtest => {
+                anyhow::bail!("mock BTC signing supports only mainnet and Testnet4")
+            }
+        };
+        if expected != &expected_address {
+            anyhow::bail!(
+                "BTC signing account mismatch: requested {}, mock wallet {}",
+                expected_address,
+                expected
+            );
+        }
+        let signed = sign_p2wpkh_psbt(&wallet.secret, network, &expected_address, &psbt_bytes)?;
+        Ok(SignerSignBtcPsbtResponse {
+            keychain_service: "mock".to_owned(),
+            keychain_account: "mock_in_memory".to_owned(),
+            keychain_item_id: "mock_in_memory".to_owned(),
+            keychain_access_policy: "mock_in_memory".to_owned(),
+            device_id: "mock".to_owned(),
+            kek_id: "mock".to_owned(),
+            metadata: SignerVaultMetadata {
+                image_size: 0,
+                shard_size: 0,
+                data_shards: 0,
+                parity_shards: 0,
+                wallet_id: "mock_in_memory".to_owned(),
+                generation: 0,
+                wallet_type: "secp256k1_single_key".to_owned(),
+                payload_hash_valid: true,
+                recovered_shard_count: 0,
+                wallet_secret_hash: Some(wallet.secret_hash),
+            },
+            network: signed.network.id().to_owned(),
+            address: signed.address,
+            transaction_id: signed.transaction_id,
+            raw_transaction: signed.raw_transaction,
+            vbytes: signed.vbytes,
+        })
+    }
+
     pub(crate) fn mock_wallet(&self) -> Result<MockWalletSnapshot> {
         let mut guard = self
             .mock_wallet
@@ -613,6 +678,8 @@ impl AppState {
         let wallet = guard.as_ref().expect("mock wallet initialized above");
         Ok(MockWalletSnapshot {
             address: wallet.address.clone(),
+            btc_mainnet_address: wallet.btc_mainnet_address.clone(),
+            btc_testnet4_address: wallet.btc_testnet4_address.clone(),
             secret_hash: wallet.secret_hash.clone(),
             secret: SecretBytes::new(*wallet.secret.expose()),
         })
@@ -913,6 +980,22 @@ impl AppState {
         Ok(request)
     }
 
+    pub(crate) fn mark_review_btc_broadcast(
+        &self,
+        review_id: &str,
+        address: &str,
+        txid: &str,
+    ) -> Result<ReviewRequest> {
+        let mut guard = self
+            .review_queue
+            .lock()
+            .map_err(|_| anyhow::anyhow!("FRAMKey review queue lock poisoned"))?;
+        let request = guard.mark_signed(review_id, address.to_owned(), txid.to_owned())?;
+        self.record_transaction_broadcast(&request, address, txid, txid)?;
+        self.review_condvar.notify_all();
+        Ok(request)
+    }
+
     pub(crate) fn mark_review_sign_failed(
         &self,
         review_id: &str,
@@ -923,7 +1006,10 @@ impl AppState {
             .lock()
             .map_err(|_| anyhow::anyhow!("FRAMKey review queue lock poisoned"))?;
         let request = guard.mark_sign_failed(review_id, error.to_owned())?;
-        if request.kind == review::ReviewMethodKind::Transaction {
+        if matches!(
+            request.kind,
+            review::ReviewMethodKind::Transaction | review::ReviewMethodKind::BtcTransaction
+        ) {
             self.record_transaction_failure(&request, error)?;
         }
         self.review_condvar.notify_all();
@@ -1120,6 +1206,8 @@ impl AppState {
 pub(crate) struct MockWallet {
     pub(crate) secret: SecretBytes<32>,
     pub(crate) address: String,
+    pub(crate) btc_mainnet_address: String,
+    pub(crate) btc_testnet4_address: String,
     pub(crate) secret_hash: String,
 }
 
@@ -1130,10 +1218,19 @@ impl MockWallet {
             let Ok(address) = address_from_secret(&secret) else {
                 continue;
             };
+            let Ok(btc_account) = p2wpkh_account_from_secret(&secret, BtcNetwork::Mainnet) else {
+                continue;
+            };
+            let Ok(btc_testnet_account) = p2wpkh_account_from_secret(&secret, BtcNetwork::Testnet4)
+            else {
+                continue;
+            };
             let secret_hash = encode_hex(blake3::hash(secret.expose()).as_bytes());
             return Ok(Self {
                 secret,
                 address: address.to_string(),
+                btc_mainnet_address: btc_account.address,
+                btc_testnet4_address: btc_testnet_account.address,
                 secret_hash,
             });
         }
@@ -1281,20 +1378,50 @@ impl TransactionActivityLog {
             return;
         }
 
+        let is_btc = request.kind == review::ReviewMethodKind::BtcTransaction;
         let entry = TransactionActivityEntry {
             id: request.id.clone(),
             review_id: request.id.clone(),
             provider_request_id: request.provider_request_id.clone(),
             method: request.method.clone(),
             origin: request.origin.clone(),
-            chain_id: activity_summary_string(&request.summary, "chainId", ""),
-            from: activity_summary_string(&request.summary, "from", ""),
-            to: activity_summary_string(&request.summary, "to", ""),
-            value: activity_summary_string(&request.summary, "value", ""),
-            data_bytes: request.summary.get("dataBytes").and_then(Value::as_u64),
-            call: activity_transaction_call_label(&request.summary),
-            policy_decision: activity_summary_string(&request.summary, "policy", "decision"),
-            simulation_status: activity_summary_string(&request.summary, "simulation", "status"),
+            chain_id: if is_btc {
+                activity_summary_string(&request.summary, "network", "")
+            } else {
+                activity_summary_string(&request.summary, "chainId", "")
+            },
+            from: if is_btc {
+                activity_summary_string(&request.summary, "fromAddress", "")
+            } else {
+                activity_summary_string(&request.summary, "from", "")
+            },
+            to: if is_btc {
+                activity_summary_string(&request.summary, "toAddress", "")
+            } else {
+                activity_summary_string(&request.summary, "to", "")
+            },
+            value: if is_btc {
+                activity_summary_string(&request.summary, "amountSat", "")
+            } else {
+                activity_summary_string(&request.summary, "value", "")
+            },
+            data_bytes: if is_btc {
+                None
+            } else {
+                request.summary.get("dataBytes").and_then(Value::as_u64)
+            },
+            call: if is_btc {
+                Some("btc_p2wpkh_transfer".to_owned())
+            } else {
+                activity_transaction_call_label(&request.summary)
+            },
+            policy_decision: activity_summary_string(&request.summary, "policy", "decision")
+                .or_else(|| activity_summary_string(&request.summary, "decision", "")),
+            simulation_status: if is_btc {
+                activity_summary_string(&request.summary, "simulation", "")
+            } else {
+                activity_summary_string(&request.summary, "simulation", "status")
+            },
             guidance: transaction_activity_guidance(request, status, None),
             status: status.to_owned(),
             address: request
@@ -1340,8 +1467,13 @@ impl TransactionActivityLog {
             item.transaction_hash = Some(tx_hash.to_owned());
             item.local_transaction_hash = Some(local_tx_hash.to_owned());
             item.error = None;
-            item.receipt_status = Some("pending".to_owned());
-            item.guidance = transaction_activity_lifecycle_guidance("broadcast");
+            if request.kind == review::ReviewMethodKind::BtcTransaction {
+                item.receipt_status = None;
+                item.guidance = btc_transaction_activity_lifecycle_guidance("broadcast");
+            } else {
+                item.receipt_status = Some("pending".to_owned());
+                item.guidance = transaction_activity_lifecycle_guidance("broadcast");
+            }
             item.updated_at_unix_ms = now_unix_ms();
         }
     }
@@ -1392,6 +1524,7 @@ impl TransactionActivityLog {
         self.items
             .iter()
             .filter(|item| item.transaction_hash.is_some())
+            .filter(|item| item.method == "eth_sendTransaction")
             .filter(|item| !matches!(item.status.as_str(), "confirmed" | "reverted"))
             .filter_map(|item| item.transaction_hash.clone())
             .take(limit)
@@ -1976,7 +2109,12 @@ pub(crate) fn activity_summary_string(
     } else {
         summary.get(first).and_then(|value| value.get(second))
     }?;
-    value.as_str().map(str::to_owned)
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
 }
 
 pub(crate) fn activity_transaction_call_label(summary: &Value) -> Option<String> {
@@ -2115,6 +2253,26 @@ pub(crate) fn transaction_activity_lifecycle_guidance(
             reason_code: Some("review_expired".to_owned()),
         },
         _ => return None,
+    };
+    Some(guidance)
+}
+
+pub(crate) fn btc_transaction_activity_lifecycle_guidance(
+    status: &str,
+) -> Option<TransactionActivityGuidance> {
+    let guidance = match status {
+        "broadcast" => TransactionActivityGuidance {
+            status: "broadcast".to_owned(),
+            tone: "good".to_owned(),
+            title: "BTC transaction broadcast".to_owned(),
+            message: "The transaction was submitted to the configured BTC backend.".to_owned(),
+            primary_action: "Refresh Balance".to_owned(),
+            next_step:
+                "Refresh the BTC account balance after the transaction appears on the network."
+                    .to_owned(),
+            reason_code: Some("btc_broadcast_submitted".to_owned()),
+        },
+        _ => return transaction_activity_lifecycle_guidance(status),
     };
     Some(guidance)
 }

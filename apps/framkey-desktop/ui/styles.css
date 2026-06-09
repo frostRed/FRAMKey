@@ -1241,7 +1241,110 @@ button:active {
   order: 20;
 }
 
+.multichain-panel {
+  grid-column: 1 / -1;
+  order: 18;
+}
+
+.multichain-accounts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chain-account-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: var(--surface-2);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.chain-account-top,
+.chain-account-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chain-account-title {
+  min-width: 0;
+}
+
+.chain-account-title strong,
+.chain-account-address {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.chain-account-title span,
+.chain-account-detail {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.chain-account-address {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.chain-account-detail {
+  min-height: 2.4em;
+  margin: 0;
+}
+
+.chain-account-actions button {
+  flex: 1 1 140px;
+  white-space: nowrap;
+}
+
+.btc-strategy {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.btc-strategy:empty {
+  display: none;
+}
+
+.btc-strategy-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent-2);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.btc-strategy-item[data-tone="warn"] {
+  border-left-color: #9a6b16;
+}
+
+.btc-strategy-item[data-tone="bad"] {
+  border-left-color: #a33a2a;
+}
+
+.btc-strategy-item span,
+.btc-strategy-item small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.btc-strategy-item strong {
+  overflow-wrap: anywhere;
+}
+
 .native-send-panel,
+.btc-send-panel,
 .token-send-panel {
   grid-column: span 6;
   order: 30;
@@ -2965,6 +3068,7 @@ body[data-pending-review="true"] .review-panel {
   .wallet-home-panel,
   .defi-home-panel,
   .recovery-home-panel,
+  .multichain-panel,
   .vault-account-panel,
   .rpc-health-panel,
   .portfolio-panel,
@@ -2982,6 +3086,14 @@ body[data-pending-review="true"] .review-panel {
   .capabilities-panel,
   .recovery-panel {
     grid-column: 1 / -1;
+  }
+
+  .multichain-accounts {
+    grid-template-columns: 1fr;
+  }
+
+  .btc-strategy {
+    grid-template-columns: 1fr;
   }
 }
 

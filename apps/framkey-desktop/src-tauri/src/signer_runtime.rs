@@ -16,15 +16,16 @@ use framkey_crypto::encode_hex;
 use framkey_device::SaveImage;
 use framkey_evm::EvmTransaction;
 use framkey_ipc::{
-    MAX_SIGNER_HELPER_SAVE_IMAGE_BYTES, MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES,
+    MAX_SIGNER_HELPER_SAVE_IMAGE_BYTES, MIN_SIGNER_HELPER_SAVE_IMAGE_BYTES, SignerBtcPsbt,
     SignerBuildKeychainVaultRequest, SignerBuildKeychainVaultResponse, SignerEvmTransaction,
     SignerHelperRequest, SignerHelperResponse, SignerHelperResult,
     SignerKeychainAccessProbeRequest, SignerKeychainAccessProbeResponse,
     SignerOpenKeychainVaultRequest, SignerOpenKeychainVaultResponse, SignerPersonalSignRequest,
     SignerPersonalSignResponse, SignerRecoverKeychainVaultRequest,
-    SignerRecoverKeychainVaultResponse, SignerSignTransactionRequest,
-    SignerSignTransactionResponse, SignerSignTypedDataRequest, SignerSignTypedDataResponse,
-    SignerValidateRecoveryFilesRequest, SignerValidateRecoveryFilesResponse,
+    SignerRecoverKeychainVaultResponse, SignerSignBtcPsbtRequest, SignerSignBtcPsbtResponse,
+    SignerSignTransactionRequest, SignerSignTransactionResponse, SignerSignTypedDataRequest,
+    SignerSignTypedDataResponse, SignerValidateRecoveryFilesRequest,
+    SignerValidateRecoveryFilesResponse,
 };
 use framkey_recovery::{
     RecoveryBackupBundle, RecoveryBackupFile, RecoveryBackupPack, parse_recovery_backup_bundle,
@@ -53,6 +54,7 @@ pub(crate) fn load_keychain_account(config: &DesktopConfig) -> Result<DesktopAcc
         .address
         .clone()
         .ok_or_else(|| anyhow::anyhow!("Keychain vault did not expose an EVM address"))?;
+    let accounts = desktop_accounts_from_signer(config, &address, &opened.accounts);
     let helper_report = helper_report(&config.helper)?;
     eprintln!(
         "framkey_account_connect stage=complete duration_ms={}",
@@ -61,6 +63,7 @@ pub(crate) fn load_keychain_account(config: &DesktopConfig) -> Result<DesktopAcc
 
     Ok(DesktopAccount {
         address,
+        accounts,
         wallet: json!({
             "kind": "keychain_vault",
             "mock": false,
@@ -322,6 +325,38 @@ pub(crate) fn sign_transaction_with_helper(
 
     match response.into_result() {
         Ok(SignerHelperResult::SignTransaction(result)) => Ok(result),
+        Ok(result) => {
+            anyhow::bail!("unexpected signer helper result: {result:?}")
+        }
+        Err(error) => {
+            anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
+        }
+    }
+}
+
+pub(crate) fn sign_btc_psbt_with_helper(
+    config: &DesktopConfig,
+    save_image: Vec<u8>,
+    network: &str,
+    psbt_bytes: Vec<u8>,
+    expected_address: String,
+) -> Result<SignerSignBtcPsbtResponse> {
+    let response = run_signer_helper(
+        &config.helper,
+        &SignerHelperRequest::SignBtcPsbt(SignerSignBtcPsbtRequest {
+            save_image,
+            keychain_service: config.keychain_service.clone(),
+            keychain_account: config.keychain_account.clone(),
+            psbt: SignerBtcPsbt {
+                network: network.to_owned(),
+                bytes: psbt_bytes,
+            },
+            expected_address,
+        }),
+    )?;
+
+    match response.into_result() {
+        Ok(SignerHelperResult::SignBtcPsbt(result)) => Ok(result),
         Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }

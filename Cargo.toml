@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "apps/framkey-desktop/src-tauri",
+    "crates/framkey-btc",
     "crates/framkey-cli",
     "crates/framkey-core",
     "crates/framkey-crypto",
@@ -29,6 +30,7 @@ unsafe_code = "forbid"
 [workspace.dependencies]
 anyhow = "1"
 blake3 = "1"
+bitcoin = "0.32"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 getrandom = "0.3"

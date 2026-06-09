@@ -189,6 +189,12 @@
           "markdownDescription": "Enables the framkey_authorize_keychain_helper command without any pre-configured scope."
         },
         {
+          "description": "Enables the framkey_btc_balance command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-framkey-btc-balance",
+          "markdownDescription": "Enables the framkey_btc_balance command without any pre-configured scope."
+        },
+        {
           "description": "Enables the framkey_clear_provider_events command without any pre-configured scope.",
           "type": "string",
           "const": "allow-framkey-clear-provider-events",
@@ -321,6 +327,12 @@
           "markdownDescription": "Enables the framkey_run_dapp_compatibility_check command without any pre-configured scope."
         },
         {
+          "description": "Enables the framkey_send_btc_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-framkey-send-btc-transfer",
+          "markdownDescription": "Enables the framkey_send_btc_transfer command without any pre-configured scope."
+        },
+        {
           "description": "Enables the framkey_send_native_transfer command without any pre-configured scope.",
           "type": "string",
           "const": "allow-framkey-send-native-transfer",
@@ -385,6 +397,12 @@
           "type": "string",
           "const": "deny-framkey-authorize-keychain-helper",
           "markdownDescription": "Denies the framkey_authorize_keychain_helper command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the framkey_btc_balance command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-framkey-btc-balance",
+          "markdownDescription": "Denies the framkey_btc_balance command without any pre-configured scope."
         },
         {
           "description": "Denies the framkey_clear_provider_events command without any pre-configured scope.",
@@ -517,6 +535,12 @@
           "type": "string",
           "const": "deny-framkey-run-dapp-compatibility-check",
           "markdownDescription": "Denies the framkey_run_dapp_compatibility_check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the framkey_send_btc_transfer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-framkey-send-btc-transfer",
+          "markdownDescription": "Denies the framkey_send_btc_transfer command without any pre-configured scope."
         },
         {
           "description": "Denies the framkey_send_native_transfer command without any pre-configured scope.",

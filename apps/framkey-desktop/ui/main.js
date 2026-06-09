@@ -13,6 +13,9 @@ const walletHomeAccount = document.querySelector("#wallet-home-account");
 const walletHomeRpc = document.querySelector("#wallet-home-rpc");
 const walletHomeAssets = document.querySelector("#wallet-home-assets");
 const walletHomeSecurity = document.querySelector("#wallet-home-security");
+const multichainSummary = document.querySelector("#multichain-summary");
+const multichainAccounts = document.querySelector("#multichain-accounts");
+const btcStrategy = document.querySelector("#btc-strategy");
 const walletMode = document.querySelector("#wallet-mode");
 const rpcStatus = document.querySelector("#rpc-status");
 const rpcHealthSummary = document.querySelector("#rpc-health-summary");
@@ -38,6 +41,14 @@ const nativeSendAmount = document.querySelector("#native-send-amount");
 const nativeSendSubmitButton = document.querySelector("#native-send-submit");
 const nativeSendStatus = document.querySelector("#native-send-status");
 const nativeSendDetail = document.querySelector("#native-send-detail");
+const btcSendForm = document.querySelector("#btc-send-form");
+const btcSendNetwork = document.querySelector("#btc-send-network");
+const btcSendTo = document.querySelector("#btc-send-to");
+const btcSendAmountSat = document.querySelector("#btc-send-amount-sat");
+const btcSendFeeRate = document.querySelector("#btc-send-fee-rate");
+const btcSendSubmitButton = document.querySelector("#btc-send-submit");
+const btcSendStatus = document.querySelector("#btc-send-status");
+const btcSendDetail = document.querySelector("#btc-send-detail");
 const tokenSendForm = document.querySelector("#token-send-form");
 const tokenSendTo = document.querySelector("#token-send-to");
 const tokenSendAmount = document.querySelector("#token-send-amount");
@@ -156,6 +167,7 @@ let latestStatus = null;
 let latestAccount = null;
 let latestRpcHealth = null;
 let latestPortfolio = null;
+let latestBtcBalances = new Map();
 let selectedTokenForSend = null;
 let latestConnectedOrigins = [];
 let latestProviderEvents = [];
@@ -446,8 +458,9 @@ function renderWalletProductOverview() {
     : connectionError
       ? walletConnectionErrorText(connectionError)
     : address
-      ? shortAddress(address)
+      ? accountAddressSummary(latestAccount, address)
       : "Unlock the vault to load the account";
+  walletHomeAddress.title = address ? accountAddressTitle(latestAccount, address) : "";
   walletHomeNetwork.textContent = walletHomeNetworkLabel();
   walletHomeAccount.textContent = address ? "Connected" : connectionError ? "Connection failed" : "Disconnected";
   walletHomeRpc.textContent = latestRpcHealth
@@ -459,8 +472,12 @@ function renderWalletProductOverview() {
     address == null
       ? "Disconnected"
       : latestPortfolio == null
-        ? "No snapshot"
-        : `${tokens.length} token${tokens.length === 1 ? "" : "s"}`;
+        ? btcAccounts(latestAccount).length > 0
+          ? btcReceiveReadyLabel(latestAccount)
+          : "No snapshot"
+        : btcAccounts(latestAccount).length > 0
+          ? `${btcReceiveReadyLabel(latestAccount)} · ${tokens.length} token${tokens.length === 1 ? "" : "s"}`
+          : `${tokens.length} token${tokens.length === 1 ? "" : "s"}`;
   walletHomeSecurity.textContent = latestStatus?.wallet?.mock
     ? "Test mode"
     : helperReady
@@ -525,11 +542,14 @@ function renderWalletProductOverview() {
   authorizeKeychainHelperButton.disabled =
     authorizingKeychain || connectionPending || Boolean(latestStatus?.wallet?.mock) || !helperReady;
   walletActionSendButton.disabled = !address || connectionPending;
+  renderMultichainAccounts();
 }
 
 function walletHomeNetworkLabel() {
   const label = latestStatus?.network?.name ?? networkName.textContent;
-  return label && label !== "-" ? label : "Ethereum";
+  const evmLabel = label && label !== "-" ? label : "Ethereum";
+  const btcCount = btcAccounts(latestAccount).length;
+  return btcCount > 0 ? `${evmLabel} + BTC ${btcCount}` : evmLabel;
 }
 
 function walletHomeGuidanceText({
@@ -749,6 +769,9 @@ function renderDefiPrimaryApproval(pending) {
 }
 
 function primaryApprovalTone(request) {
+  if (request.kind === "btc_transaction") {
+    return request.summary?.policy?.canSign ? "warn" : "bad";
+  }
   if (request.kind === "transaction") {
     return transactionRiskTone(request.summary?.risk, request.summary?.policy);
   }
@@ -800,6 +823,11 @@ function primaryApprovalDetail(request) {
     const risk = summary.risk?.title;
     return [risk, impact].filter(Boolean).join(". ") || `${origin} wants to submit a transaction.`;
   }
+  if (request.kind === "btc_transaction") {
+    return `Send ${formatBtcSats(summary.amountSat)} on ${btcNetworkLabel(
+      summary.network,
+    )} to ${shortAddress(summary.toAddress)} with ${valueOrDash(summary.feeSat)} sat fee.`;
+  }
   return `${origin} is requesting a wallet action.`;
 }
 
@@ -829,6 +857,18 @@ function primaryApprovalBadges(request) {
       badges.push({ label: summary.trust.title, tone: transactionTrustTone(summary.trust) });
     }
     return badges.slice(0, 5);
+  }
+  if (request.kind === "btc_transaction") {
+    badges.push({
+      label: btcNetworkLabel(summary.network),
+      tone: summary.network === "bitcoin-mainnet" ? "warn" : "idle",
+    });
+    badges.push({ label: formatBtcSats(summary.amountSat), tone: "warn" });
+    badges.push({
+      label: summary.policy?.canSign ? "PSBT checked" : "Blocked",
+      tone: summary.policy?.canSign ? "good" : "bad",
+    });
+    return badges;
   }
   if (request.kind === "typed_data") {
     const typedData = summary.typedData ?? {};
@@ -1318,6 +1358,7 @@ async function disconnectWallet() {
       await invokeQuiet("framkey_clear_review_queue").catch(() => {});
     }
     latestAccount = null;
+    latestBtcBalances = new Map();
     walletConnectionError = null;
     renderPortfolioBaseline();
     clearTokenSendSelection();
@@ -1418,6 +1459,82 @@ async function refreshPortfolio(showOutput = true) {
       renderError(error);
     }
     throw error;
+  }
+}
+
+async function refreshBtcBalance(network = btcSendNetwork?.value ?? "bitcoin-mainnet", showOutput = true, button = null) {
+  if (!latestAccount?.address) {
+    const response = {
+      error: {
+        code: 4100,
+        message: "Connect the vault before refreshing BTC balance",
+      },
+    };
+    if (showOutput) {
+      renderEnvelope(response);
+    }
+    return response;
+  }
+  const original = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Loading";
+  }
+  setBtcSendState("Balance", "busy", "Reading BTC UTXOs");
+  try {
+    const response = await invokeCommand("framkey_btc_balance", {
+      request: { network },
+    });
+    if (response?.result) {
+      latestBtcBalances.set(response.result.network, response.result);
+      renderMultichainAccounts();
+      setBtcSendState(
+        "Ready",
+        "good",
+        `${formatBtcSats(response.result.spendableSat)} spendable on ${btcNetworkLabel(response.result.network)}`,
+      );
+    } else if (response?.error) {
+      renderBtcSendError(response.error);
+    }
+    return response;
+  } catch (error) {
+    renderBtcSendError(error);
+    throw error;
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = original;
+    }
+  }
+}
+
+async function sendBtcTransfer(event) {
+  event?.preventDefault();
+  const request = {
+    network: btcSendNetwork.value,
+    toAddress: btcSendTo.value.trim(),
+    amountSat: btcSendAmountSat.value.trim(),
+    feeRateSatVb: Number.parseInt(btcSendFeeRate.value, 10) || 2,
+  };
+  setBtcSendState("Review", "busy", "Waiting for trusted BTC approval");
+  btcSendSubmitButton.disabled = true;
+  try {
+    const response = await invokeCommand("framkey_send_btc_transfer", { request });
+    if (response?.result) {
+      renderBtcSendResult(response.result);
+      await refreshReviewQueue(false);
+      await refreshBtcBalance(request.network, false).catch(() => {});
+      return response;
+    }
+    if (response?.error) {
+      renderBtcSendError(response.error);
+    }
+    return response;
+  } catch (error) {
+    renderBtcSendError(error);
+    throw error;
+  } finally {
+    btcSendSubmitButton.disabled = false;
   }
 }
 
@@ -2760,6 +2877,35 @@ function renderNativeSendError(error) {
   setNativeSendState("Error", "bad", error?.message ?? error?.error?.message ?? String(error));
 }
 
+function setBtcSendState(label, tone, detail) {
+  if (!btcSendStatus || !btcSendDetail) {
+    return;
+  }
+  btcSendStatus.textContent = label;
+  btcSendStatus.dataset.tone = tone;
+  btcSendDetail.dataset.tone = tone;
+  btcSendDetail.replaceChildren();
+  const item = document.createElement("span");
+  item.textContent = detail;
+  btcSendDetail.append(item);
+}
+
+function renderBtcSendResult(result) {
+  if (result.status === "broadcast") {
+    setBtcSendState(
+      "Broadcast",
+      "good",
+      `${btcNetworkLabel(result.network)} · ${shortHash(result.transactionId)} · ${formatBtcSats(result.amountSat)} sent · ${valueOrDash(result.feeSat)} sat fee`,
+    );
+    return;
+  }
+  setBtcSendState("Done", "good", "BTC transfer finished");
+}
+
+function renderBtcSendError(error) {
+  setBtcSendState("Error", "bad", error?.message ?? error?.error?.message ?? String(error));
+}
+
 function canSendPortfolioToken(token) {
   return Boolean(
     token?.contractAddress &&
@@ -3884,6 +4030,11 @@ function reviewOneLine(request) {
       : "";
     return `${status}${policy}${origin}`;
   }
+  if (request.kind === "btc_transaction") {
+    return `${status} · ${btcNetworkLabel(request.summary?.network)} · ${formatBtcSats(
+      request.summary?.amountSat,
+    )}${origin}`;
+  }
   return `${status}${origin}`;
 }
 
@@ -3899,6 +4050,7 @@ function nextSessionAction({
 }) {
   const pendingTransaction =
     pending.find((request) => request.kind === "transaction") ??
+    pending.find((request) => request.kind === "btc_transaction") ??
     (latestTransaction?.status === "pending" ? latestTransaction : null);
   const pendingGuidance = pendingTransaction?.summary?.guidance;
   if (pendingGuidance?.blocked || pendingGuidance?.requiresHighRisk) {
@@ -5767,6 +5919,23 @@ function renderReviewSynopsis(request) {
     return card;
   }
 
+  if (request.kind === "btc_transaction") {
+    const policy = summary.policy ?? {};
+    card.append(
+      summaryGrid([
+        ["Network", btcNetworkLabel(summary.network)],
+        ["From", shortAddress(summary.fromAddress)],
+        ["To", shortAddress(summary.toAddress)],
+        ["Amount", formatBtcSats(summary.amountSat)],
+        ["Fee", `${valueOrDash(summary.feeSat)} sat · ${valueOrDash(summary.feeRateSatVb)} sat/vB`],
+        ["Inputs", valueOrDash(summary.inputCount)],
+        ["Change", formatBtcSats(summary.changeSat ?? 0)],
+        ["Policy", policy.canSign ? "trusted PSBT send" : "blocked"],
+      ]),
+    );
+    return card;
+  }
+
   if (request.kind === "account_connection") {
     card.append(
       summaryGrid([
@@ -5868,6 +6037,9 @@ function reviewIntentTitle(request) {
   if (request.kind === "transaction") {
     return transactionRequestTitle(request.summary);
   }
+  if (request.kind === "btc_transaction") {
+    return "Send Bitcoin";
+  }
   if (request.kind === "personal_sign") {
     return "Sign Message";
   }
@@ -5902,6 +6074,11 @@ function reviewIntentSubtitle(request) {
   if (request.kind === "transaction") {
     const policy = request.summary?.policy?.decision ?? "policy pending";
     return `${origin} · ${String(policy).replaceAll("_", " ")}`;
+  }
+  if (request.kind === "btc_transaction") {
+    return `${origin} · ${btcNetworkLabel(request.summary?.network)} · ${formatBtcSats(
+      request.summary?.amountSat,
+    )}`;
   }
   if (request.kind === "typed_data") {
     const intent = request.summary?.typedData?.intent ?? "blocked before signing";
@@ -6380,6 +6557,17 @@ function approveActionForRequest(request) {
       disabledReason: guidance?.nextStep ?? guidance?.message ?? "Transaction policy blocks signing",
     };
   }
+  if (request.kind === "btc_transaction") {
+    if (request.summary?.policy?.canSign) {
+      return { label: "Approve & Send BTC", decision: "approve", disabled: false };
+    }
+    return {
+      label: "Blocked",
+      decision: "approve",
+      disabled: true,
+      disabledReason: firstPolicyBlockerMessage(request.summary?.policy),
+    };
+  }
   if (request.kind === "typed_data") {
     if (typedDataSigningAllowed(request)) {
       return { label: "Approve Permission", decision: "approve", disabled: false };
@@ -6747,6 +6935,9 @@ function formatReviewReason(request) {
       const highRisk = request.decision?.decision === "approve_with_risk";
       return `${highRisk ? "High-risk transaction approved" : "Transaction approved"}; waiting for signing and broadcast.`;
     }
+    if (request.kind === "btc_transaction") {
+      return "BTC send approved; waiting for PSBT signing and broadcast.";
+    }
     return "Approved locally.";
   }
   if (status === "completed") {
@@ -6769,6 +6960,9 @@ function formatReviewReason(request) {
     const messageHash = request.execution?.messageHash ?? "unknown hash";
     if (request.kind === "transaction") {
       return `Broadcast by ${address}; transaction hash ${messageHash}`;
+    }
+    if (request.kind === "btc_transaction") {
+      return `Broadcast by ${shortAddress(address)}; BTC txid ${shortHash(messageHash)}`;
     }
     return `Signed by ${address}; message hash ${messageHash}`;
   }
@@ -6803,6 +6997,298 @@ function shortAddress(value) {
     return valueOrDash(value);
   }
   return `${value.slice(0, 8)}...${value.slice(-6)}`;
+}
+
+function accountByFamily(account, family, network) {
+  const accounts = Array.isArray(account?.accounts) ? account.accounts : [];
+  return accounts.find((item) => {
+    if (item?.family !== family) {
+      return false;
+    }
+    return network ? item.network === network : true;
+  });
+}
+
+function accountsByFamily(account, family) {
+  const accounts = Array.isArray(account?.accounts) ? account.accounts : [];
+  return accounts.filter((item) => item?.family === family);
+}
+
+function btcAccounts(account) {
+  return accountsByFamily(account, "btc");
+}
+
+function btcReceiveReadyLabel(account) {
+  const count = btcAccounts(account).length;
+  if (count === 0) {
+    return "BTC unavailable";
+  }
+  return count === 1 ? "BTC receive ready" : `BTC receive ready (${count})`;
+}
+
+function accountAddressSummary(account, fallbackAddress) {
+  const evm = accountByFamily(account, "evm");
+  const btc = btcAccounts(account);
+  const evmAddress = evm?.address ?? fallbackAddress;
+  if (btc.length === 1) {
+    return `EVM ${shortAddress(evmAddress)} · BTC ${shortAddress(btc[0].address)}`;
+  }
+  if (btc.length > 1) {
+    return `EVM ${shortAddress(evmAddress)} · BTC ${btc.length} networks`;
+  }
+  return shortAddress(evmAddress);
+}
+
+function accountAddressTitle(account, fallbackAddress) {
+  const evm = accountByFamily(account, "evm");
+  const btc = btcAccounts(account);
+  const evmAddress = evm?.address ?? fallbackAddress;
+  if (btc.length > 0) {
+    const btcLines = btc.map((item) => `${item.name ?? item.network}: ${item.address}`).join("\n");
+    return `EVM: ${evmAddress}\n${btcLines}\nBTC send: trusted UI only`;
+  }
+  return evmAddress ?? "";
+}
+
+function renderMultichainAccounts() {
+  if (!multichainAccounts) {
+    return;
+  }
+
+  const evm = accountByFamily(latestAccount, "evm");
+  const btc = btcAccounts(latestAccount);
+  const evmAddress = evm?.address ?? latestAccount?.address ?? null;
+  const connected = Boolean(evmAddress);
+  const nativeSymbol = nativeSymbolForStatus(latestStatus);
+  const cards = [
+    {
+      family: "evm",
+      title: "EVM",
+      network: latestStatus?.network?.name ?? "Ethereum",
+      address: evmAddress,
+      status: connected ? `${nativeSymbol} sends enabled` : "Unlock required",
+      statusTone: connected ? "good" : "idle",
+      detail: "dApps, SIWE, Permit, token transfers, and trusted EVM sends use this account.",
+      primaryLabel: `Send ${nativeSymbol}`,
+      primaryDisabled: !connected,
+      primaryAction: () => {
+        setActiveWorkspace("wallet");
+        nativeSendTo?.focus();
+        nativeSendForm?.scrollIntoView({ behavior: "smooth", block: "center" });
+      },
+      secondaryLabel: "Open Apps",
+      secondaryDisabled: !connected,
+      secondaryAction: () => setActiveWorkspace("defi"),
+    },
+  ];
+  const btcCards =
+    btc.length > 0
+      ? btc.map((account) => btcAccountCard(account))
+      : [btcAccountCard(null)];
+  cards.push(...btcCards);
+
+  if (multichainSummary) {
+    multichainSummary.textContent = connected
+      ? `${1 + btc.length} account${btc.length > 0 ? "s" : ""}`
+      : "Unlock required";
+    multichainSummary.dataset.tone = connected ? "good" : "idle";
+  }
+
+  multichainAccounts.replaceChildren();
+  for (const card of cards) {
+    multichainAccounts.append(renderChainAccountCard(card));
+  }
+  renderBtcStrategy();
+}
+
+function btcAccountCard(account) {
+  const network = account?.network ?? "bitcoin-mainnet";
+  const name = account?.name ?? "Bitcoin";
+  const testnet = Boolean(account?.testnet);
+  const capabilities = account?.capabilities ?? {};
+  const balance = latestBtcBalances.get(network);
+  const backendConfigured = capabilities.balance === true || capabilities.send === true;
+  const balanceText = balance
+    ? `${formatBtcSats(balance.spendableSat)} spendable`
+    : backendConfigured
+      ? "Balance ready"
+      : "Backend not configured";
+  const networkLabel =
+    network === "bitcoin-testnet4"
+      ? "Testnet4"
+      : network === "bitcoin-signet"
+        ? "Signet"
+        : testnet
+          ? "Test network"
+          : "Mainnet";
+  return {
+    family: "btc",
+    title: testnet ? "Bitcoin Testnet" : "Bitcoin",
+    network: account ? networkLabel : "Mainnet + Testnet4",
+    address: account?.address ?? null,
+    status: account?.address ? balanceText : "Unlock required",
+    statusTone: account?.address ? (backendConfigured ? "good" : "warn") : "idle",
+    detail: account?.address
+      ? `${name} P2WPKH account. Balance uses configured Esplora; send requires trusted PSBT review.`
+      : "Unlock the vault to derive BTC receive addresses.",
+    primaryLabel: balance ? "Refresh" : "Balance",
+    primaryDisabled: !account?.address,
+    primaryAction: account?.address ? (button) => refreshBtcBalance(network, true, button) : null,
+    secondaryLabel: "Send",
+    secondaryDisabled: !account?.address || !backendConfigured,
+    secondaryAction: account?.address
+      ? () => {
+          setActiveWorkspace("wallet");
+          if (btcSendNetwork) {
+            btcSendNetwork.value = network;
+          }
+          btcSendTo?.focus();
+          btcSendForm?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      : null,
+    tertiaryLabel: "Copy",
+    tertiaryDisabled: !account?.address,
+    tertiaryAction: account?.address ? (button) => copyAddressToClipboard(account.address, button) : null,
+  };
+}
+
+function renderBtcStrategy() {
+  if (!btcStrategy) {
+    return;
+  }
+  const btc = latestStatus?.btc;
+  if (!btc) {
+    btcStrategy.replaceChildren();
+    return;
+  }
+
+  const items = [
+    {
+      label: "BTC testnet",
+      value: btc.testNetwork?.selectedName ?? "Bitcoin Testnet4",
+      detail: "Signet reserved",
+      tone: "good",
+    },
+    {
+      label: "Balance/RPC",
+      value: strategyStatusLabel(btc.balanceRpc?.status),
+      detail: btc.balanceRpc?.privacy ?? "Configured indexer",
+      tone: btc.balanceRpc?.status === "enabled" ? "good" : "warn",
+    },
+    {
+      label: "PSBT/UTXO",
+      value: strategyStatusLabel(btc.psbtUtxo?.status),
+      detail: btc.psbtUtxo?.signerAccess ? "Trusted send enabled" : "Signer locked",
+      tone: btc.psbtUtxo?.signerAccess ? "good" : "bad",
+    },
+  ];
+
+  btcStrategy.replaceChildren();
+  for (const item of items) {
+    const node = document.createElement("article");
+    node.className = "btc-strategy-item";
+    node.dataset.tone = item.tone;
+    const label = document.createElement("span");
+    label.textContent = item.label;
+    const value = document.createElement("strong");
+    value.textContent = item.value;
+    const detail = document.createElement("small");
+    detail.textContent = item.detail;
+    node.append(label, value, detail);
+    btcStrategy.append(node);
+  }
+}
+
+function strategyStatusLabel(status) {
+  if (status === "strategy_defined_not_enabled") {
+    return "Strategy set";
+  }
+  if (status === "not_enabled") {
+    return "Not enabled";
+  }
+  if (status === "enabled_controlled_trusted_ui") {
+    return "Trusted send";
+  }
+  if (status === "enabled_esplora_utxo_index") {
+    return "Enabled";
+  }
+  return valueOrDash(status);
+}
+
+function renderChainAccountCard(card) {
+  const item = document.createElement("article");
+  item.className = "chain-account-card";
+  item.dataset.family = card.family;
+
+  const top = document.createElement("div");
+  top.className = "chain-account-top";
+  const title = document.createElement("div");
+  title.className = "chain-account-title";
+  const name = document.createElement("strong");
+  name.textContent = card.title;
+  const network = document.createElement("span");
+  network.textContent = card.network;
+  title.append(name, network);
+  const status = document.createElement("span");
+  status.className = "mini-pill";
+  status.dataset.tone = card.statusTone;
+  status.textContent = card.status;
+  top.append(title, status);
+
+  const address = document.createElement("div");
+  address.className = "chain-account-address";
+  address.textContent = card.address ?? "Unlock the vault";
+  address.title = card.address ?? "";
+
+  const detail = document.createElement("p");
+  detail.className = "chain-account-detail";
+  detail.textContent = card.detail;
+
+  const actions = document.createElement("div");
+  actions.className = "chain-account-actions";
+  const primary = document.createElement("button");
+  primary.type = "button";
+  primary.textContent = card.primaryLabel;
+  primary.disabled = Boolean(card.primaryDisabled);
+  if (card.primaryAction) {
+    primary.addEventListener("click", () => card.primaryAction(primary));
+  }
+  const secondary = document.createElement("button");
+  secondary.type = "button";
+  secondary.textContent = card.secondaryLabel;
+  secondary.disabled = Boolean(card.secondaryDisabled);
+  if (card.secondaryAction) {
+    secondary.addEventListener("click", () => card.secondaryAction(secondary));
+  }
+  actions.append(primary, secondary);
+  if (card.tertiaryLabel) {
+    const tertiary = document.createElement("button");
+    tertiary.type = "button";
+    tertiary.textContent = card.tertiaryLabel;
+    tertiary.disabled = Boolean(card.tertiaryDisabled);
+    if (card.tertiaryAction) {
+      tertiary.addEventListener("click", () => card.tertiaryAction(tertiary));
+    }
+    actions.append(tertiary);
+  }
+  item.append(top, address, detail, actions);
+  return item;
+}
+
+async function copyAddressToClipboard(address, button) {
+  if (!address) {
+    return;
+  }
+  const original = button.textContent;
+  try {
+    await navigator.clipboard.writeText(address);
+    button.textContent = "Copied";
+  } catch {
+    button.textContent = "Copy Failed";
+  }
+  window.setTimeout(() => {
+    button.textContent = original;
+  }, 1400);
 }
 
 function shortHash(value) {
@@ -6862,6 +7348,31 @@ function formatNativeBalance(hexQuantity, symbol = activeNativeSymbol()) {
   }
 }
 
+function formatBtcSats(value) {
+  try {
+    const sats = BigInt(value);
+    const whole = sats / 100_000_000n;
+    const fraction = sats % 100_000_000n;
+    if (fraction === 0n) {
+      return `${whole.toString()} BTC`;
+    }
+    const fractionText = fraction.toString().padStart(8, "0").replace(/0+$/, "");
+    return `${whole.toString()}.${fractionText} BTC`;
+  } catch {
+    return `${valueOrDash(value)} sat`;
+  }
+}
+
+function btcNetworkLabel(network) {
+  if (network === "bitcoin-testnet4" || network === "testnet4") {
+    return "Bitcoin Testnet4";
+  }
+  if (network === "bitcoin-signet" || network === "signet") {
+    return "Bitcoin Signet";
+  }
+  return "Bitcoin";
+}
+
 function zeroNativeBalanceText(symbol = activeNativeSymbol()) {
   return `0 ${symbol}`;
 }
@@ -6903,7 +7414,8 @@ function formatTime(unixMs) {
 
 function renderAccount(account) {
   latestAccount = account;
-  accountAddress.textContent = account.address ?? "Unavailable";
+  accountAddress.textContent = accountAddressSummary(account, account.address ?? "Unavailable");
+  accountAddress.title = accountAddressTitle(account, account.address);
   chainId.textContent = account.chainId ?? "-";
   if (latestStatus?.network) {
     networkName.textContent = formatNetwork(latestStatus.network);
@@ -6913,6 +7425,7 @@ function renderAccount(account) {
     output.textContent = JSON.stringify(account, null, 2);
   }
   renderSessionReadiness();
+  renderProductOverview();
 }
 
 function renderCapabilities(value) {
@@ -7250,6 +7763,15 @@ refreshPortfolioButton.addEventListener("click", () => {
 });
 nativeSendForm.addEventListener("submit", (event) => {
   sendNativeTransfer(event).catch(() => {});
+});
+btcSendForm?.addEventListener("submit", (event) => {
+  sendBtcTransfer(event).catch(() => {});
+});
+btcSendNetwork?.addEventListener("change", () => {
+  const balance = latestBtcBalances.get(btcSendNetwork.value);
+  if (balance) {
+    setBtcSendState("Ready", "good", `${formatBtcSats(balance.spendableSat)} spendable`);
+  }
 });
 tokenSendForm.addEventListener("submit", (event) => {
   sendTokenTransfer(event).catch(() => {});

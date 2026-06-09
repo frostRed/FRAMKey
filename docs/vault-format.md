@@ -21,12 +21,14 @@ VaultFile
   generation
   created_at
   updated_at
-  wallet_type = evm_eoa_secp256k1
+  wallet_type = secp256k1_single_key
   public_address
   encrypted_wallet_secret
   dek_wrappers
   recovery_policy
 ```
+
+Existing vaults with `wallet_type = evm_eoa_secp256k1` remain valid historical secp256k1 single-key vaults. New desktop/helper-created vaults use `secp256k1_single_key` so the same encrypted secret can expose separate public EVM and BTC account surfaces. BTC transaction signing support is still a wallet-policy decision, not a blanket vault-format promise: the desktop path only permits controlled single-key P2WPKH PSBT signing after network, address, UTXO, fee, change, and final-transaction validation.
 
 ## Save Image Direction
 

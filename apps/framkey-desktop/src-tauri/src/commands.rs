@@ -206,6 +206,37 @@ pub(crate) async fn framkey_wallet_assets(
 }
 
 #[tauri::command]
+pub(crate) async fn framkey_btc_balance(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    request: BtcBalanceRequest,
+) -> Result<ProviderEnvelope, String> {
+    let config = match ensure_trusted_window(&window).and_then(|()| {
+        let state = app.state::<AppState>();
+        state.config_snapshot()
+    }) {
+        Ok(config) => config,
+        Err(error) => {
+            return Ok(ProviderEnvelope::error(
+                "btc_balance",
+                error_to_provider_error(error),
+            ));
+        }
+    };
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        match btc_balance_snapshot(&state, &config, request) {
+            Ok(result) => ProviderEnvelope::result("btc_balance", result),
+            Err(error) => ProviderEnvelope::error("btc_balance", error_to_provider_error(error)),
+        }
+    })
+    .await
+    .map_err(|error| format!("BTC balance task failed: {error}"))
+}
+
+#[tauri::command]
 pub(crate) async fn framkey_send_native_transfer(
     window: WebviewWindow,
     app: tauri::AppHandle,
@@ -236,6 +267,39 @@ pub(crate) async fn framkey_send_native_transfer(
     })
     .await
     .map_err(|error| format!("send native transfer task failed: {error}"))
+}
+
+#[tauri::command]
+pub(crate) async fn framkey_send_btc_transfer(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    request: BtcTransferRequest,
+) -> Result<ProviderEnvelope, String> {
+    let config = match ensure_trusted_window(&window).and_then(|()| {
+        let state = app.state::<AppState>();
+        state.config_snapshot()
+    }) {
+        Ok(config) => config,
+        Err(error) => {
+            return Ok(ProviderEnvelope::error(
+                "send_btc_transfer",
+                error_to_provider_error(error),
+            ));
+        }
+    };
+
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        match send_btc_transfer_from_trusted_ui(&state, &config, request) {
+            Ok(result) => ProviderEnvelope::result("send_btc_transfer", result),
+            Err(error) => {
+                ProviderEnvelope::error("send_btc_transfer", error_to_provider_error(error))
+            }
+        }
+    })
+    .await
+    .map_err(|error| format!("send BTC transfer task failed: {error}"))
 }
 
 #[tauri::command]

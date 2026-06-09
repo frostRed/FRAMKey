@@ -25,4 +25,19 @@ pub struct UnixTimestamp(pub u64);
 #[non_exhaustive]
 pub enum WalletType {
     EvmEoaSecp256k1,
+    Secp256k1SingleKey,
+}
+
+impl WalletType {
+    pub fn uses_secp256k1_secret(self) -> bool {
+        matches!(self, Self::EvmEoaSecp256k1 | Self::Secp256k1SingleKey)
+    }
+
+    pub fn supports_evm_eoa(self) -> bool {
+        self.uses_secp256k1_secret()
+    }
+
+    pub fn supports_btc_single_key(self) -> bool {
+        self.uses_secp256k1_secret()
+    }
 }

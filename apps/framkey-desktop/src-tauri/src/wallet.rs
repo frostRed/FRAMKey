@@ -4,7 +4,9 @@ use std::{
 };
 
 use anyhow::Result;
+use framkey_btc::{BtcNetwork, DEFAULT_BTC_TEST_NETWORK};
 use framkey_evm::EvmAddress;
+use framkey_ipc::SignerChainAccount;
 use framkey_simulation::TransactionSimulationReport;
 use serde_json::{Value, json};
 
@@ -17,6 +19,8 @@ pub(crate) fn status_result(config: &DesktopConfig) -> Value {
         "chainId": config.chain_id,
         "network": active_chain_value(&config.chain_id),
         "supportedChains": supported_chains_value(),
+        "supportedNetworks": supported_wallet_networks_value(config),
+        "btc": btc_status_value(config),
         "wallet": config.wallet.describe(),
         "device": config.device.describe(),
         "keychain": {
@@ -38,6 +42,10 @@ pub(crate) fn status_result(config: &DesktopConfig) -> Value {
             "sendTransaction": config.wallet.send_transaction_capability(),
             "nativeSend": config.wallet.send_transaction_capability(),
             "tokenSend": config.wallet.send_transaction_capability(),
+            "btcReceive": "native_p2wpkh",
+            "btcBalance": "esplora_utxo_index",
+            "btcSend": config.wallet.send_transaction_capability(),
+            "btcPsbtSign": config.wallet.send_transaction_capability(),
             "signTypedData": "permit_approval_required",
             "networkAdd": "trusted_approval_known_chains",
             "networkSwitch": "trusted_approval_known_chains",
@@ -63,6 +71,8 @@ pub(crate) fn provider_status_result(config: &DesktopConfig) -> Value {
         "chainId": config.chain_id,
         "network": active_chain_value(&config.chain_id),
         "supportedChains": supported_chains_value(),
+        "supportedNetworks": supported_wallet_networks_value(config),
+        "btc": btc_status_value(config),
         "wallet": config.wallet.describe(),
         "capabilities": {
             "readOnlyAccounts": true,
@@ -72,6 +82,10 @@ pub(crate) fn provider_status_result(config: &DesktopConfig) -> Value {
             "typedDataApprovalBroker": "controlled_typed_data_signing",
             "personalSign": "siwe_approval_required",
             "sendTransaction": config.wallet.send_transaction_capability(),
+            "btcReceive": "native_p2wpkh",
+            "btcBalance": "trusted_ui_only",
+            "btcSend": "trusted_ui_only",
+            "btcPsbtSign": "trusted_ui_only",
             "signTypedData": "permit_approval_required",
             "networkAdd": "trusted_approval_known_chains",
             "networkSwitch": "trusted_approval_known_chains",
@@ -879,9 +893,220 @@ pub(crate) fn account_result(config: &DesktopConfig, account: DesktopAccount) ->
     json!({
         "address": account.address,
         "chainId": config.chain_id,
+        "accounts": account.accounts,
         "wallet": account.wallet,
         "metadata": account.metadata,
         "keychain": account.keychain,
         "signerHelper": account.helper_report,
+    })
+}
+
+pub(crate) fn desktop_accounts_from_signer(
+    config: &DesktopConfig,
+    evm_address: &str,
+    accounts: &[SignerChainAccount],
+) -> Value {
+    let btc_mainnet_address = signer_btc_address(accounts, BtcNetwork::Mainnet);
+    let btc_testnet4_address = signer_btc_address(accounts, BtcNetwork::Testnet4);
+    desktop_accounts_value(
+        config,
+        evm_address,
+        btc_mainnet_address,
+        btc_testnet4_address,
+    )
+}
+
+pub(crate) fn desktop_accounts_value(
+    config: &DesktopConfig,
+    evm_address: &str,
+    btc_mainnet_address: Option<&str>,
+    btc_testnet4_address: Option<&str>,
+) -> Value {
+    let mut accounts = vec![json!({
+        "family": "evm",
+        "network": "evm-active-chain",
+        "chainId": config.chain_id,
+        "address": evm_address,
+        "addressType": "eoa",
+        "nativeSymbol": native_symbol_for_chain(&config.chain_id),
+        "capabilities": {
+            "receive": true,
+            "readRpc": config.rpc.is_some(),
+            "dappProvider": true,
+            "personalSign": "siwe_approval_required",
+            "typedData": "permit_approval_required",
+            "sendTransaction": config.wallet.send_transaction_capability(),
+        },
+    })];
+
+    if let Some(address) = btc_mainnet_address {
+        accounts.push(btc_account_value(config, BtcNetwork::Mainnet, address));
+    }
+    if let Some(address) = btc_testnet4_address {
+        accounts.push(btc_account_value(config, BtcNetwork::Testnet4, address));
+    }
+
+    Value::Array(accounts)
+}
+
+fn signer_btc_address(accounts: &[SignerChainAccount], network: BtcNetwork) -> Option<&str> {
+    accounts
+        .iter()
+        .find(|account| account.family == "btc" && account.network == network.id())
+        .map(|account| account.address.as_str())
+}
+
+fn btc_account_value(config: &DesktopConfig, network: BtcNetwork, address: &str) -> Value {
+    json!({
+        "family": "btc",
+        "network": network.id(),
+        "name": network.display_name(),
+        "networkRole": network.role(),
+        "testnet": network.is_test_network(),
+        "defaultAccount": network.is_user_visible_default(),
+        "selectedTestNetwork": network == DEFAULT_BTC_TEST_NETWORK,
+        "address": address,
+        "addressType": "p2wpkh",
+        "nativeSymbol": "BTC",
+        "scriptPolicy": "single_key_p2wpkh",
+        "capabilities": btc_account_capabilities_value(config, network),
+    })
+}
+
+fn btc_account_capabilities_value(config: &DesktopConfig, network: BtcNetwork) -> Value {
+    let backend_configured = config.btc.endpoint_for_network(network).is_some();
+    json!({
+        "receive": true,
+        "balance": backend_configured,
+        "balanceStatus": if backend_configured { "enabled_esplora_utxo_index" } else { "not_configured" },
+        "send": backend_configured,
+        "psbtSign": backend_configured,
+        "reason": if backend_configured {
+            "btc_controlled_psbt_send_enabled"
+        } else {
+            "btc_esplora_backend_not_configured"
+        },
+        "backend": config.btc.describe_network(network),
+        "balanceRpc": btc_balance_rpc_strategy_value(config),
+        "psbtUtxo": btc_psbt_utxo_strategy_value(config),
+    })
+}
+
+pub(crate) fn supported_wallet_networks_value(config: &DesktopConfig) -> Value {
+    let mut networks = Vec::new();
+    for chain in SUPPORTED_CHAINS {
+        networks.push(json!({
+            "family": "evm",
+            "chainId": chain.chain_id,
+            "network": chain.rpc_network(),
+            "name": chain.name,
+            "nativeSymbol": chain.native_symbol,
+            "testnet": chain.chain_id == SEPOLIA_CHAIN.chain_id,
+            "capabilities": {
+                "dappProvider": true,
+                "readRpc": true,
+                "sendTransaction": true,
+                "tokenSend": true,
+            },
+        }));
+    }
+    for network in [
+        BtcNetwork::Mainnet,
+        BtcNetwork::Testnet4,
+        BtcNetwork::Signet,
+    ] {
+        networks.push(json!({
+            "family": "btc",
+            "network": network.id(),
+            "name": network.display_name(),
+            "nativeSymbol": "BTC",
+            "networkRole": network.role(),
+            "testnet": network.is_test_network(),
+            "defaultAccount": network.is_user_visible_default(),
+            "selectedTestNetwork": network == DEFAULT_BTC_TEST_NETWORK,
+            "capabilities": if network.is_user_visible_default() {
+                btc_account_capabilities_value(config, network)
+            } else {
+                json!({
+                    "receive": false,
+                    "balance": false,
+                    "send": false,
+                    "psbtSign": false,
+                    "status": "reserved_controlled_integration_testnet",
+                    "reason": "signet_not_default_user_testnet",
+                })
+            },
+        }));
+    }
+    Value::Array(networks)
+}
+
+pub(crate) fn btc_status_value(config: &DesktopConfig) -> Value {
+    json!({
+        "testNetwork": {
+            "selected": DEFAULT_BTC_TEST_NETWORK.id(),
+            "selectedName": DEFAULT_BTC_TEST_NETWORK.display_name(),
+            "selectionReason": "bip94_deployed_bitcoin_core_testnet4_support",
+            "signet": {
+                "network": BtcNetwork::Signet.id(),
+                "name": BtcNetwork::Signet.display_name(),
+                "status": "reserved_controlled_integration_testnet",
+                "reason": "signet_has_controlled_block_production_and_is_not_the_default_user_wallet_testnet",
+            },
+        },
+        "balanceRpc": btc_balance_rpc_strategy_value(config),
+        "psbtUtxo": btc_psbt_utxo_strategy_value(config),
+        "backends": {
+            "bitcoinMainnet": config.btc.describe_network(BtcNetwork::Mainnet),
+            "bitcoinTestnet4": config.btc.describe_network(BtcNetwork::Testnet4),
+            "bitcoinSignet": config.btc.describe_network(BtcNetwork::Signet),
+        },
+    })
+}
+
+fn btc_balance_rpc_strategy_value(config: &DesktopConfig) -> Value {
+    let mainnet = config
+        .btc
+        .endpoint_for_network(BtcNetwork::Mainnet)
+        .is_some();
+    let testnet4 = config
+        .btc
+        .endpoint_for_network(BtcNetwork::Testnet4)
+        .is_some();
+    json!({
+        "status": if mainnet && testnet4 { "enabled" } else { "partially_configured" },
+        "backend": "esplora_http",
+        "mainnetConfigured": mainnet,
+        "testnet4Configured": testnet4,
+        "privacy": "configured_indexer_receives_address_queries",
+        "overrideEnv": [
+            "FRAMKEY_BTC_MAINNET_ESPLORA_URL",
+            "FRAMKEY_BTC_TESTNET4_ESPLORA_URL",
+            "FRAMKEY_BTC_ESPLORA_TIMEOUT_MS",
+        ],
+    })
+}
+
+fn btc_psbt_utxo_strategy_value(config: &DesktopConfig) -> Value {
+    let configured = config
+        .btc
+        .endpoint_for_network(BtcNetwork::Mainnet)
+        .is_some()
+        || config
+            .btc
+            .endpoint_for_network(BtcNetwork::Testnet4)
+            .is_some();
+    json!({
+        "status": if configured { "enabled_controlled_trusted_ui" } else { "backend_not_configured" },
+        "policy": [
+            "confirmed_utxos_only",
+            "single_key_p2wpkh_only",
+            "recipient_and_change_outputs_reviewed",
+            "fee_rate_and_dust_policy_enforced",
+            "rbf_enabled",
+            "sighash_all_only",
+            "helper_revalidates_owned_inputs",
+        ],
+        "signerAccess": configured,
     })
 }

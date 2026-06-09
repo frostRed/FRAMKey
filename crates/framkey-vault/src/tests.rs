@@ -413,7 +413,7 @@ fn keychain_wallet_secret_can_sign_and_recover_personal_message() {
         device_id,
         &kek,
         |metadata, secret| {
-            assert_eq!(metadata.wallet_type, WalletType::EvmEoaSecp256k1);
+            assert_eq!(metadata.wallet_type, WalletType::Secp256k1SingleKey);
             personal_sign(secret, message)
         },
     )

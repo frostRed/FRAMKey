@@ -67,6 +67,7 @@ pub enum SignerHelperRequest {
     PersonalSign(SignerPersonalSignRequest),
     SignTypedData(SignerSignTypedDataRequest),
     SignTransaction(SignerSignTransactionRequest),
+    SignBtcPsbt(SignerSignBtcPsbtRequest),
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +137,22 @@ pub struct SignerSignTransactionRequest {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignerSignBtcPsbtRequest {
+    pub save_image: Vec<u8>,
+    pub keychain_service: String,
+    pub keychain_account: String,
+    pub psbt: SignerBtcPsbt,
+    pub expected_address: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignerBtcPsbt {
+    pub network: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignerEvmTransaction {
     pub chain_id: u64,
@@ -186,6 +203,7 @@ pub enum SignerHelperResult {
     PersonalSign(SignerPersonalSignResponse),
     SignTypedData(SignerSignTypedDataResponse),
     SignTransaction(SignerSignTransactionResponse),
+    SignBtcPsbt(SignerSignBtcPsbtResponse),
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,6 +272,18 @@ pub struct SignerOpenKeychainVaultResponse {
     pub kek_id: String,
     pub metadata: SignerVaultMetadata,
     pub address: Option<String>,
+    #[serde(default)]
+    pub accounts: Vec<SignerChainAccount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignerChainAccount {
+    pub family: String,
+    pub network: String,
+    pub address: String,
+    pub address_type: String,
+    pub key_role: String,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,6 +327,22 @@ pub struct SignerSignTransactionResponse {
     pub transaction_kind: String,
     pub transaction_hash: String,
     pub raw_transaction: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignerSignBtcPsbtResponse {
+    pub keychain_service: String,
+    pub keychain_account: String,
+    pub keychain_item_id: String,
+    pub keychain_access_policy: String,
+    pub device_id: String,
+    pub kek_id: String,
+    pub metadata: SignerVaultMetadata,
+    pub network: String,
+    pub address: String,
+    pub transaction_id: String,
+    pub raw_transaction: String,
+    pub vbytes: usize,
 }
 
 impl fmt::Debug for SignerRecoverKeychainVaultRequest {
@@ -376,6 +422,29 @@ impl fmt::Debug for SignerSignTransactionRequest {
             .field("keychain_account", &self.keychain_account)
             .field("transaction", &self.transaction)
             .field("expected_address", &self.expected_address)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerSignBtcPsbtRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerSignBtcPsbtRequest")
+            .field("save_image_len", &self.save_image.len())
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("psbt", &self.psbt)
+            .field("expected_address", &self.expected_address)
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerBtcPsbt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerBtcPsbt")
+            .field("network", &self.network)
+            .field("bytes_len", &self.bytes.len())
             .finish()
     }
 }
@@ -508,6 +577,26 @@ impl fmt::Debug for SignerSignTransactionResponse {
             .field("transaction_kind", &self.transaction_kind)
             .field("transaction_hash", &self.transaction_hash)
             .field("raw_transaction_len", &self.raw_transaction.len())
+            .finish()
+    }
+}
+
+impl fmt::Debug for SignerSignBtcPsbtResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignerSignBtcPsbtResponse")
+            .field("keychain_service", &self.keychain_service)
+            .field("keychain_account", &self.keychain_account)
+            .field("keychain_item_id", &self.keychain_item_id)
+            .field("keychain_access_policy", &self.keychain_access_policy)
+            .field("device_id", &self.device_id)
+            .field("kek_id", &self.kek_id)
+            .field("metadata", &self.metadata)
+            .field("network", &self.network)
+            .field("address", &self.address)
+            .field("transaction_id", &self.transaction_id)
+            .field("raw_transaction_len", &self.raw_transaction.len())
+            .field("vbytes", &self.vbytes)
             .finish()
     }
 }

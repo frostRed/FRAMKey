@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-btc-balance"
+description = "Enables the framkey_btc_balance command without any pre-configured scope."
+commands.allow = ["framkey_btc_balance"]
+
+[[permission]]
+identifier = "deny-framkey-btc-balance"
+description = "Denies the framkey_btc_balance command without any pre-configured scope."
+commands.deny = ["framkey_btc_balance"]

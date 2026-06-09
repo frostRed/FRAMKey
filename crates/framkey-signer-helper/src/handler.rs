@@ -1,13 +1,15 @@
 use anyhow::Result;
-use framkey_core::{FramkeyError, Generation, WalletType};
+use framkey_btc::{USER_VISIBLE_BTC_NETWORKS, p2wpkh_account_from_secret, sign_p2wpkh_psbt};
+use framkey_core::{FramkeyError, Generation, Result as FramkeyResult, WalletType};
 use framkey_crypto::encode_hex;
 use framkey_evm::{
     EvmTransaction, address_from_secret, personal_sign, sign_transaction, sign_typed_data_v4,
 };
 use framkey_ipc::{
-    SignerBuildKeychainVaultResponse, SignerHelperRequest, SignerHelperResponse,
-    SignerHelperResult, SignerKeychainAccessProbeResponse, SignerOpenKeychainVaultResponse,
-    SignerPersonalSignResponse, SignerRecoverKeychainVaultResponse, SignerSignTransactionResponse,
+    SignerBuildKeychainVaultResponse, SignerChainAccount, SignerHelperRequest,
+    SignerHelperResponse, SignerHelperResult, SignerKeychainAccessProbeResponse,
+    SignerOpenKeychainVaultResponse, SignerPersonalSignResponse,
+    SignerRecoverKeychainVaultResponse, SignerSignBtcPsbtResponse, SignerSignTransactionResponse,
     SignerSignTypedDataResponse,
 };
 use framkey_keychain_macos::{KeychainAccessPolicy, MacKeychainItem, SystemKeychain};
@@ -23,7 +25,8 @@ use crate::{
     validation::{
         parse_expected_address, transaction_kind_name, validate_expected_address,
         validate_personal_sign_message, validate_recovery_files, validate_save_image_size,
-        validate_sign_transaction_request, validate_typed_data_request,
+        validate_sign_btc_psbt_request, validate_sign_transaction_request,
+        validate_typed_data_request,
     },
 };
 
@@ -128,7 +131,7 @@ pub(crate) fn run() -> Result<()> {
             let item = MacKeychainItem::new(request.keychain_service, request.keychain_account);
             let keychain = SystemKeychain;
             let loaded = keychain.load_existing_kek(&item)?;
-            let (metadata, (wallet_secret_hash, address)) = with_keychain_wallet_secret(
+            let (metadata, (wallet_secret_hash, address, accounts)) = with_keychain_wallet_secret(
                 &request.save_image,
                 &loaded.keychain_item_id,
                 loaded.device_id,
@@ -136,11 +139,12 @@ pub(crate) fn run() -> Result<()> {
                 |metadata, wallet_secret| {
                     let wallet_secret_hash =
                         encode_hex(blake3::hash(wallet_secret.expose()).as_bytes());
-                    let address = match metadata.wallet_type {
-                        WalletType::EvmEoaSecp256k1 => Some(address_from_secret(wallet_secret)?),
-                        _ => None,
-                    };
-                    Ok((wallet_secret_hash, address))
+                    let accounts = chain_accounts_from_secret(metadata.wallet_type, wallet_secret)?;
+                    let address = accounts
+                        .iter()
+                        .find(|account| account.family == "evm")
+                        .map(|account| account.address.clone());
+                    Ok((wallet_secret_hash, address, accounts))
                 },
             )?;
             SignerHelperResponse::ok(SignerHelperResult::OpenKeychainVault(
@@ -152,7 +156,8 @@ pub(crate) fn run() -> Result<()> {
                     device_id: encode_hex(&loaded.device_id),
                     kek_id: encode_hex(&loaded.kek_id),
                     metadata: metadata_to_ipc(metadata, Some(wallet_secret_hash)),
-                    address: address.map(|address| address.to_string()),
+                    address,
+                    accounts,
                 },
             ))
         }
@@ -169,9 +174,9 @@ pub(crate) fn run() -> Result<()> {
                 loaded.device_id,
                 &loaded.kek,
                 |metadata, wallet_secret| {
-                    if metadata.wallet_type != WalletType::EvmEoaSecp256k1 {
+                    if !metadata.wallet_type.supports_evm_eoa() {
                         return Err(FramkeyError::unsupported(
-                            "signer helper only supports EVM EOA vaults",
+                            "signer helper only supports EVM-capable secp256k1 vaults",
                         ));
                     }
                     let address = address_from_secret(wallet_secret)?;
@@ -208,9 +213,9 @@ pub(crate) fn run() -> Result<()> {
                 loaded.device_id,
                 &loaded.kek,
                 |metadata, wallet_secret| {
-                    if metadata.wallet_type != WalletType::EvmEoaSecp256k1 {
+                    if !metadata.wallet_type.supports_evm_eoa() {
                         return Err(FramkeyError::unsupported(
-                            "signer helper only supports EVM EOA vaults",
+                            "signer helper only supports EVM-capable secp256k1 vaults",
                         ));
                     }
                     let address = address_from_secret(wallet_secret)?;
@@ -258,9 +263,9 @@ pub(crate) fn run() -> Result<()> {
                 loaded.device_id,
                 &loaded.kek,
                 |metadata, wallet_secret| {
-                    if metadata.wallet_type != WalletType::EvmEoaSecp256k1 {
+                    if !metadata.wallet_type.supports_evm_eoa() {
                         return Err(FramkeyError::unsupported(
-                            "signer helper only supports EVM EOA vaults",
+                            "signer helper only supports EVM-capable secp256k1 vaults",
                         ));
                     }
                     let address = address_from_secret(wallet_secret)?;
@@ -285,8 +290,85 @@ pub(crate) fn run() -> Result<()> {
                 },
             ))
         }
+        SignerHelperRequest::SignBtcPsbt(request) => {
+            validate_save_image_size(request.save_image.len())?;
+            let network = validate_sign_btc_psbt_request(&request.psbt, &request.expected_address)?;
+            let item = MacKeychainItem::new(request.keychain_service, request.keychain_account);
+            let keychain = SystemKeychain;
+            let loaded = keychain.load_existing_kek(&item)?;
+            let (metadata, signed) = with_keychain_wallet_secret(
+                &request.save_image,
+                &loaded.keychain_item_id,
+                loaded.device_id,
+                &loaded.kek,
+                |metadata, wallet_secret| {
+                    if !metadata.wallet_type.supports_btc_single_key() {
+                        return Err(FramkeyError::unsupported(
+                            "signer helper only supports BTC signing for secp256k1 single-key vaults",
+                        ));
+                    }
+                    sign_p2wpkh_psbt(
+                        wallet_secret,
+                        network,
+                        &request.expected_address,
+                        &request.psbt.bytes,
+                    )
+                },
+            )?;
+
+            SignerHelperResponse::ok(SignerHelperResult::SignBtcPsbt(SignerSignBtcPsbtResponse {
+                keychain_service: loaded.item.service,
+                keychain_account: loaded.item.account,
+                keychain_item_id: loaded.keychain_item_id,
+                keychain_access_policy: loaded.access_policy.as_str().to_owned(),
+                device_id: encode_hex(&loaded.device_id),
+                kek_id: encode_hex(&loaded.kek_id),
+                metadata: metadata_to_ipc(metadata, None),
+                network: signed.network.id().to_owned(),
+                address: signed.address,
+                transaction_id: signed.transaction_id,
+                raw_transaction: signed.raw_transaction,
+                vbytes: signed.vbytes,
+            }))
+        }
     };
 
     write_json_response(&response)?;
     Ok(())
+}
+
+pub(crate) fn chain_accounts_from_secret(
+    wallet_type: WalletType,
+    wallet_secret: &framkey_crypto::SecretBytes<32>,
+) -> FramkeyResult<Vec<SignerChainAccount>> {
+    if !wallet_type.uses_secp256k1_secret() {
+        return Ok(Vec::new());
+    }
+
+    let evm_address = address_from_secret(wallet_secret)?;
+    let btc_accounts = if wallet_type.supports_btc_single_key() {
+        USER_VISIBLE_BTC_NETWORKS
+            .iter()
+            .map(|network| p2wpkh_account_from_secret(wallet_secret, *network))
+            .collect::<FramkeyResult<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+    let mut accounts = vec![SignerChainAccount {
+        family: "evm".to_owned(),
+        network: "evm-active-chain".to_owned(),
+        address: evm_address.to_string(),
+        address_type: "eoa".to_owned(),
+        key_role: "secp256k1_signer".to_owned(),
+    }];
+    for account in btc_accounts {
+        accounts.push(SignerChainAccount {
+            family: "btc".to_owned(),
+            network: account.network.id().to_owned(),
+            address: account.address,
+            address_type: account.address_type,
+            key_role: account.script_policy,
+        });
+    }
+    Ok(accounts)
 }
