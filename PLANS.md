@@ -1,112 +1,154 @@
-# GBxCart Save Durability
+# BTC Balance Backend and Controlled PSBT Send
 
 Status: completed
 
 ## Goal
 
-Fix the Connect-time `save image magic mismatch` from first principles by replacing the single-header/two-slot save format with a non-compatible Reed-Solomon-protected save image, and by making GBxCart save writes prove byte-stable persistence across the device boundary.
+Add a real BTC UTXO/balance backend and open a tightly controlled trusted BTC send path that builds, reviews, signs, and broadcasts only single-key native-SegWit P2WPKH transactions.
 
 ## Scope
 
-- Replace the old A/B slot format with one v2 RS shard set; no v1 compatibility.
-- Split the vault payload into data shards, add Reed-Solomon parity shards, store per-shard hashes, and interleave shard bytes across the GBA save image.
-- Treat the GBA save image as invalid before helper/LocalAuthentication if the v2 shard set cannot be reconstructed and verified.
-- Align AGB cleanup behavior with the upstream FlashGBX boundary: do not send the address-pin release command after AGB SRAM/FRAM operations.
-- After GBxCart writes, perform a fresh-session readback verification so write success means more than same-session immediate echo/readback.
-- Keep any repair of the currently corrupted card as an explicit operator action, not an automatic parser fallback.
+- Use Esplora-compatible HTTP as the first BTC balance/backend implementation because it provides address UTXOs, transaction lookup, fee estimates, and raw transaction broadcast through a simple network-bound API.
+- Support BTC mainnet and BTC Testnet4; keep Signet reserved until explicitly configured later.
+- Query BTC balances from configured or default Esplora endpoints and show confirmed, unconfirmed, and spendable UTXO state in trusted UI/status.
+- Add a trusted BTC send form, not a dApp provider API.
+- Build PSBTs from owned P2WPKH UTXOs, with recipient validation, fee/dust/change review, RBF policy, and network binding before approval.
+- Delegate real signing to signer-helper in Keychain mode and mock signing to in-memory mock mode, mirroring the EVM split without sharing EVM transaction code.
+- Broadcast only after trusted approval and successful PSBT/final transaction validation.
 
 ## Invariants
 
-- Do not loosen the core FRAMKey vault payload validation rules.
-- Do not preserve v1 save-image compatibility.
-- Do not treat Reed-Solomon reconstruction alone as authenticity; reconstructed payloads still need hash and VaultFile validation.
-- Do not silently rewrite a configured vault device during Connect/open/sign.
-- Do not print or persist wallet secret, KEK, DEK, recovery root key, recovery shares, or plaintext private key material.
+- Do not expose BTC send through EIP-1193, `eth_sendTransaction`, SIWE, Permit, or ERC-20 paths.
+- Do not let untrusted dApps query BTC balance, UTXOs, PSBTs, raw transactions, or backend URLs.
+- Do not log wallet secret, private keys, raw signed BTC transactions, recovery material, Keychain material, or backend auth tokens.
+- Do not sign PSBT inputs unless every input is an owned P2WPKH UTXO for the selected BTC account/network.
+- Do not broadcast if fee, dust, recipient network, change output, input ownership, or PSBT finalization checks fail.
+- Treat public Esplora endpoints as a privacy trade-off; keep endpoint configuration visible and sanitized.
 
 ## Likely Files
 
-- `crates/framkey-gbxcart/src/transport.rs`
-- `crates/framkey-vault/src/save_image.rs`
-- `crates/framkey-vault/src/constants.rs`
-- `crates/framkey-vault/src/types.rs`
+- `crates/framkey-btc/src/*`
 - `crates/framkey-ipc/src/messages.rs`
-- `crates/framkey-signer-helper/src/metadata.rs`
-- `apps/framkey-desktop/src-tauri/src/signer_runtime.rs`
-- `apps/framkey-desktop/src-tauri/src/tests.rs`
-- `docs/vault-format.md`
-- `Cargo.toml`
-- `PLANS.md`
+- `crates/framkey-signer-helper/src/handler.rs`
+- `apps/framkey-desktop/src-tauri/src/config.rs`
+- `apps/framkey-desktop/src-tauri/src/state.rs`
+- `apps/framkey-desktop/src-tauri/src/wallet.rs`
+- `apps/framkey-desktop/src-tauri/src/commands.rs`
+- `apps/framkey-desktop/ui/index.html`
+- `apps/framkey-desktop/ui/main.js`
+- `apps/framkey-desktop/ui/styles.css`
+- `docs/btc-wallet-strategy.md`
+- `README.md`
 
 ## Verification
 
 - `cargo fmt --all -- --check`
-- `cargo check -p framkey-vault`
-- `cargo check -p framkey-gbxcart`
-- `cargo check -p framkey-desktop`
-- `cargo check -p framkey-signer-helper`
-- `cargo check -p framkey-cli`
-- `cargo nextest run -p framkey-vault`
-- `cargo nextest run -p framkey-ipc -p framkey-signer-helper`
-- `cargo nextest run -p framkey-desktop read_configured_save_image_rejects_invalid_vault_before_helper`
-- `cargo nextest run -p framkey-gbxcart`
+- `cargo check -p framkey-btc`
+- `cargo check -p framkey-ipc -p framkey-signer-helper -p framkey-desktop`
+- `cargo nextest run -p framkey-btc`
+- `cargo nextest run -p framkey-signer-helper derives_public_evm_and_btc_accounts_for_multichain_secret`
+- `cargo nextest run -p framkey-desktop btc_balance_snapshot_reads_esplora_utxos trusted_btc_send_requires_review_signs_and_broadcasts status_reports_btc_testnet4_choice_and_controlled_send_strategy mock_wallet_account_exposes_btc_receive_balance_and_controlled_send`
+- `cargo nextest run -p framkey-desktop btc_balance_snapshot_reads_esplora_utxos btc_balance_requires_connected_account_session trusted_btc_send_requires_review_signs_and_broadcasts trusted_btc_send_requires_connected_account_session provider_rejects_btc_send_method_without_review_capture btc_broadcast_failure_redacts_backend_body status_reports_btc_testnet4_choice_and_controlled_send_strategy mock_wallet_account_exposes_btc_receive_balance_and_controlled_send`
+- `node --check apps/framkey-desktop/ui/main.js`
 - `git diff --check`
-- Manual GBxCart read evidence was captured before any card repair write; no card repair write was performed.
+
+## Completed Outcome
+
+- Added Esplora-compatible BTC balance and UTXO backend configuration for mainnet and Testnet4, with sanitized status and disable/override support.
+- Added trusted UI BTC balance refresh and BTC send commands; no BTC balance, UTXO, PSBT, raw transaction, backend URL, or send API is exposed to dApps.
+- Added P2WPKH-only PSBT construction, owned confirmed UTXO selection, dust/change/fee/RBF policy, review summaries, signer-helper/mock signing, final transaction validation, and broadcast txid matching.
+- Added BTC transaction review authorization so approval is real only when the reviewed PSBT policy reports `canSign=true`.
+- Updated the Wallet UI to show BTC balances and controlled BTC send state alongside EVM actions without routing BTC through EVM send.
+- Added focused BTC core, signer-helper metadata, and desktop backend/review/broadcast tests.
+- Hardened the post-review slice so BTC balance/send require an already connected account session, dApps cannot inject internal BTC reviews, broadcast errors do not include backend response bodies, dust UTXOs do not starve spendable large UTXOs, BTC network JSON uses canonical ids, and BTC broadcasts enter Activity without EVM receipt polling.
 
 ## Main Risks
 
-- Reed-Solomon parity can recover bounded byte/shard corruption but cannot recover a cartridge/game ROM rewriting most of the save area.
-- v1.3 GBxCart cannot automatically power-cycle the cartridge, so fresh-session verification is still weaker than physical unplug/replug or v1.4 power-cycle verification.
-- The current card already has at least a byte-level header corruption; repairing it should require an explicit write after preserving the current readout artifact.
+- A public address-indexing backend can leak wallet address and UTXO state; the UI/status must make endpoint mode explicit and allow self-hosted override.
+- Fee estimation and dust policy errors can burn funds or create non-standard transactions; start with conservative defaults and block ambiguous input.
+- Single-key P2WPKH signing is narrow by design; Taproot, multisig, descriptors, coin control, batching, and hardware-style policies remain future work.
+- UTXO set races can make a reviewed transaction invalid before broadcast; stale UTXO and broadcast-conflict errors must be reported without retrying blindly.
 
-# DeFi and Activity Workspace Productization
+# BTC Mainnet and ETH/BTC Testnet Expansion
 
 Status: completed
 
 ## Goal
 
-Make the DeFi and Activity workspaces feel like a consumer wallet dApp cockpit instead of a diagnostic console, especially after a DeFi app requests connection, signatures, token approvals, transactions, or broadcast/receipt follow-up.
-
-This continuation raises the bar from "clearer console" to a consumer-ready DeFi usage flow: start from wallet readiness, choose an app, connect only when the wallet is actually ready, promote the current approval in plain language, and keep low-level provider/debug surfaces in System.
+Extend FRAMKey from an EVM-focused wallet app into a BTC-aware wallet without weakening the existing EVM signing boundaries, then expose testnet support for both ETH and BTC once the main ETH/BTC account surfaces are coherent.
 
 ## Scope
 
-- Rework the trusted DeFi tab layout around current app, wallet access, next action, pending approval, and latest outcome.
-- Rework the Activity tab around recent outcome, pending receipt state, failed/retry guidance, and transaction history.
-- Add a first-screen DeFi journey surface that tells ordinary users what is ready, what to do next, and what FRAMKey will still protect.
-- Make Home route users toward the next sensible wallet action instead of exposing device/system terminology first.
-- Rewrite primary approval titles, button labels, and badges toward user intent and consequence while preserving access to technical details.
-- Keep app launch, connection management, review queue, and recent transaction status visible in the DeFi flow.
-- Make review cards lead with user intent and consequence, while moving raw method/params detail behind secondary affordances.
-- Keep compatibility checks, provider events, raw command output, and low-level readiness detail in System.
+- Add a BTC domain boundary for secp256k1 public-key to address derivation, network labels, and validation.
+- First slice: make BTC mainnet a first-class trusted wallet account surface from the same vault/mock secret, with a clear receive address and no BTC transaction signing yet.
+- Build the Wallet UI around chain-family cards so EVM and BTC capabilities are visible without mixing their send/signing paths.
+- Keep ETH/EVM dApp support on the existing EIP-1193 and transaction-review path.
+- Treat ETH Sepolia as the current ETH testnet support surface, and add missing UX/status clarity around mainnet/testnet grouping.
+- Choose BTC Testnet4 as the default user-facing BTC test network because BIP94 is deployed and Bitcoin Core supports `-testnet4`; keep Signet as a later controlled integration-test network, not the default wallet testnet account.
+- Add BTC Testnet4 account/status after BTC mainnet account derivation and UI status are verified.
+- Add explicit BTC balance/RPC and PSBT/UTXO strategy status so the app can show what is intentionally unavailable before sends are safe.
+- Stage BTC send/signing later behind a PSBT/UTXO review policy, not by reusing `eth_sendTransaction`.
 
 ## Invariants
 
-- Do not change signing, transaction, Permit, account-grant, network-switch, or watch-asset authorization policy.
-- Do not grant untrusted dApps filesystem, Keychain, GBxCart, signer-helper, recovery, backup, or secret access.
-- Do not log or expose raw params, calldata, signatures, RPC URLs, Alchemy tokens, wallet secret, KEK, DEK, RRK, or recovery shares.
-- Request Review must remain visible across workspaces so pending approvals are not hidden.
+- Do not change vault encryption, Keychain access, recovery, helper authorization, or GBxCart persistence behavior.
+- Do not log or expose wallet secret, KEK, DEK, recovery root key, recovery shares, plaintext private key material, RPC credentials, or signed raw transactions.
+- Do not route BTC through EVM provider, EVM chain id, ERC-20 token, or SIWE/Permit policy code.
+- Do not enable BTC transaction signing until UTXO selection, fee policy, output/change review, and PSBT signing semantics are modeled and tested.
+- Keep dApp-facing EIP-1193 account exposure EVM-only unless a later explicit browser-bridge protocol supports BTC.
 
 ## Likely Files
 
+- `Cargo.toml`
+- `crates/framkey-core/src/identity.rs`
+- `crates/framkey-btc/src/*`
+- `crates/framkey-signer-helper/src/handler.rs`
+- `crates/framkey-signer-helper/Cargo.toml`
+- `apps/framkey-desktop/src-tauri/Cargo.toml`
+- `apps/framkey-desktop/src-tauri/src/config.rs`
+- `apps/framkey-desktop/src-tauri/src/constants.rs`
+- `apps/framkey-desktop/src-tauri/src/state.rs`
+- `apps/framkey-desktop/src-tauri/src/wallet.rs`
 - `apps/framkey-desktop/ui/index.html`
 - `apps/framkey-desktop/ui/main.js`
 - `apps/framkey-desktop/ui/styles.css`
 - `README.md`
 - `docs/tauri-defi-browser.md`
+- `docs/product-roadmap.md`
+- `docs/btc-wallet-strategy.md`
 
 ## Verification
 
-- `node --check apps/framkey-desktop/ui/main.js`
 - `cargo fmt --all -- --check`
+- `cargo check -p framkey-btc`
+- `cargo check -p framkey-signer-helper`
 - `cargo check -p framkey-desktop`
-- Runtime UI smoke in mock/local-simulation mode if the app can be started cleanly.
+- `cargo nextest run -p framkey-btc`
+- Focused signer-helper tests proving BTC address metadata can be derived without new secret exposure.
+- Focused desktop tests proving status/account output shows EVM and BTC capabilities separately.
+- Focused tests proving BTC Testnet4 account/status is present and BTC balance/send/PSBT remain unavailable.
+- UI syntax check proving the multichain account cards render from the same status/account payloads.
+- `node --check apps/framkey-desktop/ui/main.js`
+- `git diff --check`
 
 ## Main Risks
 
-- Over-simplifying approvals could hide critical risk details; the design must surface action, risk, counterparty, and impact before technical details.
-- Sharing transaction outcome information between DeFi and Activity may duplicate content, so DeFi should show the latest actionable outcome while Activity remains the deeper history page.
-- The tabs should improve the DeFi user journey without making System diagnostics harder to reach during development.
-- Visual polish should not turn into a wholesale app rewrite unless a layout issue blocks the consumer flow.
+- A single secp256k1 secret can derive both EVM and BTC addresses, but the vault metadata currently names only `evm_eoa_secp256k1`; product wording must avoid implying a hardened HD wallet model.
+- BTC support needs UTXO/PSBT review semantics before sends are safe; enabling a send button too early would create a misleading wallet surface.
+- BTC testnet choice matters for future infrastructure and faucet compatibility, so testnet enablement should be explicit rather than hidden behind a generic label.
+- Signet and Testnet4 share test-style address encodings, so UI/status must label chain identity clearly and should not show Signet as a default account until there is an explicit environment switch.
+- BTC balance needs an address/UTXO data source; a Bitcoin Core node alone is not enough for arbitrary address watch without import/index strategy, while external APIs introduce privacy and trust trade-offs.
+- BTC signing needs PSBT, UTXO provenance, fee/change/output review, and dust/RBF policy before any transaction can reach signer-helper.
+- Adding another chain family can make UI status noisy; the Wallet UI must separate EVM and BTC cards and make unavailable BTC actions obvious instead of mixing them with EVM DeFi actions.
+
+## Completed Outcome
+
+- BTC Testnet4 is the default user-facing BTC test network.
+- Signet is documented and surfaced as reserved for controlled integration testing, not shown as a default user wallet account.
+- Unlock exposes EVM, BTC mainnet, and BTC Testnet4 account entries for secp256k1 single-key vaults.
+- The Wallet UI renders separate BTC mainnet and Testnet4 receive cards plus BTC strategy status.
+- Status JSON exposes BTC testnet choice, Balance/RPC strategy, and PSBT/UTXO strategy while keeping BTC balance, send, and PSBT signing disabled.
+- `docs/btc-wallet-strategy.md` records the backend and signing gates required before enabling BTC balance or send.
 
 # Keychain Helper Authorization
 
