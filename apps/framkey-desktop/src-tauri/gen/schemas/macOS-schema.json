@@ -249,6 +249,18 @@
           "markdownDescription": "Enables the framkey_navigate_dapp command without any pre-configured scope."
         },
         {
+          "description": "Enables the framkey_pick_physical_backup_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-framkey-pick-physical-backup-file",
+          "markdownDescription": "Enables the framkey_pick_physical_backup_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the framkey_pick_physical_backup_out_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-framkey-pick-physical-backup-out-dir",
+          "markdownDescription": "Enables the framkey_pick_physical_backup_out_dir command without any pre-configured scope."
+        },
+        {
           "description": "Enables the framkey_pick_recovery_files command without any pre-configured scope.",
           "type": "string",
           "const": "allow-framkey-pick-recovery-files",
@@ -283,6 +295,12 @@
           "type": "string",
           "const": "allow-framkey-provider-telemetry",
           "markdownDescription": "Enables the framkey_provider_telemetry command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the framkey_read_ch347_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-framkey-read-ch347-backup",
+          "markdownDescription": "Enables the framkey_read_ch347_backup command without any pre-configured scope."
         },
         {
           "description": "Enables the framkey_recover_keychain_vault command without any pre-configured scope.",
@@ -387,6 +405,12 @@
           "markdownDescription": "Enables the framkey_wallet_assets command without any pre-configured scope."
         },
         {
+          "description": "Enables the framkey_write_ch347_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-framkey-write-ch347-backup",
+          "markdownDescription": "Enables the framkey_write_ch347_backup command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_dapp_webview command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-dapp-webview",
@@ -465,6 +489,18 @@
           "markdownDescription": "Denies the framkey_navigate_dapp command without any pre-configured scope."
         },
         {
+          "description": "Denies the framkey_pick_physical_backup_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-framkey-pick-physical-backup-file",
+          "markdownDescription": "Denies the framkey_pick_physical_backup_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the framkey_pick_physical_backup_out_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-framkey-pick-physical-backup-out-dir",
+          "markdownDescription": "Denies the framkey_pick_physical_backup_out_dir command without any pre-configured scope."
+        },
+        {
           "description": "Denies the framkey_pick_recovery_files command without any pre-configured scope.",
           "type": "string",
           "const": "deny-framkey-pick-recovery-files",
@@ -499,6 +535,12 @@
           "type": "string",
           "const": "deny-framkey-provider-telemetry",
           "markdownDescription": "Denies the framkey_provider_telemetry command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the framkey_read_ch347_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-framkey-read-ch347-backup",
+          "markdownDescription": "Denies the framkey_read_ch347_backup command without any pre-configured scope."
         },
         {
           "description": "Denies the framkey_recover_keychain_vault command without any pre-configured scope.",
@@ -601,6 +643,12 @@
           "type": "string",
           "const": "deny-framkey-wallet-assets",
           "markdownDescription": "Denies the framkey_wallet_assets command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the framkey_write_ch347_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-framkey-write-ch347-backup",
+          "markdownDescription": "Denies the framkey_write_ch347_backup command without any pre-configured scope."
         },
         {
           "description": "Denies the open_dapp_webview command without any pre-configured scope.",

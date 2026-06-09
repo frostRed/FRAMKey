@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use framkey_ch347::Ch347SpiSpeed;
 use framkey_gbxcart::GbaSaveType;
 use framkey_keychain_macos::MacKeychainItem;
 use framkey_vault::DEFAULT_FRAM_SAVE_IMAGE_SIZE;
@@ -243,6 +244,15 @@ pub(crate) struct DeviceTargetArgs {
 
     #[arg(long, value_enum)]
     pub(crate) save_type: Option<GbxCartSaveTypeArg>,
+
+    #[arg(long)]
+    pub(crate) chip: Option<String>,
+
+    #[arg(long, value_enum)]
+    pub(crate) spispeed: Option<Ch347SpiSpeedArg>,
+
+    #[arg(long)]
+    pub(crate) flashrom: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -274,8 +284,36 @@ pub(crate) struct VerifySaveArgs {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum DeviceTargetKind {
+    Ch347,
     File,
     GbxCart,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum Ch347SpiSpeedArg {
+    #[value(name = "60M", alias = "60m")]
+    M60,
+
+    #[value(name = "30M", alias = "30m")]
+    M30,
+
+    #[value(name = "15M", alias = "15m")]
+    M15,
+
+    #[value(name = "7.5M", alias = "7.5m")]
+    M7_5,
+
+    #[value(name = "3.75M", alias = "3.75m")]
+    M3_75,
+
+    #[value(name = "1.875M", alias = "1.875m")]
+    M1_875,
+
+    #[value(name = "937.5K", alias = "937.5k")]
+    K937_5,
+
+    #[value(name = "468.75K", alias = "468.75k")]
+    K468_75,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -316,6 +354,21 @@ impl From<GbxCartSaveTypeArg> for GbaSaveType {
             GbxCartSaveTypeArg::GbaSramFram256k => Self::SramFram256k,
             GbxCartSaveTypeArg::GbaSramFram512Kbit => Self::SramFram512Kbit,
             GbxCartSaveTypeArg::GbaSramFram1Mbit => Self::SramFram1Mbit,
+        }
+    }
+}
+
+impl From<Ch347SpiSpeedArg> for Ch347SpiSpeed {
+    fn from(value: Ch347SpiSpeedArg) -> Self {
+        match value {
+            Ch347SpiSpeedArg::M60 => Self::M60,
+            Ch347SpiSpeedArg::M30 => Self::M30,
+            Ch347SpiSpeedArg::M15 => Self::M15,
+            Ch347SpiSpeedArg::M7_5 => Self::M7_5,
+            Ch347SpiSpeedArg::M3_75 => Self::M3_75,
+            Ch347SpiSpeedArg::M1_875 => Self::M1_875,
+            Ch347SpiSpeedArg::K937_5 => Self::K937_5,
+            Ch347SpiSpeedArg::K468_75 => Self::K468_75,
         }
     }
 }

@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use framkey_btc::{BTC_DEFAULT_FEE_RATE_SAT_VB, BTC_MAX_FEE_RATE_SAT_VB, BtcNetwork};
+use framkey_ch347::Ch347SpiSpeed;
 use framkey_crypto::SecretBytes;
 use framkey_device::{FileImageDevice, VaultDevice};
 use framkey_evm::EvmAddress;
@@ -43,6 +44,7 @@ pub(crate) struct DesktopConfig {
     pub(crate) keychain_service: String,
     pub(crate) keychain_account: String,
     pub(crate) helper: SignerHelperConfig,
+    pub(crate) ch347_helper: Ch347HelperConfig,
     pub(crate) simulation: DesktopSimulationConfig,
     pub(crate) rpc: Option<DesktopRpcConfig>,
     pub(crate) btc: DesktopBtcConfig,
@@ -76,6 +78,10 @@ impl DesktopConfig {
                 path: default_signer_helper_path()?,
                 expected_blake3: None,
                 sandbox: default_helper_sandbox(false)?,
+            },
+            ch347_helper: Ch347HelperConfig {
+                path: default_ch347_helper_path()?,
+                expected_blake3: None,
             },
             simulation: DesktopSimulationConfig::LocalDecoderOnly,
             rpc: None,
@@ -112,6 +118,16 @@ impl DesktopConfig {
             }
             if let Some(allow_unsandboxed) = helper.allow_unsandboxed {
                 self.helper.sandbox = default_helper_sandbox(allow_unsandboxed)?;
+            }
+        }
+        if let Some(helper) = file.ch347_helper {
+            if let Some(path) = helper.path {
+                self.ch347_helper.path = path.canonicalize().with_context(|| {
+                    format!("failed to resolve CH347 helper path {}", path.display())
+                })?;
+            }
+            if let Some(expected) = helper.blake3 {
+                self.ch347_helper.expected_blake3 = Some(normalize_blake3_hex(&expected)?);
             }
         }
         if let Some(simulation) = file.simulation {
@@ -164,6 +180,15 @@ impl DesktopConfig {
         if let Ok(expected) = std::env::var("FRAMKEY_SIGNER_HELPER_BLAKE3") {
             self.helper.expected_blake3 = Some(normalize_blake3_hex(&expected)?);
         }
+        if let Ok(path) = std::env::var("FRAMKEY_CH347_HELPER") {
+            let path = PathBuf::from(path);
+            self.ch347_helper.path = path.canonicalize().with_context(|| {
+                format!("failed to resolve CH347 helper path {}", path.display())
+            })?;
+        }
+        if let Ok(expected) = std::env::var("FRAMKEY_CH347_HELPER_BLAKE3") {
+            self.ch347_helper.expected_blake3 = Some(normalize_blake3_hex(&expected)?);
+        }
         if env_truthy("FRAMKEY_DESKTOP_ALLOW_UNSANDBOXED_HELPER") {
             self.helper.sandbox = default_helper_sandbox(true)?;
         }
@@ -187,6 +212,7 @@ impl DesktopConfig {
         validate_desktop_keychain_name("service", &self.keychain_service)?;
         validate_desktop_keychain_name("account", &self.keychain_account)?;
         validate_desktop_path("signer helper path", &self.helper.path)?;
+        validate_desktop_path("CH347 helper path", &self.ch347_helper.path)?;
         self.simulation.validate()?;
         if let Some(rpc) = &self.rpc {
             rpc.validate()?;
@@ -915,6 +941,12 @@ pub(crate) struct SignerHelperConfig {
     pub(crate) sandbox: SignerHelperSandbox,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct Ch347HelperConfig {
+    pub(crate) path: PathBuf,
+    pub(crate) expected_blake3: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SignerHelperSandbox {
     MacosProcessIdentity,
@@ -958,6 +990,8 @@ pub(crate) struct ConfigFile {
     pub(crate) keychain: Option<ConfigKeychain>,
     #[serde(default)]
     pub(crate) signer_helper: Option<ConfigSignerHelper>,
+    #[serde(default)]
+    pub(crate) ch347_helper: Option<ConfigCh347Helper>,
     #[serde(default)]
     pub(crate) simulation: Option<ConfigSimulation>,
     #[serde(default)]
@@ -1044,6 +1078,14 @@ pub(crate) struct ConfigSignerHelper {
     pub(crate) blake3: Option<String>,
     #[serde(default)]
     pub(crate) allow_unsandboxed: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ConfigCh347Helper {
+    #[serde(default)]
+    pub(crate) path: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) blake3: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1280,6 +1322,148 @@ pub(crate) fn recovery_file_paths(recovery_files: &[String]) -> Result<Vec<PathB
         .iter()
         .map(|path| user_path(path.trim()))
         .collect()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WriteCh347BackupRequest {
+    pub(crate) backup_path: String,
+    #[serde(default)]
+    pub(crate) flashrom_path: Option<String>,
+    #[serde(default)]
+    pub(crate) chip: Option<String>,
+    #[serde(default)]
+    pub(crate) spispeed: Option<String>,
+    #[serde(default)]
+    pub(crate) confirm_write: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReadCh347BackupRequest {
+    pub(crate) output_dir: String,
+    #[serde(default)]
+    pub(crate) flashrom_path: Option<String>,
+    #[serde(default)]
+    pub(crate) chip: Option<String>,
+    #[serde(default)]
+    pub(crate) spispeed: Option<String>,
+}
+
+impl WriteCh347BackupRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_physical_backup_path(&self.backup_path)?;
+        if let Some(path) = &self.flashrom_path
+            && !path.trim().is_empty()
+        {
+            validate_physical_backup_text("flashrom path", path)?;
+        }
+        if let Some(chip) = &self.chip
+            && !chip.trim().is_empty()
+        {
+            validate_physical_backup_text("chip override", chip)?;
+        }
+        self.spi_speed()?;
+        Ok(())
+    }
+
+    pub(crate) fn backup_path(&self) -> Result<PathBuf> {
+        validate_physical_backup_path(&self.backup_path)?;
+        user_path(self.backup_path.trim())
+    }
+
+    pub(crate) fn flashrom_path(&self) -> Result<Option<PathBuf>> {
+        optional_user_path("flashrom path", self.flashrom_path.as_deref())
+    }
+
+    pub(crate) fn chip_name(&self) -> Result<Option<String>> {
+        optional_physical_backup_text("chip override", self.chip.as_deref())
+    }
+
+    pub(crate) fn spi_speed(&self) -> Result<Option<Ch347SpiSpeed>> {
+        parse_ch347_spi_speed(self.spispeed.as_deref())
+    }
+}
+
+impl ReadCh347BackupRequest {
+    pub(crate) fn validate(&self) -> Result<()> {
+        validate_physical_backup_path(&self.output_dir)?;
+        if let Some(path) = &self.flashrom_path
+            && !path.trim().is_empty()
+        {
+            validate_physical_backup_text("flashrom path", path)?;
+        }
+        if let Some(chip) = &self.chip
+            && !chip.trim().is_empty()
+        {
+            validate_physical_backup_text("chip override", chip)?;
+        }
+        self.spi_speed()?;
+        Ok(())
+    }
+
+    pub(crate) fn output_dir(&self) -> Result<PathBuf> {
+        validate_physical_backup_path(&self.output_dir)?;
+        user_path(self.output_dir.trim())
+    }
+
+    pub(crate) fn flashrom_path(&self) -> Result<Option<PathBuf>> {
+        optional_user_path("flashrom path", self.flashrom_path.as_deref())
+    }
+
+    pub(crate) fn chip_name(&self) -> Result<Option<String>> {
+        optional_physical_backup_text("chip override", self.chip.as_deref())
+    }
+
+    pub(crate) fn spi_speed(&self) -> Result<Option<Ch347SpiSpeed>> {
+        parse_ch347_spi_speed(self.spispeed.as_deref())
+    }
+}
+
+pub(crate) fn validate_physical_backup_path(path: &str) -> Result<()> {
+    if path.trim().is_empty() || path.chars().any(char::is_control) {
+        anyhow::bail!("physical backup file path is malformed");
+    }
+    Ok(())
+}
+
+pub(crate) fn optional_user_path(label: &str, value: Option<&str>) -> Result<Option<PathBuf>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    validate_physical_backup_text(label, value)?;
+    user_path(value).map(Some)
+}
+
+pub(crate) fn optional_physical_backup_text(
+    label: &str,
+    value: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    validate_physical_backup_text(label, value)?;
+    Ok(Some(value.to_owned()))
+}
+
+pub(crate) fn validate_physical_backup_text(label: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() || value.chars().any(char::is_control) {
+        anyhow::bail!("physical backup {label} is malformed");
+    }
+    Ok(())
+}
+
+pub(crate) fn parse_ch347_spi_speed(value: Option<&str>) -> Result<Option<Ch347SpiSpeed>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    Ch347SpiSpeed::from_flashrom_value(value)
+        .map(Some)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "CH347 SPI speed must be one of 60M, 30M, 15M, 7.5M, 3.75M, 1.875M, 937.5K, 468.75K"
+            )
+        })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2012,6 +2196,15 @@ pub(crate) fn sanitized_provider_telemetry_detail_value(
 
 pub(crate) fn error_to_provider_error(error: anyhow::Error) -> ProviderError {
     let message = error.to_string();
+    provider_error_from_message(message)
+}
+
+pub(crate) fn error_to_provider_error_with_chain(error: anyhow::Error) -> ProviderError {
+    let message = format_anyhow_error_chain(&error, 2_400);
+    provider_error_from_message(message)
+}
+
+fn provider_error_from_message(message: String) -> ProviderError {
     let code = if message.contains("blocked") || message.contains("unsupported FRAMKey provider") {
         4200
     } else if message.contains("account mismatch") {
@@ -2036,6 +2229,17 @@ pub(crate) fn error_to_provider_error(error: anyhow::Error) -> ProviderError {
         message,
         data: None,
     }
+}
+
+fn format_anyhow_error_chain(error: &anyhow::Error, max_chars: usize) -> String {
+    let mut parts = Vec::new();
+    for cause in error.chain() {
+        let message = cause.to_string();
+        if !parts.iter().any(|part| part == &message) {
+            parts.push(message);
+        }
+    }
+    truncate_for_event(&parts.join("; caused by: "), max_chars)
 }
 
 pub(crate) fn _ipc_error_to_provider_error(error: IpcError) -> ProviderError {

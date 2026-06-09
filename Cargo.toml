@@ -2,6 +2,8 @@
 members = [
     "apps/framkey-desktop/src-tauri",
     "crates/framkey-btc",
+    "crates/framkey-ch347",
+    "crates/framkey-ch347-helper",
     "crates/framkey-cli",
     "crates/framkey-core",
     "crates/framkey-crypto",

@@ -14,6 +14,8 @@ tauri-build.workspace = true
 anyhow.workspace = true
 blake3.workspace = true
 framkey-btc = { path = "../../../crates/framkey-btc" }
+framkey-ch347 = { path = "../../../crates/framkey-ch347" }
+framkey-ch347-helper = { path = "../../../crates/framkey-ch347-helper" }
 framkey-crypto = { path = "../../../crates/framkey-crypto" }
 framkey-device = { path = "../../../crates/framkey-device" }
 framkey-evm = { path = "../../../crates/framkey-evm" }

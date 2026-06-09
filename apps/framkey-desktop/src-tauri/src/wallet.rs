@@ -56,6 +56,7 @@ pub(crate) fn status_result(config: &DesktopConfig) -> Value {
         "simulation": config.simulation.describe(),
         "rpc": config.rpc.as_ref().map(DesktopRpcConfig::describe),
         "signerHelper": signer_helper_status_value(&config.helper),
+        "ch347Helper": ch347_helper_status_value(&config.ch347_helper),
         "trustModel": {
             "trustedWalletUi": true,
             "untrustedDappWebView": true,

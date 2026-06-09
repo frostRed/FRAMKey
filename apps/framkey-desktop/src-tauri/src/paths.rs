@@ -140,7 +140,7 @@ pub(crate) fn default_signer_helper_path() -> Result<PathBuf> {
 }
 
 pub(crate) fn default_signer_helper_path_for_exe(current_exe: &Path) -> Result<PathBuf> {
-    let candidates = signer_helper_path_candidates(current_exe)?;
+    let candidates = helper_path_candidates(current_exe, SIGNER_HELPER_BASENAME)?;
     for candidate in &candidates {
         if candidate.exists() {
             return candidate.canonicalize().with_context(|| {
@@ -154,7 +154,27 @@ pub(crate) fn default_signer_helper_path_for_exe(current_exe: &Path) -> Result<P
         .ok_or_else(|| anyhow::anyhow!("no signer helper path candidates available"))
 }
 
-pub(crate) fn signer_helper_path_candidates(current_exe: &Path) -> Result<Vec<PathBuf>> {
+pub(crate) fn default_ch347_helper_path() -> Result<PathBuf> {
+    let current_exe = std::env::current_exe()?;
+    default_ch347_helper_path_for_exe(&current_exe)
+}
+
+pub(crate) fn default_ch347_helper_path_for_exe(current_exe: &Path) -> Result<PathBuf> {
+    let candidates = helper_path_candidates(current_exe, CH347_HELPER_BASENAME)?;
+    for candidate in &candidates {
+        if candidate.exists() {
+            return candidate.canonicalize().with_context(|| {
+                format!("failed to resolve CH347 helper {}", candidate.display())
+            });
+        }
+    }
+    candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no CH347 helper path candidates available"))
+}
+
+pub(crate) fn helper_path_candidates(current_exe: &Path, basename: &str) -> Result<Vec<PathBuf>> {
     let dir = current_exe
         .parent()
         .ok_or_else(|| anyhow::anyhow!("current executable has no parent directory"))?;
@@ -166,7 +186,7 @@ pub(crate) fn signer_helper_path_candidates(current_exe: &Path) -> Result<Vec<Pa
         roots.push(contents.join("Resources/binaries"));
     }
 
-    let names = signer_helper_file_names();
+    let names = helper_file_names(basename);
     let mut candidates = Vec::new();
     for root in roots {
         for name in &names {
@@ -176,15 +196,22 @@ pub(crate) fn signer_helper_path_candidates(current_exe: &Path) -> Result<Vec<Pa
     Ok(candidates)
 }
 
+#[cfg(test)]
 pub(crate) fn signer_helper_file_names() -> Vec<String> {
-    let plain = format!("{SIGNER_HELPER_BASENAME}{}", std::env::consts::EXE_SUFFIX);
+    helper_file_names(SIGNER_HELPER_BASENAME)
+}
+
+#[cfg(test)]
+pub(crate) fn ch347_helper_file_names() -> Vec<String> {
+    helper_file_names(CH347_HELPER_BASENAME)
+}
+
+pub(crate) fn helper_file_names(basename: &str) -> Vec<String> {
+    let plain = format!("{basename}{}", std::env::consts::EXE_SUFFIX);
     let Some(target) = option_env!("FRAMKEY_BUILD_TARGET") else {
         return vec![plain];
     };
-    let sidecar = format!(
-        "{SIGNER_HELPER_BASENAME}-{target}{}",
-        std::env::consts::EXE_SUFFIX
-    );
+    let sidecar = format!("{basename}-{target}{}", std::env::consts::EXE_SUFFIX);
     if plain == sidecar {
         vec![plain]
     } else {

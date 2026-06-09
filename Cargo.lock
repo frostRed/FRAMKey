@@ -1193,12 +1193,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "framkey-ch347"
+version = "0.1.0"
+dependencies = [
+ "framkey-core",
+ "framkey-device",
+]
+
+[[package]]
+name = "framkey-ch347-helper"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "framkey-ch347",
+ "framkey-core",
+ "framkey-crypto",
+ "framkey-device",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "framkey-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
  "clap",
+ "framkey-ch347",
  "framkey-core",
  "framkey-crypto",
  "framkey-device",
@@ -1239,6 +1262,8 @@ dependencies = [
  "anyhow",
  "blake3",
  "framkey-btc",
+ "framkey-ch347",
+ "framkey-ch347-helper",
  "framkey-crypto",
  "framkey-device",
  "framkey-evm",

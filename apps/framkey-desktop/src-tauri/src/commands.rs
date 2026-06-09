@@ -488,6 +488,111 @@ pub(crate) async fn framkey_pick_vault_backup_file(
 }
 
 #[tauri::command]
+pub(crate) async fn framkey_pick_physical_backup_file(
+    window: WebviewWindow,
+) -> Result<ProviderEnvelope, String> {
+    if let Err(error) = ensure_trusted_window(&window) {
+        return Ok(ProviderEnvelope::error(
+            "pick_physical_backup_file",
+            error_to_provider_error(error),
+        ));
+    }
+
+    tauri::async_runtime::spawn_blocking(|| match pick_physical_backup_file() {
+        Ok(result) => ProviderEnvelope::result("pick_physical_backup_file", result),
+        Err(error) => {
+            ProviderEnvelope::error("pick_physical_backup_file", error_to_provider_error(error))
+        }
+    })
+    .await
+    .map_err(|error| format!("pick physical backup file task failed: {error}"))
+}
+
+#[tauri::command]
+pub(crate) async fn framkey_pick_physical_backup_out_dir(
+    window: WebviewWindow,
+) -> Result<ProviderEnvelope, String> {
+    if let Err(error) = ensure_trusted_window(&window) {
+        return Ok(ProviderEnvelope::error(
+            "pick_physical_backup_out_dir",
+            error_to_provider_error(error),
+        ));
+    }
+
+    tauri::async_runtime::spawn_blocking(|| match pick_physical_backup_out_dir() {
+        Ok(result) => ProviderEnvelope::result("pick_physical_backup_out_dir", result),
+        Err(error) => ProviderEnvelope::error(
+            "pick_physical_backup_out_dir",
+            error_to_provider_error(error),
+        ),
+    })
+    .await
+    .map_err(|error| format!("pick physical backup output directory task failed: {error}"))
+}
+
+#[tauri::command]
+pub(crate) async fn framkey_write_ch347_backup(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    request: WriteCh347BackupRequest,
+) -> Result<ProviderEnvelope, String> {
+    let config = match ensure_trusted_window(&window).and_then(|()| {
+        request.validate()?;
+        let state = app.state::<AppState>();
+        state.config_snapshot()
+    }) {
+        Ok(config) => config,
+        Err(error) => {
+            return Ok(ProviderEnvelope::error(
+                "write_ch347_backup",
+                error_to_provider_error(error),
+            ));
+        }
+    };
+
+    tauri::async_runtime::spawn_blocking(move || match write_ch347_backup(&config, request) {
+        Ok(result) => ProviderEnvelope::result("write_ch347_backup", result),
+        Err(error) => ProviderEnvelope::error(
+            "write_ch347_backup",
+            error_to_provider_error_with_chain(error),
+        ),
+    })
+    .await
+    .map_err(|error| format!("write CH347 backup task failed: {error}"))
+}
+
+#[tauri::command]
+pub(crate) async fn framkey_read_ch347_backup(
+    window: WebviewWindow,
+    app: tauri::AppHandle,
+    request: ReadCh347BackupRequest,
+) -> Result<ProviderEnvelope, String> {
+    let config = match ensure_trusted_window(&window).and_then(|()| {
+        request.validate()?;
+        let state = app.state::<AppState>();
+        state.config_snapshot()
+    }) {
+        Ok(config) => config,
+        Err(error) => {
+            return Ok(ProviderEnvelope::error(
+                "read_ch347_backup",
+                error_to_provider_error(error),
+            ));
+        }
+    };
+
+    tauri::async_runtime::spawn_blocking(move || match read_ch347_backup(&config, request) {
+        Ok(result) => ProviderEnvelope::result("read_ch347_backup", result),
+        Err(error) => ProviderEnvelope::error(
+            "read_ch347_backup",
+            error_to_provider_error_with_chain(error),
+        ),
+    })
+    .await
+    .map_err(|error| format!("read CH347 backup task failed: {error}"))
+}
+
+#[tauri::command]
 pub(crate) async fn framkey_pick_recovery_files(
     window: WebviewWindow,
 ) -> Result<ProviderEnvelope, String> {

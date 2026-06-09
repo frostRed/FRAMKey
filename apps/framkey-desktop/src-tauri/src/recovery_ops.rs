@@ -4,6 +4,8 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use framkey_ch347::Ch347SpiSpeed;
+use framkey_ch347_helper::{Ch347HelperReadResult, Ch347HelperWriteResult};
 use framkey_crypto::random_array;
 use framkey_device::SaveImage;
 use framkey_ipc::{
@@ -153,6 +155,167 @@ pub(crate) fn recover_keychain_vault(
         "plaintextSecretProcess": "not_required_for_rewrap",
         "signerHelper": signer_helper,
     }))
+}
+
+pub(crate) fn write_ch347_backup(
+    config: &DesktopConfig,
+    request: WriteCh347BackupRequest,
+) -> Result<Value> {
+    request.validate()?;
+    if !request.confirm_write {
+        anyhow::bail!("CH347 physical backup write requires explicit confirmation");
+    }
+
+    let backup_path = request
+        .backup_path()?
+        .canonicalize()
+        .with_context(|| format!("failed to resolve backup image {}", request.backup_path))?;
+    let flashrom_path = request
+        .flashrom_path()?
+        .unwrap_or_else(default_ch347_flashrom_path)
+        .canonicalize()
+        .with_context(|| "failed to resolve flashrom path for CH347 helper")?;
+    let chip = request.chip_name()?;
+    let spi_speed = request.spi_speed()?;
+    let bytes = std::fs::read(&backup_path)
+        .with_context(|| format!("failed to read backup image {}", backup_path.display()))?;
+    if bytes.is_empty() {
+        anyhow::bail!("physical backup image is empty");
+    }
+
+    let image = SaveImage::new(bytes);
+    let spi_speed_label = spi_speed.unwrap_or(Ch347SpiSpeed::M15).as_flashrom_value();
+    let request = ch347_helper_request(
+        backup_path.clone(),
+        flashrom_path.clone(),
+        chip,
+        Some(spi_speed_label),
+        image.len(),
+        image.blake3_hash().to_string(),
+    );
+    let report = run_ch347_helper_privileged(&config.ch347_helper, request)
+        .context("CH347 privileged helper write/readback verification failed")?;
+
+    Ok(ch347_helper_report_value(
+        &backup_path,
+        &flashrom_path,
+        report,
+    ))
+}
+
+pub(crate) fn read_ch347_backup(
+    config: &DesktopConfig,
+    request: ReadCh347BackupRequest,
+) -> Result<Value> {
+    request.validate()?;
+
+    let output_dir = request.output_dir()?.canonicalize().with_context(|| {
+        format!(
+            "failed to resolve CH347 read output directory {}",
+            request.output_dir
+        )
+    })?;
+    if !output_dir.is_dir() {
+        anyhow::bail!(
+            "CH347 read output path is not a directory: {}",
+            output_dir.display()
+        );
+    }
+    let flashrom_path = request
+        .flashrom_path()?
+        .unwrap_or_else(default_ch347_flashrom_path)
+        .canonicalize()
+        .with_context(|| "failed to resolve flashrom path for CH347 helper")?;
+    let chip = request.chip_name()?;
+    let spi_speed = request.spi_speed()?;
+    let spi_speed_label = spi_speed.unwrap_or(Ch347SpiSpeed::M15).as_flashrom_value();
+    let request = ch347_helper_read_request(
+        output_dir.clone(),
+        flashrom_path.clone(),
+        chip,
+        Some(spi_speed_label),
+    );
+    let report = run_ch347_read_helper_privileged(&config.ch347_helper, request)
+        .context("CH347 privileged helper read/extract failed")?;
+
+    Ok(ch347_read_helper_report_value(
+        &output_dir,
+        &flashrom_path,
+        report,
+    ))
+}
+
+pub(crate) fn ch347_helper_report_value(
+    backup_path: &Path,
+    flashrom_path: &Path,
+    report: Ch347HelperWriteResult,
+) -> Value {
+    json!({
+        "operation": report.operation,
+        "device": report.device,
+        "backupPath": backup_path.display().to_string(),
+        "flashromPath": flashrom_path.display().to_string(),
+        "chip": report.chip,
+        "chipDetection": report.chip_detection,
+        "spiSpeed": report.spi_speed,
+        "saveSize": report.save_size,
+        "payloadSize": report.payload_size,
+        "romImageSize": report.rom_image_size,
+        "backupBlake3": report.backup_blake3,
+        "readbackBlake3": report.readback_blake3,
+        "payloadBlake3": report.payload_blake3,
+        "readbackPayloadBlake3": report.readback_payload_blake3,
+        "romImageBlake3": report.rom_image_blake3,
+        "readbackRomImageBlake3": report.readback_rom_image_blake3,
+        "storageFormat": report.storage_format,
+        "verified": report.verified,
+        "writeCount": report.write_count,
+        "readbackCount": report.readback_count,
+        "layoutParsed": report.layout_parsed,
+        "backupBytesPrinted": report.backup_bytes_printed,
+        "walletSecretTouched": report.wallet_secret_touched,
+        "recoveryShareBytesPrinted": report.recovery_share_bytes_printed,
+        "helperProcess": report.helper_process,
+        "privileged": report.privileged,
+    })
+}
+
+pub(crate) fn ch347_read_helper_report_value(
+    output_dir: &Path,
+    flashrom_path: &Path,
+    report: Ch347HelperReadResult,
+) -> Value {
+    json!({
+        "operation": report.operation,
+        "device": report.device,
+        "outputDir": output_dir.display().to_string(),
+        "outputPath": report.output_path,
+        "outputKind": report.output_kind,
+        "outputSize": report.output_size,
+        "outputBlake3": report.output_blake3,
+        "flashromPath": flashrom_path.display().to_string(),
+        "chip": report.chip,
+        "chipDetection": report.chip_detection,
+        "spiSpeed": report.spi_speed,
+        "saveSize": report.save_size,
+        "payloadSize": report.payload_size,
+        "romImageSize": report.rom_image_size,
+        "payloadBlake3": report.payload_blake3,
+        "romImageBlake3": report.rom_image_blake3,
+        "storageFormat": report.storage_format,
+        "verified": report.verified,
+        "readCount": report.read_count,
+        "layoutParsed": report.layout_parsed,
+        "backupBytesPrinted": report.backup_bytes_printed,
+        "walletSecretTouched": report.wallet_secret_touched,
+        "recoveryShareBytesPrinted": report.recovery_share_bytes_printed,
+        "helperProcess": report.helper_process,
+        "privileged": report.privileged,
+    })
+}
+
+pub(crate) fn default_ch347_flashrom_path() -> PathBuf {
+    PathBuf::from("/opt/homebrew/sbin/flashrom")
 }
 
 pub(crate) fn validate_recovery_set(
@@ -389,6 +552,40 @@ pub(crate) fn pick_vault_backup_file() -> Result<Value> {
     #[cfg(not(target_os = "macos"))]
     {
         anyhow::bail!("native backup file picker is currently supported on macOS only");
+    }
+}
+
+pub(crate) fn pick_physical_backup_file() -> Result<Value> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = run_macos_osascript(&[
+            "set chosenFile to choose file with prompt \"Select physical backup image\"",
+            "return POSIX path of chosenFile",
+        ])?;
+        recovery_file_picker_result("pick_physical_backup_file", output, false)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        anyhow::bail!("native physical backup file picker is currently supported on macOS only");
+    }
+}
+
+pub(crate) fn pick_physical_backup_out_dir() -> Result<Value> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = run_macos_osascript(&[
+            "set chosenFolder to choose folder with prompt \"Select CH347 ROM backup output directory\"",
+            "return POSIX path of chosenFolder",
+        ])?;
+        recovery_file_picker_result("pick_physical_backup_out_dir", output, false)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        anyhow::bail!(
+            "native physical backup output directory picker is currently supported on macOS only"
+        );
     }
 }
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-framkey-pick-physical-backup-out-dir"
+description = "Enables the framkey_pick_physical_backup_out_dir command without any pre-configured scope."
+commands.allow = ["framkey_pick_physical_backup_out_dir"]
+
+[[permission]]
+identifier = "deny-framkey-pick-physical-backup-out-dir"
+description = "Denies the framkey_pick_physical_backup_out_dir command without any pre-configured scope."
+commands.deny = ["framkey_pick_physical_backup_out_dir"]

@@ -14,6 +14,7 @@ pub(crate) const DEFAULT_BTC_ESPLORA_TIMEOUT_MS: u64 = 10_000;
 pub(crate) const DEFAULT_BTC_MAINNET_ESPLORA_URL: &str = "https://blockstream.info/api";
 pub(crate) const DEFAULT_BTC_TESTNET4_ESPLORA_URL: &str = "https://mempool.space/testnet4/api";
 pub(crate) const SIGNER_HELPER_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) const CH347_HELPER_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const DEFAULT_MOCK_NATIVE_TRANSFER_GAS: &str = "0x5208";
 pub(crate) const DEFAULT_MOCK_CONTRACT_CALL_GAS: &str = "0x7a120";
 pub(crate) const PROVIDER_EVENT_LOG_LIMIT: usize = 200;
@@ -35,6 +36,7 @@ pub(crate) const AAVE_URL: &str = "https://app.aave.com/";
 pub(crate) const MACOS_NO_NETWORK_SANDBOX_PROFILE: &str =
     "(version 1) (allow default) (deny network*)";
 pub(crate) const SIGNER_HELPER_BASENAME: &str = "framkey-signer-helper";
+pub(crate) const CH347_HELPER_BASENAME: &str = "framkey-ch347-helper";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SupportedChainRpc {

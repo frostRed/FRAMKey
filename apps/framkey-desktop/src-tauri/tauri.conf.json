@@ -43,6 +43,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/framkey-signer-helper"]
+    "externalBin": ["binaries/framkey-signer-helper", "binaries/framkey-ch347-helper"]
   }
 }

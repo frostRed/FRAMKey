@@ -1,4 +1,5 @@
 mod btc;
+mod ch347_helper;
 mod chains;
 mod commands;
 mod config;
@@ -15,6 +16,7 @@ mod transactions;
 mod wallet;
 
 pub(crate) use btc::*;
+pub(crate) use ch347_helper::*;
 pub(crate) use chains::*;
 pub(crate) use commands::*;
 pub(crate) use config::*;
@@ -73,6 +75,10 @@ fn main() {
             framkey_validate_recovery_set,
             framkey_recover_keychain_vault,
             framkey_pick_vault_backup_file,
+            framkey_pick_physical_backup_file,
+            framkey_pick_physical_backup_out_dir,
+            framkey_write_ch347_backup,
+            framkey_read_ch347_backup,
             framkey_pick_recovery_files,
             framkey_pick_recovery_out_dir,
             framkey_reveal_path,

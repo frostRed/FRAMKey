@@ -492,6 +492,202 @@ fn recovery_picker_treats_user_cancel_as_non_error() {
 }
 
 #[test]
+fn ch347_backup_write_rejects_without_confirmation_before_file_access() {
+    let request = WriteCh347BackupRequest {
+        backup_path: "/tmp/framkey-missing-physical-backup.bin".to_owned(),
+        flashrom_path: None,
+        chip: None,
+        spispeed: None,
+        confirm_write: false,
+    };
+
+    let error = write_ch347_backup(&fixture_config(), request)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("requires explicit confirmation"));
+}
+
+#[test]
+fn ch347_backup_request_parses_fixed_spi_speed_values() {
+    assert_eq!(
+        parse_ch347_spi_speed(Some("7.5m")).unwrap(),
+        Some(framkey_ch347::Ch347SpiSpeed::M7_5)
+    );
+    assert!(parse_ch347_spi_speed(Some("fast")).is_err());
+}
+
+#[test]
+fn ch347_provider_error_keeps_helper_root_cause() {
+    let error = anyhow::anyhow!("flashrom CH347 write failed with status 1")
+        .context("CH347 helper failed: UNSUPPORTED_METHOD")
+        .context("CH347 privileged helper write/readback verification failed");
+
+    let provider_error = error_to_provider_error_with_chain(error);
+
+    assert!(
+        provider_error
+            .message
+            .contains("CH347 privileged helper write/readback verification failed")
+    );
+    assert!(
+        provider_error
+            .message
+            .contains("CH347 helper failed: UNSUPPORTED_METHOD")
+    );
+    assert!(
+        provider_error
+            .message
+            .contains("flashrom CH347 write failed with status 1")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ch347_backup_write_uses_fake_flashrom_and_returns_verification_metadata() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unique_test_path("ch347-backup-write");
+    fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("fake-flashrom");
+    let state = dir.join("fake-flashrom.state");
+    let backup = dir.join("backup.bin");
+    fs::write(&backup, b"new!").unwrap();
+    fs::write(&state, vec![0xff; 8 * 1024]).unwrap();
+    fs::write(
+        &script,
+        b"#!/bin/sh\nstate=\"$0.state\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-r\" ]; then cp \"$state\" \"$arg\"; exit 0; fi\n  if [ \"$prev\" = \"-w\" ]; then cp \"$arg\" \"$state\"; exit 0; fi\n  prev=\"$arg\"\ndone\necho 'Found Test flash chip \"T25Q64\" (8 kB, SPI) on ch347_spi.'\nexit 0\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script, permissions).unwrap();
+
+    let request = ch347_helper_request(
+        backup.clone(),
+        script.clone(),
+        None,
+        Some("15M"),
+        4,
+        blake3::hash(b"new!").to_hex().to_string(),
+    );
+    let report = run_ch347_helper_with_launcher(
+        &Ch347HelperConfig {
+            path: dir.join("framkey-ch347-helper"),
+            expected_blake3: None,
+        },
+        request,
+        fake_ch347_helper_launcher,
+    )
+    .unwrap();
+    let result = ch347_helper_report_value(&backup, &script, report);
+    let expected_hash = blake3::hash(b"new!").to_hex().to_string();
+
+    assert_eq!(result["operation"], json!("write_ch347_backup"));
+    assert_eq!(result["device"], json!("ch347"));
+    assert_eq!(result["helperProcess"], json!("framkey-ch347-helper"));
+    assert_eq!(result["privileged"], json!(true));
+    assert_eq!(result["chipDetection"], json!("auto"));
+    assert_eq!(result["spiSpeed"], json!("15M"));
+    assert_eq!(result["saveSize"], json!(8 * 1024));
+    assert_eq!(result["payloadSize"], json!(4));
+    assert_eq!(result["romImageSize"], json!(8 * 1024));
+    assert_eq!(result["storageFormat"], json!("framkey_physical_backup_v1"));
+    assert_eq!(result["backupBlake3"], json!(expected_hash));
+    assert_eq!(result["readbackBlake3"], json!(expected_hash));
+    assert_eq!(result["verified"], json!(true));
+    assert_eq!(result["layoutParsed"], json!(false));
+    assert_eq!(result["backupBytesPrinted"], json!(false));
+    let written = fs::read(&state).unwrap();
+    assert_eq!(written.len(), 8 * 1024);
+    assert_eq!(&written[4096..4100], b"new!");
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn ch347_backup_read_uses_fake_flashrom_and_saves_extracted_payload() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = unique_test_path("ch347-backup-read");
+    fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("fake-flashrom");
+    let state = dir.join("fake-flashrom.state");
+    let output_dir = dir.join("out");
+    fs::create_dir_all(&output_dir).unwrap();
+    let payload = b"new!";
+    let payload_hash = blake3::hash(payload);
+    let mut image = vec![0xff; 8 * 1024];
+    image[..16].copy_from_slice(b"FRAMKEYPHYSBK01!");
+    image[16..20].copy_from_slice(&1_u32.to_le_bytes());
+    image[20..28].copy_from_slice(&(payload.len() as u64).to_le_bytes());
+    image[28..60].copy_from_slice(payload_hash.as_bytes());
+    image[60..64].copy_from_slice(&4096_u32.to_le_bytes());
+    image[4096..4100].copy_from_slice(payload);
+    fs::write(&state, &image).unwrap();
+    fs::write(
+        &script,
+        b"#!/bin/sh\nstate=\"$0.state\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-r\" ]; then cp \"$state\" \"$arg\"; exit 0; fi\n  if [ \"$prev\" = \"-w\" ]; then cp \"$arg\" \"$state\"; exit 0; fi\n  prev=\"$arg\"\ndone\necho 'Found Test flash chip \"T25Q64\" (8 kB, SPI) on ch347_spi.'\nexit 0\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&script, permissions).unwrap();
+
+    let request = ch347_helper_read_request(output_dir.clone(), script.clone(), None, Some("15M"));
+    let report = run_ch347_read_helper_with_launcher(
+        &Ch347HelperConfig {
+            path: dir.join("framkey-ch347-helper"),
+            expected_blake3: None,
+        },
+        request,
+        fake_ch347_helper_launcher,
+    )
+    .unwrap();
+    let result = ch347_read_helper_report_value(&output_dir, &script, report);
+    let expected_hash = payload_hash.to_hex().to_string();
+
+    assert_eq!(result["operation"], json!("read_ch347_backup"));
+    assert_eq!(result["device"], json!("ch347"));
+    assert_eq!(result["helperProcess"], json!("framkey-ch347-helper"));
+    assert_eq!(result["privileged"], json!(true));
+    assert_eq!(result["chipDetection"], json!("auto"));
+    assert_eq!(result["spiSpeed"], json!("15M"));
+    assert_eq!(result["saveSize"], json!(8 * 1024));
+    assert_eq!(result["payloadSize"], json!(4));
+    assert_eq!(result["romImageSize"], json!(8 * 1024));
+    assert_eq!(result["outputSize"], json!(4));
+    assert_eq!(result["outputKind"], json!("physical_backup_payload"));
+    assert_eq!(result["storageFormat"], json!("framkey_physical_backup_v1"));
+    assert_eq!(result["outputBlake3"], json!(expected_hash));
+    assert_eq!(result["verified"], json!(true));
+    assert_eq!(result["layoutParsed"], json!(true));
+    assert_eq!(result["backupBytesPrinted"], json!(false));
+    let output_path = result["outputPath"].as_str().unwrap();
+    assert_eq!(fs::read(output_path).unwrap(), payload);
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn ch347_helper_shell_command_quotes_only_helper_file_arguments() {
+    let command = shell_command(&[
+        std::ffi::OsStr::new("/tmp/FRAMKey Helper/framkey-ch347-helper"),
+        std::ffi::OsStr::new("--request"),
+        std::ffi::OsStr::new("/tmp/request with 'quote'.json"),
+        std::ffi::OsStr::new("--response"),
+        std::ffi::OsStr::new("/tmp/response.json"),
+    ])
+    .unwrap();
+
+    assert!(command.contains("'/tmp/FRAMKey Helper/framkey-ch347-helper'"));
+    assert!(command.contains("'/tmp/request with '\\''quote'\\''.json'"));
+    assert!(!command.contains("W25Q"));
+    assert!(!command.contains("15M"));
+}
+
+#[test]
 fn alchemy_token_configures_read_rpc_and_default_live_simulation() {
     let token = "test-alchemy-token-for-config";
     let mut config = fixture_config();
@@ -4198,6 +4394,32 @@ fn default_signer_helper_path_can_resolve_bundled_sidecar() {
 }
 
 #[test]
+fn default_ch347_helper_path_can_resolve_bundled_sidecar() {
+    let dir = std::env::temp_dir().join(format!(
+        "framkey-desktop-ch347-helper-bundle-{}-{}",
+        std::process::id(),
+        random_suffix()
+    ));
+    let macos_dir = dir.join("FRAMKey.app/Contents/MacOS");
+    let resources_dir = dir.join("FRAMKey.app/Contents/Resources");
+    std::fs::create_dir_all(&macos_dir).unwrap();
+    std::fs::create_dir_all(&resources_dir).unwrap();
+    let current_exe = macos_dir.join("framkey-desktop");
+    std::fs::write(&current_exe, "desktop").unwrap();
+    let sidecar_name = ch347_helper_file_names()
+        .last()
+        .expect("at least one CH347 helper name")
+        .clone();
+    let sidecar = resources_dir.join(sidecar_name);
+    std::fs::write(&sidecar, "helper").unwrap();
+
+    let resolved = default_ch347_helper_path_for_exe(&current_exe).unwrap();
+
+    assert_eq!(resolved, sidecar.canonicalize().unwrap());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn signer_helper_status_reports_missing_without_hashing() {
     let path = std::env::temp_dir().join(format!(
         "framkey-missing-signer-helper-{}-{}",
@@ -4217,6 +4439,30 @@ fn signer_helper_status_reports_missing_without_hashing() {
     assert_eq!(status["readiness"], json!("missing"));
     assert_eq!(status["hashPinned"], json!(true));
     assert_eq!(status["hashMatches"], json!(false));
+    assert!(status.get("blake3").unwrap().is_null());
+    assert_eq!(status["path"], json!(path.display().to_string()));
+}
+
+#[test]
+fn ch347_helper_status_reports_missing_without_hashing() {
+    let path = std::env::temp_dir().join(format!(
+        "framkey-missing-ch347-helper-{}-{}",
+        std::process::id(),
+        random_suffix()
+    ));
+    let helper = Ch347HelperConfig {
+        path: path.clone(),
+        expected_blake3: Some("00".repeat(32)),
+    };
+
+    let status = ch347_helper_status_value(&helper);
+
+    assert_eq!(status["exists"], json!(false));
+    assert_eq!(status["ready"], json!(false));
+    assert_eq!(status["readiness"], json!("missing"));
+    assert_eq!(status["hashPinned"], json!(true));
+    assert_eq!(status["hashMatches"], json!(false));
+    assert_eq!(status["privilege"], json!("macos_admin_authorization"));
     assert!(status.get("blake3").unwrap().is_null());
     assert_eq!(status["path"], json!(path.display().to_string()));
 }
@@ -4411,6 +4657,10 @@ fn fixture_config() -> DesktopConfig {
             path: PathBuf::from("framkey-signer-helper"),
             expected_blake3: None,
             sandbox: SignerHelperSandbox::DisabledByConfig,
+        },
+        ch347_helper: Ch347HelperConfig {
+            path: PathBuf::from("framkey-ch347-helper"),
+            expected_blake3: None,
         },
         simulation: DesktopSimulationConfig::LocalDecoderOnly,
         rpc: None,

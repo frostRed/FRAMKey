@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use framkey_ch347::{Ch347Config, Ch347Device};
 use framkey_device::{FileImageDevice, SaveImage, SaveImageHash, VaultDevice};
 use framkey_gbxcart::{GbxCartConfig, GbxCartDevice};
 use serde_json::json;
@@ -64,6 +65,12 @@ pub(crate) fn run_device(command: DeviceCommand) -> Result<()> {
 
 pub(crate) fn open_device(args: &DeviceTargetArgs) -> Result<Box<dyn VaultDevice>> {
     match args.device {
+        DeviceTargetKind::Ch347 => Ok(Box::new(Ch347Device::new(Ch347Config {
+            chip: args.chip.clone(),
+            flashrom_path: args.flashrom.clone(),
+            spi_speed: args.spispeed.map(Into::into),
+            expected_size: args.expected_save_size,
+        }))),
         DeviceTargetKind::File => {
             let path = args
                 .path
