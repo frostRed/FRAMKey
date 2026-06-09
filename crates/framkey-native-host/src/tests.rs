@@ -12,6 +12,7 @@ use framkey_gbxcart::GbaSaveType;
 use framkey_ipc::{IpcErrorCode, IpcRequest};
 use serde_json::Value;
 use std::{
+    fs,
     path::PathBuf,
     process::{Command, Stdio},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -151,6 +152,29 @@ fn config_validation_rejects_ambiguous_keychain_names_and_device_hints() {
         expected_save_size: None,
     };
     assert!(config.validate().is_err());
+}
+
+#[test]
+fn native_host_default_gbxcart_port_uses_auto_discovery() {
+    let helper_path = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("framkey-signer-helper");
+    if !helper_path.exists() {
+        fs::write(&helper_path, b"test helper placeholder").unwrap();
+    }
+
+    let config = NativeHostConfig::default_for_repo().unwrap();
+    let NativeDeviceConfig::GbxCart {
+        port, save_type, ..
+    } = config.device
+    else {
+        panic!("native host default device should be GBxCart");
+    };
+
+    assert_eq!(port, None);
+    assert_eq!(save_type, GbaSaveType::SramFram512Kbit);
 }
 
 #[test]

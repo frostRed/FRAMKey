@@ -4359,6 +4359,20 @@ fn desktop_config_rejects_blank_keychain_names() {
     assert!(config.validate().is_err());
 }
 
+#[test]
+fn desktop_default_gbxcart_port_uses_auto_discovery() {
+    let config = DesktopConfig::default_for_repo().unwrap();
+    let DeviceConfig::GbxCart {
+        port, save_type, ..
+    } = config.device
+    else {
+        panic!("desktop default device should be GBxCart");
+    };
+
+    assert_eq!(port, None);
+    assert_eq!(save_type, GbaSaveType::SramFram512Kbit);
+}
+
 fn fixture_config() -> DesktopConfig {
     DesktopConfig {
         chain_id: "0x1".to_owned(),

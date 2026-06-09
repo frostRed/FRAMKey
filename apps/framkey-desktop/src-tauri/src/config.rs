@@ -65,7 +65,7 @@ impl DesktopConfig {
         Ok(Self {
             chain_id: DEFAULT_CHAIN_ID.to_owned(),
             device: DeviceConfig::GbxCart {
-                port: Some(DEFAULT_GBXCART_PORT.to_owned()),
+                port: None,
                 save_type: GbaSaveType::SramFram512Kbit,
                 expected_save_size: None,
             },

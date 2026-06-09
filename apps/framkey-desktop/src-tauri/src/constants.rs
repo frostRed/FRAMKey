@@ -3,7 +3,6 @@ use std::time::Duration;
 pub(crate) const DEFAULT_KEYCHAIN_SERVICE: &str = "io.framkey.local-kek";
 pub(crate) const DEFAULT_KEYCHAIN_ACCOUNT: &str = "default";
 pub(crate) const DEFAULT_CHAIN_ID: &str = "0x1";
-pub(crate) const DEFAULT_GBXCART_PORT: &str = "/dev/cu.usbserial-210";
 pub(crate) const DEFAULT_ALCHEMY_NETWORK: &str = "eth-mainnet";
 pub(crate) const HYPEREVM_CHAIN_ID: &str = "0x3e7";
 pub(crate) const HYPEREVM_NETWORK: &str = "hyperliquid-mainnet";

@@ -7,9 +7,7 @@ use framkey_ipc::SignerOpenKeychainVaultResponse;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::constants::{
-    DEFAULT_CHAIN_ID, DEFAULT_GBXCART_PORT, DEFAULT_KEYCHAIN_ACCOUNT, DEFAULT_KEYCHAIN_SERVICE,
-};
+use crate::constants::{DEFAULT_CHAIN_ID, DEFAULT_KEYCHAIN_ACCOUNT, DEFAULT_KEYCHAIN_SERVICE};
 
 #[derive(Debug, Clone)]
 pub(crate) struct NativeAccount {
@@ -38,11 +36,11 @@ impl NativeHostConfig {
         Ok(config)
     }
 
-    fn default_for_repo() -> Result<Self> {
+    pub(crate) fn default_for_repo() -> Result<Self> {
         Ok(Self {
             chain_id: DEFAULT_CHAIN_ID.to_owned(),
             device: NativeDeviceConfig::GbxCart {
-                port: Some(DEFAULT_GBXCART_PORT.to_owned()),
+                port: None,
                 save_type: GbaSaveType::SramFram512Kbit,
                 expected_save_size: None,
             },
