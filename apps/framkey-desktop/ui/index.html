@@ -75,26 +75,66 @@
 
       <section class="layout" id="trusted-workspace">
         <section class="wallet-home-panel workspace-panel" data-workspace="wallet">
-          <div class="home-product-grid">
-            <article class="account-card">
+          <div class="wallet-home-experience">
+            <article class="account-card wallet-hero-card">
               <div class="account-card-top">
-                <span class="eyebrow">FRAMKey Vault</span>
-                <span id="wallet-home-network">Network</span>
+                <span class="eyebrow">FRAMKey Wallet</span>
+                <strong id="wallet-home-readiness" class="product-state-pill" data-tone="idle">Locked</strong>
               </div>
-              <div class="account-card-balance">
-                <span>Available balance</span>
-                <h2 id="wallet-home-balance">0</h2>
-                <p id="wallet-home-address">No account loaded</p>
+              <div class="wallet-hero-body">
+                <div class="account-card-summary">
+                  <span>Multichain vault</span>
+                  <h2 id="wallet-home-balance">Unlock your wallet</h2>
+                  <p id="wallet-home-address">EVM and Bitcoin accounts are waiting.</p>
+                </div>
+                <div class="wallet-hero-visual" aria-hidden="true">
+                  <div class="wallet-rail">
+                    <span>EVM</span>
+                    <i></i>
+                    <span>BTC</span>
+                  </div>
+                  <div class="wallet-plate">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                </div>
               </div>
-              <div class="product-actions">
-                <button id="wallet-action-connect" type="button">Unlock</button>
+              <div class="wallet-hero-actions product-actions">
+                <button id="wallet-action-connect" type="button">Unlock Wallet</button>
                 <button id="wallet-action-send" type="button">Send</button>
-                <button id="wallet-action-defi" type="button">DeFi</button>
+                <button id="wallet-action-defi" type="button">Apps</button>
               </div>
             </article>
-            <aside class="home-signal-card">
-              <span class="eyebrow">Status</span>
-              <strong id="wallet-home-readiness">Checking</strong>
+
+            <section class="wallet-chain-panel" aria-label="Wallet accounts">
+              <div class="consumer-section-header">
+                <div>
+                  <span class="eyebrow">Accounts</span>
+                  <h2>EVM and Bitcoin</h2>
+                </div>
+                <span id="wallet-home-network">EVM + Bitcoin</span>
+              </div>
+              <div id="wallet-home-chains" class="home-chain-grid" aria-label="Wallet chains">
+                <article class="home-chain-card" data-family="evm">
+                  <div>
+                    <span>EVM</span>
+                    <strong>Unlock required</strong>
+                  </div>
+                  <p>Ethereum and supported EVM networks</p>
+                </article>
+                <article class="home-chain-card" data-family="btc">
+                  <div>
+                    <span>Bitcoin</span>
+                    <strong>Unlock required</strong>
+                  </div>
+                  <p>Mainnet and Testnet4 accounts</p>
+                </article>
+              </div>
+            </section>
+
+            <aside class="home-signal-card wallet-next-card">
+              <span class="eyebrow">Next</span>
               <p id="wallet-home-guidance">Unlock the vault to use wallet actions.</p>
               <div class="product-status-grid">
                 <article>
@@ -118,20 +158,9 @@
           </div>
         </section>
 
-        <div class="panel multichain-panel workspace-panel" data-workspace="wallet">
-          <div class="panel-header">
-            <h2>Accounts</h2>
-            <span id="multichain-summary" class="mini-pill" data-tone="idle">Unlock required</span>
-          </div>
-          <div id="multichain-accounts" class="multichain-accounts">
-            <div class="review-empty">Unlock the vault to show chain accounts</div>
-          </div>
-          <div id="btc-strategy" class="btc-strategy"></div>
-        </div>
-
         <div class="panel portfolio-panel workspace-panel" data-workspace="wallet">
           <div class="panel-header">
-            <h2>Assets</h2>
+            <h2>Balances</h2>
             <button id="refresh-portfolio" type="button">Refresh</button>
           </div>
           <div class="portfolio-headline">
@@ -151,140 +180,185 @@
           </div>
         </div>
 
-        <div class="panel native-send-panel workspace-panel" data-workspace="wallet">
-          <div class="panel-header">
-            <h2 id="native-send-title">Send</h2>
-            <span id="native-send-status" class="mini-pill" data-tone="idle">Idle</span>
+        <section class="chain-actions-panel workspace-panel" data-workspace="wallet">
+          <div class="chain-actions-header">
+            <div>
+              <span class="eyebrow">Wallet actions</span>
+              <h2>By chain</h2>
+            </div>
+            <span id="multichain-summary" class="mini-pill" data-tone="idle">Unlock required</span>
           </div>
-          <form id="native-send-form" class="native-send-form">
-            <label class="field-label" for="native-send-to">
-              <span>Recipient</span>
-              <input
-                id="native-send-to"
-                class="url-input"
-                type="text"
-                spellcheck="false"
-                autocomplete="off"
-                inputmode="text"
-                placeholder="0x..."
-              />
-            </label>
-            <label class="field-label" for="native-send-amount">
-              <span>Amount</span>
-              <input
-                id="native-send-amount"
-                class="small-input native-send-amount"
-                type="text"
-                inputmode="decimal"
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="0.01"
-              />
-            </label>
-            <button id="native-send-submit" type="submit">Review</button>
-          </form>
-          <div id="native-send-detail" class="native-send-detail">
-            <span>Approval stays in this trusted window before signing.</span>
-          </div>
-        </div>
 
-        <div class="panel btc-send-panel workspace-panel" data-workspace="wallet">
-          <div class="panel-header">
-            <h2>Send BTC</h2>
-            <span id="btc-send-status" class="mini-pill" data-tone="idle">Idle</span>
-          </div>
-          <form id="btc-send-form" class="native-send-form">
-            <label class="field-label" for="btc-send-network">
-              <span>Network</span>
-              <select id="btc-send-network" class="url-input">
-                <option value="bitcoin-mainnet">Bitcoin</option>
-                <option value="bitcoin-testnet4">Bitcoin Testnet4</option>
-              </select>
-            </label>
-            <label class="field-label" for="btc-send-to">
-              <span>Recipient</span>
-              <input
-                id="btc-send-to"
-                class="url-input"
-                type="text"
-                spellcheck="false"
-                autocomplete="off"
-                inputmode="text"
-                placeholder="bc1q... or tb1q..."
-              />
-            </label>
-            <label class="field-label" for="btc-send-amount-sat">
-              <span>Sats</span>
-              <input
-                id="btc-send-amount-sat"
-                class="small-input native-send-amount"
-                type="text"
-                inputmode="numeric"
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="10000"
-              />
-            </label>
-            <label class="field-label" for="btc-send-fee-rate">
-              <span>sat/vB</span>
-              <input
-                id="btc-send-fee-rate"
-                class="small-input native-send-amount"
-                type="number"
-                inputmode="numeric"
-                min="1"
-                max="1000"
-                step="1"
-                value="2"
-              />
-            </label>
-            <button id="btc-send-submit" type="submit">Review</button>
-          </form>
-          <div id="btc-send-detail" class="native-send-detail">
-            <span>Only trusted UI PSBT sends are enabled. dApps cannot request BTC signing.</span>
-          </div>
-        </div>
+          <section class="chain-action-group" data-family="evm">
+            <div class="chain-action-group-header">
+              <div>
+                <span class="chain-action-mark">E</span>
+                <div>
+                  <h3>EVM</h3>
+                  <p>Receive, send ETH, or send ERC-20 tokens on the active EVM network.</p>
+                </div>
+              </div>
+            </div>
+            <div class="chain-action-grid">
+              <div id="evm-receive-account" class="chain-receive-slot">
+                <div class="review-empty">Unlock the vault to show the EVM receive address</div>
+              </div>
 
-        <div class="panel token-send-panel workspace-panel" data-workspace="wallet">
-          <div class="panel-header">
-            <h2>Send Token</h2>
-            <span id="token-send-status" class="mini-pill" data-tone="idle">No token</span>
-          </div>
-          <div id="token-send-selected" class="token-send-selected">
-            <strong>Select from Assets</strong>
-            <span>ERC-20 transfer</span>
-          </div>
-          <form id="token-send-form" class="native-send-form token-send-form">
-            <label class="field-label" for="token-send-to">
-              <span>Recipient</span>
-              <input
-                id="token-send-to"
-                class="url-input"
-                type="text"
-                spellcheck="false"
-                autocomplete="off"
-                inputmode="text"
-                placeholder="0x..."
-              />
-            </label>
-            <label class="field-label" for="token-send-amount">
-              <span>Amount</span>
-              <input
-                id="token-send-amount"
-                class="small-input native-send-amount"
-                type="text"
-                inputmode="decimal"
-                spellcheck="false"
-                autocomplete="off"
-                placeholder="0.0"
-              />
-            </label>
-            <button id="token-send-submit" type="submit" disabled>Review</button>
-          </form>
-          <div id="token-send-detail" class="native-send-detail">
-            <span>Select an ERC-20 token from Assets.</span>
-          </div>
-        </div>
+              <article class="chain-action-card native-send-panel">
+                <div class="panel-header">
+                  <h2 id="native-send-title">Send ETH</h2>
+                  <span id="native-send-status" class="mini-pill" data-tone="idle">Idle</span>
+                </div>
+                <form id="native-send-form" class="native-send-form">
+                  <label class="field-label" for="native-send-to">
+                    <span>Recipient</span>
+                    <input
+                      id="native-send-to"
+                      class="url-input"
+                      type="text"
+                      spellcheck="false"
+                      autocomplete="off"
+                      inputmode="text"
+                      placeholder="0x..."
+                    />
+                  </label>
+                  <label class="field-label" for="native-send-amount">
+                    <span>Amount</span>
+                    <input
+                      id="native-send-amount"
+                      class="small-input native-send-amount"
+                      type="text"
+                      inputmode="decimal"
+                      spellcheck="false"
+                      autocomplete="off"
+                      placeholder="0.01"
+                    />
+                  </label>
+                  <button id="native-send-submit" type="submit">Review</button>
+                </form>
+                <div id="native-send-detail" class="native-send-detail">
+                  <span>Approval stays in this trusted window before signing.</span>
+                </div>
+              </article>
+
+              <article class="chain-action-card token-send-panel">
+                <div class="panel-header">
+                  <h2>Send Token</h2>
+                  <span id="token-send-status" class="mini-pill" data-tone="idle">No token</span>
+                </div>
+                <div id="token-send-selected" class="token-send-selected">
+                  <strong>Select from Balances</strong>
+                  <span>ERC-20 transfer</span>
+                </div>
+                <form id="token-send-form" class="native-send-form token-send-form">
+                  <label class="field-label" for="token-send-to">
+                    <span>Recipient</span>
+                    <input
+                      id="token-send-to"
+                      class="url-input"
+                      type="text"
+                      spellcheck="false"
+                      autocomplete="off"
+                      inputmode="text"
+                      placeholder="0x..."
+                    />
+                  </label>
+                  <label class="field-label" for="token-send-amount">
+                    <span>Amount</span>
+                    <input
+                      id="token-send-amount"
+                      class="small-input native-send-amount"
+                      type="text"
+                      inputmode="decimal"
+                      spellcheck="false"
+                      autocomplete="off"
+                      placeholder="0.0"
+                    />
+                  </label>
+                  <button id="token-send-submit" type="submit" disabled>Review</button>
+                </form>
+                <div id="token-send-detail" class="native-send-detail">
+                  <span>Select an ERC-20 token from Balances.</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="chain-action-group" data-family="btc">
+            <div class="chain-action-group-header">
+              <div>
+                <span class="chain-action-mark">B</span>
+                <div>
+                  <h3>Bitcoin</h3>
+                  <p>Receive BTC or create a trusted PSBT send for Bitcoin networks.</p>
+                </div>
+              </div>
+            </div>
+            <div class="chain-action-grid btc-chain-action-grid">
+              <div id="btc-receive-accounts" class="chain-receive-stack">
+                <div class="review-empty">Unlock the vault to show Bitcoin receive addresses</div>
+              </div>
+
+              <article class="chain-action-card btc-send-panel">
+                <div class="panel-header">
+                  <h2>Send BTC</h2>
+                  <span id="btc-send-status" class="mini-pill" data-tone="idle">Idle</span>
+                </div>
+                <form id="btc-send-form" class="native-send-form">
+                  <label class="field-label" for="btc-send-network">
+                    <span>Network</span>
+                    <select id="btc-send-network" class="url-input">
+                      <option value="bitcoin-mainnet">Bitcoin</option>
+                      <option value="bitcoin-testnet4">Bitcoin Testnet4</option>
+                    </select>
+                  </label>
+                  <label class="field-label" for="btc-send-to">
+                    <span>Recipient</span>
+                    <input
+                      id="btc-send-to"
+                      class="url-input"
+                      type="text"
+                      spellcheck="false"
+                      autocomplete="off"
+                      inputmode="text"
+                      placeholder="bc1q... or tb1q..."
+                    />
+                  </label>
+                  <label class="field-label" for="btc-send-amount-sat">
+                    <span>Sats</span>
+                    <input
+                      id="btc-send-amount-sat"
+                      class="small-input native-send-amount"
+                      type="text"
+                      inputmode="numeric"
+                      spellcheck="false"
+                      autocomplete="off"
+                      placeholder="10000"
+                    />
+                  </label>
+                  <label class="field-label" for="btc-send-fee-rate">
+                    <span>sat/vB</span>
+                    <input
+                      id="btc-send-fee-rate"
+                      class="small-input native-send-amount"
+                      type="number"
+                      inputmode="numeric"
+                      min="1"
+                      max="1000"
+                      step="1"
+                      value="2"
+                    />
+                  </label>
+                  <button id="btc-send-submit" type="submit">Review</button>
+                </form>
+                <div id="btc-send-detail" class="native-send-detail">
+                  <span>Only trusted UI PSBT sends are enabled. dApps cannot request BTC signing.</span>
+                </div>
+              </article>
+            </div>
+            <div id="btc-strategy" class="btc-strategy"></div>
+          </section>
+        </section>
 
         <div class="panel rpc-health-panel workspace-panel" data-workspace="diagnostics">
           <div class="panel-header">
@@ -386,6 +460,7 @@
             <div class="panel-actions">
               <button id="refresh-activity" type="button">Refresh</button>
               <button id="refresh-receipts" type="button">Check status</button>
+              <button id="clear-activity" type="button" disabled>Clear history</button>
             </div>
           </div>
           <div class="review-meta">
@@ -763,14 +838,14 @@
 
         <div class="panel review-panel workspace-panel" data-workspace="wallet defi recovery activity diagnostics">
           <div class="panel-header">
-            <h2>Approvals</h2>
+            <h2>Pending approvals</h2>
             <div class="panel-actions">
-              <button id="refresh-review" type="button">Refresh</button>
-              <button id="clear-review" type="button">Clear</button>
+              <button id="refresh-review" type="button">Refresh pending</button>
+              <button id="clear-review" type="button" disabled>Clear pending</button>
             </div>
           </div>
           <div class="review-meta">
-            <span id="review-count">0 approvals</span>
+            <span id="review-count">0 waiting approvals</span>
           </div>
           <div id="review-list" class="review-list"></div>
         </div>
@@ -787,6 +862,31 @@
         </div>
       </section>
     </main>
+    <div
+      id="address-qr-modal"
+      class="address-qr-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="address-qr-title"
+      hidden
+    >
+      <div class="address-qr-backdrop" data-qr-close></div>
+      <section class="address-qr-card">
+        <div class="address-qr-header">
+          <div>
+            <span id="address-qr-network" class="eyebrow">Receive</span>
+            <h2 id="address-qr-title">Receive address</h2>
+          </div>
+          <button id="address-qr-close" type="button">Close</button>
+        </div>
+        <div id="address-qr-code" class="address-qr-code" aria-label="Address QR code"></div>
+        <code id="address-qr-address" class="address-qr-address"></code>
+        <div class="address-qr-actions">
+          <button id="address-qr-copy" type="button">Copy address</button>
+        </div>
+      </section>
+    </div>
+    <script src="qr.js"></script>
     <script src="main.js"></script>
   </body>
 </html>

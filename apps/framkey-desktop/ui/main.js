@@ -13,9 +13,18 @@ const walletHomeAccount = document.querySelector("#wallet-home-account");
 const walletHomeRpc = document.querySelector("#wallet-home-rpc");
 const walletHomeAssets = document.querySelector("#wallet-home-assets");
 const walletHomeSecurity = document.querySelector("#wallet-home-security");
+const walletHomeChains = document.querySelector("#wallet-home-chains");
 const multichainSummary = document.querySelector("#multichain-summary");
-const multichainAccounts = document.querySelector("#multichain-accounts");
+const evmReceiveAccount = document.querySelector("#evm-receive-account");
+const btcReceiveAccounts = document.querySelector("#btc-receive-accounts");
 const btcStrategy = document.querySelector("#btc-strategy");
+const addressQrModal = document.querySelector("#address-qr-modal");
+const addressQrTitle = document.querySelector("#address-qr-title");
+const addressQrNetwork = document.querySelector("#address-qr-network");
+const addressQrCode = document.querySelector("#address-qr-code");
+const addressQrAddress = document.querySelector("#address-qr-address");
+const addressQrCopyButton = document.querySelector("#address-qr-copy");
+const addressQrCloseButton = document.querySelector("#address-qr-close");
 const walletMode = document.querySelector("#wallet-mode");
 const rpcStatus = document.querySelector("#rpc-status");
 const rpcHealthSummary = document.querySelector("#rpc-health-summary");
@@ -190,6 +199,8 @@ let walletConnectionPending = null;
 let walletConnectionOperationId = 0;
 let walletConnectionError = null;
 let keychainHelperAccessPending = false;
+let activeQrAddress = null;
+let activeQrTrigger = null;
 
 const COMPATIBILITY_TARGETS = [
   {
@@ -305,6 +316,7 @@ const walletActionDefiButton = document.querySelector("#wallet-action-defi");
 const refreshPortfolioButton = document.querySelector("#refresh-portfolio");
 const refreshActivityButton = document.querySelector("#refresh-activity");
 const refreshReceiptsButton = document.querySelector("#refresh-receipts");
+const clearActivityButton = document.querySelector("#clear-activity");
 const connectCardButton = document.querySelector("#connect-card");
 const authorizeKeychainHelperButton = document.querySelector("#authorize-keychain-helper");
 const openDappButton = document.querySelector("#open-dapp");
@@ -448,51 +460,56 @@ function renderWalletProductOverview() {
   const connectionPending = connecting || disconnecting;
   const connectionError = address ? null : walletConnectionError;
 
+  const evm = accountByFamily(latestAccount, "evm");
+  const btc = btcAccounts(latestAccount);
+  const chainCount = (evm || address ? 1 : 0) + btc.length;
   walletHomeBalance.textContent = address
-    ? nativeBalance
-      ? formatNativeBalance(nativeBalance)
-      : accountBalance.textContent || zeroNativeBalanceText()
-    : zeroNativeBalanceText();
+    ? chainCount > 1
+      ? `${chainCount} accounts ready`
+      : "Wallet ready"
+    : "Unlock your wallet";
   walletHomeAddress.textContent = connecting
-    ? "Reading vault from card; macOS unlock follows"
+    ? "Reading your FRAMKey vault"
     : connectionError
       ? walletConnectionErrorText(connectionError)
     : address
       ? accountAddressSummary(latestAccount, address)
-      : "Unlock the vault to load the account";
+      : "EVM and Bitcoin accounts are waiting.";
   walletHomeAddress.title = address ? accountAddressTitle(latestAccount, address) : "";
   walletHomeNetwork.textContent = walletHomeNetworkLabel();
-  walletHomeAccount.textContent = address ? "Connected" : connectionError ? "Connection failed" : "Disconnected";
+  walletHomeAccount.textContent = address ? "Ready" : connectionError ? "Needs reconnect" : "Locked";
   walletHomeRpc.textContent = latestRpcHealth
-    ? rpcHealthSummaryText(latestRpcHealth)
+    ? latestRpcHealth.healthy
+      ? "Online"
+      : rpcHealthSummaryText(latestRpcHealth)
     : latestStatus?.rpc
-      ? "Configured"
-      : "Missing";
+      ? "Ready"
+      : "Not set";
   walletHomeAssets.textContent =
     address == null
-      ? "Disconnected"
+      ? "After unlock"
       : latestPortfolio == null
         ? btcAccounts(latestAccount).length > 0
-          ? btcReceiveReadyLabel(latestAccount)
-          : "No snapshot"
+          ? "Receive ready"
+          : "Ready to refresh"
         : btcAccounts(latestAccount).length > 0
-          ? `${btcReceiveReadyLabel(latestAccount)} · ${tokens.length} token${tokens.length === 1 ? "" : "s"}`
+          ? `BTC ready · ${tokens.length} token${tokens.length === 1 ? "" : "s"}`
           : `${tokens.length} token${tokens.length === 1 ? "" : "s"}`;
   walletHomeSecurity.textContent = latestStatus?.wallet?.mock
     ? "Test mode"
     : helperReady
-      ? "Signing ready"
-      : "Signing unavailable";
+      ? "Protected"
+      : "Needs setup";
 
   let readiness = connecting
     ? "Connecting"
     : disconnecting
       ? "Disconnecting"
       : authorizingKeychain
-        ? "Preparing signing"
+        ? "Preparing"
       : address
-        ? "Connected"
-        : "Disconnected";
+        ? "Ready"
+        : "Locked";
   let tone = "good";
   if (connectionPending || authorizingKeychain) {
     tone = "warn";
@@ -503,10 +520,10 @@ function renderWalletProductOverview() {
     readiness = `${pending.length} approval`;
     tone = "warn";
   } else if (!helperReady) {
-    readiness = "Setup needed";
+    readiness = "Needs setup";
     tone = "bad";
   } else if (!rpcHealthy) {
-    readiness = "RPC attention";
+    readiness = "Needs network";
     tone = "warn";
   } else if (!address) {
     tone = "idle";
@@ -531,7 +548,7 @@ function renderWalletProductOverview() {
       ? "Disconnecting..."
       : address
         ? "Disconnect"
-        : "Unlock";
+        : "Unlock Wallet";
   walletActionConnectButton.dataset.mode = address ? "disconnect" : "connect";
   walletActionConnectButton.disabled = connectionPending;
   connectCardButton.textContent = address ? "Wallet Unlocked" : "Unlock Wallet";
@@ -541,14 +558,21 @@ function renderWalletProductOverview() {
     : "Repair Signing Access";
   authorizeKeychainHelperButton.disabled =
     authorizingKeychain || connectionPending || Boolean(latestStatus?.wallet?.mock) || !helperReady;
+  walletActionSendButton.textContent = `Send ${nativeSymbolForStatus(latestStatus)}`;
   walletActionSendButton.disabled = !address || connectionPending;
+  walletActionDefiButton.textContent = "Apps";
+  renderWalletHomeChains({ address, connectionPending });
   renderMultichainAccounts();
 }
 
 function walletHomeNetworkLabel() {
   const label = latestStatus?.network?.name ?? networkName.textContent;
-  const evmLabel = label && label !== "-" ? label : "Ethereum";
+  const evmLabel = label && label !== "-" ? label : "EVM";
   const btcCount = btcAccounts(latestAccount).length;
+  const connected = Boolean(latestAccount?.address || latestPortfolio?.address);
+  if (!connected) {
+    return "EVM + Bitcoin";
+  }
   return btcCount > 0 ? `${evmLabel} + BTC ${btcCount}` : evmLabel;
 }
 
@@ -563,30 +587,167 @@ function walletHomeGuidanceText({
   rpcHealthy,
 }) {
   if (connecting) {
-    return "Reading the vault and preparing the local unlock.";
+    return "Keep the cartridge connected while FRAMKey opens the wallet.";
   }
   if (disconnecting) {
-    return "Clearing the local wallet session.";
+    return "Closing this wallet session.";
   }
   if (authorizingKeychain) {
-    return "macOS is preparing signing access for this build.";
+    return "macOS is preparing signing access.";
   }
   if (connectionError) {
     return "Reconnect the vault or repair signing access from System.";
   }
   if (pendingCount > 0) {
-    return "A wallet approval is waiting in this trusted window.";
+    return "Review the waiting approval in this trusted window.";
   }
   if (!helperReady) {
-    return "Signing setup needs attention before real approvals.";
+    return "Signing setup needs attention before approvals.";
   }
   if (!rpcHealthy) {
-    return "Network status needs a check before DeFi activity.";
+    return "Check the network before app activity.";
   }
   if (address) {
-    return "Ready for trusted sends and DeFi approvals.";
+    return "Choose a chain, receive funds, or start a trusted send.";
   }
-  return "Unlock the vault to load the wallet.";
+  return "Unlock once to show your EVM and Bitcoin accounts.";
+}
+
+function renderWalletHomeChains({ address, connectionPending }) {
+  if (!walletHomeChains) {
+    return;
+  }
+  const evm = accountByFamily(latestAccount, "evm");
+  const btc = btcAccounts(latestAccount);
+  const evmAddress = evm?.address ?? address ?? null;
+  const nativeSymbol = nativeSymbolForStatus(latestStatus);
+  const nativeBalance = latestPortfolio?.native?.balance;
+  const connected = Boolean(evmAddress);
+  const btcPrimary = btc.find((account) => !account.testnet) ?? btc[0] ?? null;
+  const btcBalance = btcPrimary ? latestBtcBalances.get(btcPrimary.network) : null;
+  const btcBackendReady = btc.some((account) => {
+    const capabilities = account?.capabilities ?? {};
+    return capabilities.balance === true || capabilities.send === true;
+  });
+  const cards = [
+    {
+      family: "evm",
+      title: "EVM",
+      network: latestStatus?.network?.name ?? "Ethereum",
+      address: evmAddress,
+      status: connected
+        ? nativeBalance
+          ? formatNativeBalance(nativeBalance, nativeSymbol)
+          : `${nativeSymbol} ready`
+        : "Unlock required",
+      tone: connected ? "good" : "idle",
+      detail: connected
+        ? "Apps and token sends use the trusted EVM review flow."
+        : "Ethereum and supported EVM networks.",
+      actions: [
+        {
+          label: "Receive",
+          disabled: !connected || connectionPending,
+          action: (button) => copyAddressToClipboard(evmAddress, button),
+        },
+        {
+          label: `Send ${nativeSymbol}`,
+          disabled: !connected || connectionPending,
+          action: () => {
+            setActiveWorkspace("wallet");
+            nativeSendTo?.focus();
+            nativeSendForm?.scrollIntoView({ behavior: "smooth", block: "center" });
+          },
+        },
+      ],
+    },
+    {
+      family: "btc",
+      title: "Bitcoin",
+      network: btc.length > 1 || !btcPrimary ? "Mainnet + Testnet4" : btcNetworkLabel(btcPrimary.network),
+      address: btcPrimary?.address ?? null,
+      status: btcPrimary
+        ? btcBalance
+          ? formatBtcSats(btcBalance.spendableSat)
+          : btcBackendReady
+            ? "Balance ready"
+            : "Receive ready"
+        : "Unlock required",
+      tone: btcPrimary ? (btcBackendReady ? "good" : "warn") : "idle",
+      detail: btcPrimary
+        ? "Receive BTC or review a PSBT send inside FRAMKey."
+        : "Bitcoin mainnet and Testnet4 accounts.",
+      actions: [
+        {
+          label: "Receive",
+          disabled: !btcPrimary?.address || connectionPending,
+          action: (button) => copyAddressToClipboard(btcPrimary.address, button),
+        },
+        {
+          label: "Send BTC",
+          disabled: !btcPrimary?.address || !btcBackendReady || connectionPending,
+          action: () => {
+            setActiveWorkspace("wallet");
+            if (btcSendNetwork && btcPrimary?.network) {
+              btcSendNetwork.value = btcPrimary.network;
+            }
+            btcSendTo?.focus();
+            btcSendForm?.scrollIntoView({ behavior: "smooth", block: "center" });
+          },
+        },
+      ],
+    },
+  ];
+
+  walletHomeChains.replaceChildren(...cards.map(renderWalletHomeChainCard));
+}
+
+function renderWalletHomeChainCard(card) {
+  const node = document.createElement("article");
+  node.className = "home-chain-card";
+  node.dataset.family = card.family;
+  node.dataset.tone = card.tone;
+
+  const header = document.createElement("div");
+  header.className = "home-chain-card-header";
+  const title = document.createElement("div");
+  title.className = "home-chain-heading";
+  const mark = document.createElement("span");
+  mark.className = "home-chain-mark";
+  mark.textContent = card.family === "btc" ? "B" : "E";
+  const titleText = document.createElement("div");
+  const label = document.createElement("span");
+  label.textContent = card.title;
+  const network = document.createElement("small");
+  network.textContent = card.network;
+  titleText.append(label, network);
+  title.append(mark, titleText);
+  const status = document.createElement("strong");
+  status.textContent = card.status;
+  header.append(title, status);
+
+  const address = document.createElement("code");
+  address.textContent = card.address ? shortAddress(card.address) : "Unlock the vault";
+  address.title = card.address ?? "";
+
+  const detail = document.createElement("p");
+  detail.textContent = card.detail;
+
+  const actions = document.createElement("div");
+  actions.className = "home-chain-actions";
+  for (const action of card.actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    button.disabled = Boolean(action.disabled);
+    if (action.action) {
+      button.addEventListener("click", () => action.action(button));
+    }
+    actions.append(button);
+  }
+
+  node.append(header, address, detail, actions);
+  return node;
 }
 
 function renderDefiProductOverview() {
@@ -1643,6 +1804,23 @@ async function refreshTransactionActivity(showOutput = true, refreshReceipts = f
       scheduleReceiptAutoRefresh(latestTransactionActivity);
       renderReceiptTrackingState();
       renderProductOverview();
+    }
+  }
+}
+
+async function clearTransactionActivity() {
+  if (clearActivityButton) {
+    clearActivityButton.disabled = true;
+  }
+  try {
+    const response = await invokeCommand("framkey_clear_transaction_activity");
+    if (response?.result) {
+      await refreshTransactionActivity(false, false);
+    }
+    return response;
+  } finally {
+    if (clearActivityButton) {
+      clearActivityButton.disabled = latestTransactionActivity.length === 0;
     }
   }
 }
@@ -3034,6 +3212,9 @@ function renderTransactionActivity(activity) {
   latestTransactionActivity = items;
   latestActivityPersistence = activity.persistence ?? null;
   activityCount.textContent = `${items.length} transactions`;
+  if (clearActivityButton) {
+    clearActivityButton.disabled = items.length === 0;
+  }
   transactionActivity.replaceChildren();
 
   if (items.length === 0) {
@@ -3086,6 +3267,9 @@ function renderTransactionActivityBaseline() {
   latestActivityPersistence = null;
   clearReceiptAutoRefreshTimer();
   activityCount.textContent = "0 transactions";
+  if (clearActivityButton) {
+    clearActivityButton.disabled = true;
+  }
   renderReceiptTrackingState([]);
   renderActivityPersistenceState(null);
   transactionActivity.replaceChildren();
@@ -3398,7 +3582,8 @@ function portfolioSummaryText(portfolio) {
 function renderReviewQueue(queue) {
   const requests = queue.requests ?? [];
   latestReviewRequests = requests;
-  reviewCount.textContent = `${requests.length} approval${requests.length === 1 ? "" : "s"}`;
+  reviewCount.textContent = `${requests.length} waiting approval${requests.length === 1 ? "" : "s"}`;
+  clearReviewButton.disabled = requests.length === 0;
   updateWorkspaceReviewCounts();
   updatePendingReviewSurface(requests);
   reviewList.replaceChildren();
@@ -7051,7 +7236,7 @@ function accountAddressTitle(account, fallbackAddress) {
 }
 
 function renderMultichainAccounts() {
-  if (!multichainAccounts) {
+  if (!evmReceiveAccount && !btcReceiveAccounts) {
     return;
   }
 
@@ -7060,43 +7245,47 @@ function renderMultichainAccounts() {
   const evmAddress = evm?.address ?? latestAccount?.address ?? null;
   const connected = Boolean(evmAddress);
   const nativeSymbol = nativeSymbolForStatus(latestStatus);
-  const cards = [
-    {
-      family: "evm",
-      title: "EVM",
-      network: latestStatus?.network?.name ?? "Ethereum",
-      address: evmAddress,
-      status: connected ? `${nativeSymbol} sends enabled` : "Unlock required",
-      statusTone: connected ? "good" : "idle",
-      detail: "dApps, SIWE, Permit, token transfers, and trusted EVM sends use this account.",
-      primaryLabel: `Send ${nativeSymbol}`,
-      primaryDisabled: !connected,
-      primaryAction: () => {
-        setActiveWorkspace("wallet");
-        nativeSendTo?.focus();
-        nativeSendForm?.scrollIntoView({ behavior: "smooth", block: "center" });
-      },
-      secondaryLabel: "Open Apps",
-      secondaryDisabled: !connected,
-      secondaryAction: () => setActiveWorkspace("defi"),
-    },
-  ];
+  const evmCard = {
+    family: "evm",
+    title: "Receive on EVM",
+    network: latestStatus?.network?.name ?? "Ethereum",
+    address: evmAddress,
+    status: connected ? "Receive ready" : "Unlock required",
+    statusTone: connected ? "good" : "idle",
+    detail: `Use this address for ${nativeSymbol} and ERC-20 deposits on supported EVM networks.`,
+    primaryLabel: "Copy address",
+    primaryDisabled: !connected,
+    primaryAction: connected ? (button) => copyAddressToClipboard(evmAddress, button) : null,
+    secondaryLabel: "Show QR",
+    secondaryDisabled: !connected,
+    secondaryAction: connected
+      ? (button) =>
+          showAddressQr({
+            title: "Receive on EVM",
+            network: latestStatus?.network?.name ?? "Ethereum",
+            address: evmAddress,
+            trigger: button,
+          })
+      : null,
+  };
   const btcCards =
     btc.length > 0
       ? btc.map((account) => btcAccountCard(account))
       : [btcAccountCard(null)];
-  cards.push(...btcCards);
 
   if (multichainSummary) {
+    const receiveAddressCount = 1 + btc.length;
     multichainSummary.textContent = connected
-      ? `${1 + btc.length} account${btc.length > 0 ? "s" : ""}`
+      ? `${receiveAddressCount} receive address${receiveAddressCount === 1 ? "" : "es"}`
       : "Unlock required";
     multichainSummary.dataset.tone = connected ? "good" : "idle";
   }
 
-  multichainAccounts.replaceChildren();
-  for (const card of cards) {
-    multichainAccounts.append(renderChainAccountCard(card));
+  if (evmReceiveAccount) {
+    evmReceiveAccount.replaceChildren(renderChainAccountCard(evmCard));
+  }
+  if (btcReceiveAccounts) {
+    btcReceiveAccounts.replaceChildren(...btcCards.map(renderChainAccountCard));
   }
   renderBtcStrategy();
 }
@@ -7123,32 +7312,28 @@ function btcAccountCard(account) {
           : "Mainnet";
   return {
     family: "btc",
-    title: testnet ? "Bitcoin Testnet" : "Bitcoin",
+    title: testnet ? "Receive BTC Testnet" : "Receive BTC",
     network: account ? networkLabel : "Mainnet + Testnet4",
     address: account?.address ?? null,
-    status: account?.address ? balanceText : "Unlock required",
+    status: account?.address ? "Receive ready" : "Unlock required",
     statusTone: account?.address ? (backendConfigured ? "good" : "warn") : "idle",
     detail: account?.address
-      ? `${name} P2WPKH account. Balance uses configured Esplora; send requires trusted PSBT review.`
+      ? `${name} native SegWit address. ${balanceText}; send remains in the BTC send card.`
       : "Unlock the vault to derive BTC receive addresses.",
-    primaryLabel: balance ? "Refresh" : "Balance",
+    primaryLabel: "Copy address",
     primaryDisabled: !account?.address,
-    primaryAction: account?.address ? (button) => refreshBtcBalance(network, true, button) : null,
-    secondaryLabel: "Send",
-    secondaryDisabled: !account?.address || !backendConfigured,
+    primaryAction: account?.address ? (button) => copyAddressToClipboard(account.address, button) : null,
+    secondaryLabel: "Show QR",
+    secondaryDisabled: !account?.address,
     secondaryAction: account?.address
-      ? () => {
-          setActiveWorkspace("wallet");
-          if (btcSendNetwork) {
-            btcSendNetwork.value = network;
-          }
-          btcSendTo?.focus();
-          btcSendForm?.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
+      ? (button) =>
+          showAddressQr({
+            title: testnet ? "Receive BTC Testnet" : "Receive BTC",
+            network: networkLabel,
+            address: account.address,
+            trigger: button,
+          })
       : null,
-    tertiaryLabel: "Copy",
-    tertiaryDisabled: !account?.address,
-    tertiaryAction: account?.address ? (button) => copyAddressToClipboard(account.address, button) : null,
   };
 }
 
@@ -7218,6 +7403,7 @@ function strategyStatusLabel(status) {
 function renderChainAccountCard(card) {
   const item = document.createElement("article");
   item.className = "chain-account-card";
+  item.classList.add("receive-account-card");
   item.dataset.family = card.family;
 
   const top = document.createElement("div");
@@ -7246,21 +7432,26 @@ function renderChainAccountCard(card) {
 
   const actions = document.createElement("div");
   actions.className = "chain-account-actions";
-  const primary = document.createElement("button");
-  primary.type = "button";
-  primary.textContent = card.primaryLabel;
-  primary.disabled = Boolean(card.primaryDisabled);
-  if (card.primaryAction) {
-    primary.addEventListener("click", () => card.primaryAction(primary));
+  if (card.primaryLabel) {
+    const primary = document.createElement("button");
+    primary.type = "button";
+    primary.textContent = card.primaryLabel;
+    primary.disabled = Boolean(card.primaryDisabled);
+    if (card.primaryAction) {
+      primary.addEventListener("click", () => card.primaryAction(primary));
+    }
+    actions.append(primary);
   }
-  const secondary = document.createElement("button");
-  secondary.type = "button";
-  secondary.textContent = card.secondaryLabel;
-  secondary.disabled = Boolean(card.secondaryDisabled);
-  if (card.secondaryAction) {
-    secondary.addEventListener("click", () => card.secondaryAction(secondary));
+  if (card.secondaryLabel) {
+    const secondary = document.createElement("button");
+    secondary.type = "button";
+    secondary.textContent = card.secondaryLabel;
+    secondary.disabled = Boolean(card.secondaryDisabled);
+    if (card.secondaryAction) {
+      secondary.addEventListener("click", () => card.secondaryAction(secondary));
+    }
+    actions.append(secondary);
   }
-  actions.append(primary, secondary);
   if (card.tertiaryLabel) {
     const tertiary = document.createElement("button");
     tertiary.type = "button";
@@ -7273,6 +7464,66 @@ function renderChainAccountCard(card) {
   }
   item.append(top, address, detail, actions);
   return item;
+}
+
+function showAddressQr({ title, network, address, trigger }) {
+  if (!address || !addressQrModal || !addressQrCode || !addressQrAddress) {
+    return;
+  }
+
+  activeQrAddress = address;
+  activeQrTrigger = trigger ?? document.activeElement;
+  if (addressQrTitle) {
+    addressQrTitle.textContent = title ?? "Receive address";
+  }
+  if (addressQrNetwork) {
+    addressQrNetwork.textContent = network ? `Receive on ${network}` : "Receive";
+  }
+  if (addressQrCopyButton) {
+    addressQrCopyButton.textContent = "Copy address";
+  }
+  addressQrAddress.textContent = address;
+  addressQrCode.replaceChildren();
+
+  try {
+    const qrSvgForText = window.framkeyQrSvgForText;
+    if (typeof qrSvgForText !== "function") {
+      throw new Error("QR renderer unavailable");
+    }
+    addressQrCode.innerHTML = qrSvgForText(address);
+    addressQrCode.dataset.tone = "ready";
+  } catch (error) {
+    const message = document.createElement("div");
+    message.className = "address-qr-error";
+    message.textContent = error?.message ?? "QR unavailable";
+    addressQrCode.replaceChildren(message);
+    addressQrCode.dataset.tone = "error";
+  }
+
+  addressQrModal.hidden = false;
+  document.body.classList.add("qr-modal-open");
+  addressQrCloseButton?.focus();
+}
+
+function closeAddressQr() {
+  if (!addressQrModal || addressQrModal.hidden) {
+    return;
+  }
+  const trigger = activeQrTrigger;
+  activeQrAddress = null;
+  activeQrTrigger = null;
+  addressQrModal.hidden = true;
+  document.body.classList.remove("qr-modal-open");
+  if (trigger && typeof trigger.focus === "function") {
+    trigger.focus();
+  }
+}
+
+function copyActiveQrAddress() {
+  if (!activeQrAddress || !addressQrCopyButton) {
+    return;
+  }
+  copyAddressToClipboard(activeQrAddress, addressQrCopyButton).catch(() => {});
 }
 
 async function copyAddressToClipboard(address, button) {
@@ -7730,6 +7981,22 @@ walletActionSendButton.addEventListener("click", () => {
 walletActionDefiButton.addEventListener("click", () => {
   setActiveWorkspace("defi");
 });
+addressQrCloseButton?.addEventListener("click", () => {
+  closeAddressQr();
+});
+addressQrModal?.addEventListener("click", (event) => {
+  if (event.target?.hasAttribute?.("data-qr-close")) {
+    closeAddressQr();
+  }
+});
+addressQrCopyButton?.addEventListener("click", () => {
+  copyActiveQrAddress();
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && addressQrModal && !addressQrModal.hidden) {
+    closeAddressQr();
+  }
+});
 defiReviewCallout?.addEventListener("click", () => {
   focusReviewPanel();
 });
@@ -7781,6 +8048,9 @@ refreshActivityButton.addEventListener("click", () => {
 });
 refreshReceiptsButton.addEventListener("click", () => {
   refreshTransactionActivity(true, true).catch(() => {});
+});
+clearActivityButton?.addEventListener("click", () => {
+  clearTransactionActivity().catch(() => {});
 });
 connectCardButton.addEventListener("click", () => {
   connectCard().catch(() => {});

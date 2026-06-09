@@ -1238,28 +1238,109 @@ button:active {
 
 .portfolio-panel {
   grid-column: span 7;
-  order: 20;
-}
-
-.multichain-panel {
-  grid-column: 1 / -1;
   order: 18;
 }
 
-.multichain-accounts {
+.chain-actions-panel {
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  order: 28;
+}
+
+.chain-actions-header,
+.chain-action-group-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.chain-actions-header h2 {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.chain-action-group {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.chain-action-group-header > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.chain-action-group-header h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.chain-action-group-header p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.chain-action-mark {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 880;
+}
+
+.chain-action-group[data-family="btc"] .chain-action-mark {
+  background: var(--accent-2);
+}
+
+.chain-action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.btc-chain-action-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.chain-receive-slot,
+.chain-receive-stack {
+  display: grid;
   gap: 12px;
 }
 
 .chain-account-card {
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 14px;
-  background: var(--surface-2);
+  padding: 16px;
+  background: var(--surface);
   display: grid;
   gap: 12px;
   min-width: 0;
+  box-shadow: var(--shadow-soft);
+}
+
+.receive-account-card {
+  border-left: 4px solid var(--accent);
+}
+
+.receive-account-card[data-family="btc"] {
+  border-left-color: var(--accent-2);
 }
 
 .chain-account-top,
@@ -1303,6 +1384,136 @@ button:active {
   white-space: nowrap;
 }
 
+.qr-modal-open {
+  overflow: hidden;
+}
+
+.address-qr-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.address-qr-modal[hidden] {
+  display: none;
+}
+
+.address-qr-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.56);
+  backdrop-filter: blur(5px);
+}
+
+.address-qr-card {
+  position: relative;
+  width: min(430px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+  background: var(--surface);
+  box-shadow: 0 24px 72px rgba(17, 24, 39, 0.26);
+  display: grid;
+  gap: 16px;
+}
+
+.address-qr-header,
+.address-qr-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.address-qr-header h2 {
+  margin: 4px 0 0;
+  font-size: 1.4rem;
+  line-height: 1.15;
+}
+
+.address-qr-code {
+  width: min(100%, 340px);
+  aspect-ratio: 1;
+  justify-self: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  background: #ffffff;
+  display: grid;
+  place-items: center;
+}
+
+.address-qr-code svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.address-qr-error {
+  color: var(--bad);
+  font-weight: 800;
+  text-align: center;
+}
+
+.address-qr-address {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.address-qr-actions button {
+  width: 100%;
+}
+
+.chain-action-card {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.chain-action-card .panel-header {
+  border-radius: 8px 8px 0 0;
+}
+
+.chain-action-card .native-send-form,
+.chain-action-card .native-send-detail,
+.chain-action-card .token-send-selected {
+  margin-inline: 14px;
+}
+
+.chain-action-card .native-send-form {
+  grid-template-columns: 1fr;
+}
+
+.chain-action-card .native-send-form button {
+  width: 100%;
+}
+
+.chain-action-card .native-send-detail {
+  margin-bottom: 14px;
+}
+
+.chain-action-group[data-family="evm"] .token-send-panel {
+  grid-column: 1 / -1;
+}
+
 .btc-strategy {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1341,13 +1552,6 @@ button:active {
 
 .btc-strategy-item strong {
   overflow-wrap: anywhere;
-}
-
-.native-send-panel,
-.btc-send-panel,
-.token-send-panel {
-  grid-column: span 6;
-  order: 30;
 }
 
 .defi-browser-panel {
@@ -3068,12 +3272,10 @@ body[data-pending-review="true"] .review-panel {
   .wallet-home-panel,
   .defi-home-panel,
   .recovery-home-panel,
-  .multichain-panel,
+  .chain-actions-panel,
   .vault-account-panel,
   .rpc-health-panel,
   .portfolio-panel,
-  .native-send-panel,
-  .token-send-panel,
   .defi-browser-panel,
   .session-panel,
   .compatibility-panel,
@@ -3088,7 +3290,9 @@ body[data-pending-review="true"] .review-panel {
     grid-column: 1 / -1;
   }
 
-  .multichain-accounts {
+  .home-chain-grid,
+  .chain-action-grid,
+  .btc-chain-action-grid {
     grid-template-columns: 1fr;
   }
 
@@ -3577,15 +3781,19 @@ button:hover {
   gap: 14px;
 }
 
-.home-product-grid {
+.wallet-home-experience {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.65fr);
+  grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
+  grid-template-areas:
+    "hero chains"
+    "next chains";
   gap: 18px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .account-card,
 .home-signal-card,
+.wallet-chain-panel,
 .defi-hero,
 .recovery-hero,
 .panel,
@@ -3595,37 +3803,32 @@ button:hover {
   border-radius: 8px;
 }
 
-.account-card {
-  position: relative;
-  min-height: 330px;
-  display: grid;
-  align-content: space-between;
-  gap: 26px;
-  overflow: hidden;
-  border: 1px solid #20291f;
-  padding: 24px;
-  background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.1), transparent 36%),
-    linear-gradient(160deg, #182018 0%, #20271f 56%, #0f4b3b 100%);
-  color: #fbfff9;
-  box-shadow: 0 28px 60px rgba(20, 24, 18, 0.18);
+.wallet-hero-card {
+  grid-area: hero;
 }
 
-.account-card::after {
+.account-card {
+  position: relative;
+  min-height: 360px;
+  display: grid;
+  align-content: space-between;
+  gap: 22px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  padding: 26px;
+  background:
+    linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(37, 99, 235, 0.08) 58%, rgba(161, 92, 0, 0.08)),
+    var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.account-card::before {
   content: "";
   position: absolute;
-  inset: auto 24px 24px auto;
-  width: 116px;
-  height: 76px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
-  background:
-    repeating-linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.18) 0 1px,
-      transparent 1px 9px
-    );
-  opacity: 0.62;
+  inset: 0 0 auto;
+  height: 5px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--warn));
 }
 
 .account-card-top {
@@ -3638,67 +3841,301 @@ button:hover {
 }
 
 .account-card-top .eyebrow {
-  color: rgba(251, 255, 249, 0.7);
+  color: var(--muted);
 }
 
-.account-card-top span:last-child {
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 999px;
-  padding: 6px 10px;
-  color: #e9fff0;
-  font-size: 12px;
-  font-weight: 800;
+.account-card-top .product-state-pill {
+  border: 1px solid var(--line);
 }
 
-.account-card-balance {
+.wallet-hero-body {
   position: relative;
   z-index: 1;
   display: grid;
-  gap: 9px;
-  max-width: 620px;
+  grid-template-columns: minmax(0, 1fr) minmax(156px, 0.34fr);
+  gap: 22px;
+  align-items: center;
 }
 
-.account-card-balance > span {
-  color: rgba(251, 255, 249, 0.64);
+.account-card-summary {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  max-width: 720px;
+}
+
+.account-card-summary > span {
+  color: var(--muted);
   font-size: 12px;
   font-weight: 800;
 }
 
-.account-card-balance h2 {
+.account-card-summary h2 {
   margin: 0;
   overflow-wrap: anywhere;
-  color: #ffffff;
-  font-size: 48px;
-  line-height: 1;
+  color: var(--text);
+  font-size: 42px;
+  line-height: 1.02;
   font-weight: 850;
 }
 
-.account-card-balance p {
+.account-card-summary p {
   margin: 0;
-  max-width: 520px;
+  max-width: 680px;
   overflow-wrap: anywhere;
-  color: rgba(251, 255, 249, 0.72);
-  font-size: 14px;
+  color: var(--muted);
+  font-size: 15px;
 }
 
-.account-card .product-actions {
+.wallet-hero-visual {
+  min-width: 148px;
+  display: grid;
+  gap: 12px;
+  align-self: stretch;
+  align-content: center;
+}
+
+.wallet-rail,
+.wallet-plate {
+  border: 1px solid rgba(198, 208, 220, 0.72);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 12px 28px rgba(17, 24, 39, 0.07);
+}
+
+.wallet-rail {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 9px;
+  padding: 10px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.wallet-rail i {
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.wallet-plate {
+  display: grid;
+  gap: 9px;
+  padding: 16px;
+}
+
+.wallet-plate span {
+  display: block;
+  height: 12px;
+  border-radius: 999px;
+  background: #d7e0ea;
+}
+
+.wallet-plate span:nth-child(2) {
+  width: 78%;
+  background: #c8d7e8;
+}
+
+.wallet-plate span:nth-child(3) {
+  width: 56%;
+  background: #d6e5de;
+}
+
+.home-chain-grid {
   position: relative;
   z-index: 1;
-  width: min(520px, 100%);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.wallet-chain-panel {
+  grid-area: chains;
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line);
+  padding: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.wallet-chain-panel .home-chain-grid {
+  grid-template-columns: 1fr;
+}
+
+.consumer-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.consumer-section-header h2 {
+  margin: 4px 0 0;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.consumer-section-header > span:last-child {
+  flex: none;
+  max-width: 48%;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: var(--surface-2);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 830;
+}
+
+.home-chain-card {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  padding: 15px;
+  background: var(--surface-2);
+  box-shadow: none;
+}
+
+.home-chain-card[data-family="btc"] {
+  border-left-color: var(--accent-2);
+}
+
+.home-chain-card[data-tone="warn"] {
+  border-left-color: var(--warn);
+}
+
+.home-chain-card[data-tone="idle"] {
+  border-left-color: var(--line-strong);
+}
+
+.home-chain-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.home-chain-heading,
+.home-chain-heading > div,
+.home-chain-card code,
+.home-chain-card p {
+  min-width: 0;
+}
+
+.home-chain-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.home-chain-mark {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 880;
+}
+
+.home-chain-card[data-family="btc"] .home-chain-mark {
+  background: var(--accent-2);
+}
+
+.home-chain-card-header span,
+.home-chain-card-header small {
+  display: block;
+}
+
+.home-chain-card-header span {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.home-chain-card-header small,
+.home-chain-card p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.home-chain-card-header strong {
+  max-width: 42%;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  text-align: right;
+}
+
+.home-chain-card code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.home-chain-card p {
+  min-height: 38px;
+  margin: 0;
+}
+
+.home-chain-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.home-chain-actions button {
+  min-width: 0;
+  padding-inline: 10px;
+  white-space: nowrap;
+}
+
+.account-card .product-actions,
+.wallet-hero-actions {
+  position: relative;
+  z-index: 1;
+  width: min(620px, 100%);
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .account-card .product-actions button {
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.1);
-  color: #fafff8;
+  border-color: var(--line);
+  background: var(--surface-2);
+  color: var(--text);
   box-shadow: none;
 }
 
 .account-card .product-actions button:first-child {
-  border-color: #ffffff;
-  background: #ffffff;
-  color: #162016;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+@media (max-width: 900px) {
+  .wallet-home-experience {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "hero"
+      "chains"
+      "next";
+  }
 }
 
 .home-signal-card {
@@ -3709,6 +4146,11 @@ button:hover {
   padding: 22px;
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.wallet-next-card {
+  grid-area: next;
+  min-height: auto;
 }
 
 .home-signal-card > strong,
@@ -3750,7 +4192,7 @@ button:hover {
 .home-signal-card p {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.55;
 }
 
@@ -3760,16 +4202,16 @@ button:hover {
 
 .home-signal-card .product-status-grid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 0;
-  border-top: 1px solid var(--line);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  border-top: 0;
 }
 
 .home-signal-card .product-status-grid article {
-  border: 0;
+  border: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  padding: 13px 0;
-  background: transparent;
+  padding: 12px;
+  background: var(--surface-2);
   box-shadow: none;
 }
 
@@ -3778,15 +4220,15 @@ button:hover {
 }
 
 .account-card .product-actions button[data-mode="disconnect"] {
-  border-color: rgba(255, 255, 255, 0.22);
-  background: rgba(255, 255, 255, 0.1);
-  color: #fafff8;
+  border-color: rgba(180, 35, 24, 0.3);
+  background: #fff4f2;
+  color: var(--bad);
 }
 
 body .account-card .product-actions button[data-mode="disconnect"] {
-  border-color: rgba(255, 255, 255, 0.22);
-  background: rgba(255, 255, 255, 0.1);
-  color: #fafff8;
+  border-color: rgba(180, 35, 24, 0.3);
+  background: #fff4f2;
+  color: var(--bad);
 }
 
 .product-actions {
@@ -3818,13 +4260,7 @@ body .account-card .product-actions button[data-mode="disconnect"] {
 
 .portfolio-panel {
   grid-column: span 7;
-  order: 20;
-}
-
-.native-send-panel,
-.token-send-panel {
-  grid-column: span 6;
-  order: 30;
+  order: 18;
 }
 
 .rpc-health-panel {
@@ -4045,15 +4481,14 @@ body .account-card .product-actions button[data-mode="disconnect"] {
     display: none;
   }
 
-  .home-product-grid,
+  .wallet-home-experience,
   .app-card-grid {
     grid-template-columns: 1fr;
   }
 
   .workspace-panel,
   .portfolio-panel,
-  .native-send-panel,
-  .token-send-panel,
+  .chain-actions-panel,
   .rpc-health-panel,
   .vault-account-panel,
   .create-vault-panel,
@@ -4086,11 +4521,30 @@ body .account-card .product-actions button[data-mode="disconnect"] {
     padding: 18px;
   }
 
-  .account-card-balance h2 {
-    font-size: 34px;
+  .account-card-summary h2 {
+    font-size: 28px;
+  }
+
+  .wallet-hero-body {
+    grid-template-columns: 1fr;
+  }
+
+  .wallet-hero-visual {
+    display: none;
+  }
+
+  .consumer-section-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .consumer-section-header > span:last-child {
+    max-width: 100%;
+    text-align: left;
   }
 
   .account-card .product-actions,
+  .home-chain-actions,
   .product-actions,
   .recovery-product-grid,
   .journey-steps {
