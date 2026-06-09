@@ -141,6 +141,23 @@ const recoveryHomePack = document.querySelector("#recovery-home-pack");
 const recoveryHomePlacement = document.querySelector("#recovery-home-placement");
 const recoveryHomeDrill = document.querySelector("#recovery-home-drill");
 const recoveryPanel = document.querySelector(".recovery-panel");
+const recoverVaultPanel = document.querySelector(".recover-vault-panel");
+const createVaultPanel = document.querySelector(".create-vault-panel");
+const physicalBackupPanel = document.querySelector(".physical-backup-panel");
+const physicalBackupPath = document.querySelector("#physical-backup-path");
+const physicalBackupOutputDir = document.querySelector("#physical-backup-output-dir");
+const physicalBackupSummary = document.querySelector("#physical-backup-summary");
+const physicalBackupStepFile = document.querySelector("#physical-backup-step-file");
+const physicalBackupStepWrite = document.querySelector("#physical-backup-step-write");
+const physicalBackupStepRead = document.querySelector("#physical-backup-step-read");
+const physicalBackupWriteSummary = document.querySelector("#physical-backup-write-summary");
+const physicalBackupReadSummary = document.querySelector("#physical-backup-read-summary");
+const physicalBackupFlashrom = document.querySelector("#physical-backup-flashrom");
+const physicalBackupChip = document.querySelector("#physical-backup-chip");
+const physicalBackupSpispeed = document.querySelector("#physical-backup-spispeed");
+const physicalBackupConfirm = document.querySelector("#physical-backup-confirm");
+const physicalBackupStatus = document.querySelector("#physical-backup-status");
+const physicalBackupReadStatus = document.querySelector("#physical-backup-read-status");
 const restoreStepFiles = document.querySelector("#restore-step-files");
 const restoreStepWrite = document.querySelector("#restore-step-write");
 const restoreWriteSummary = document.querySelector("#restore-write-summary");
@@ -195,6 +212,12 @@ let activeCompatibilityChecks = new Set();
 let creatingVault = false;
 let createVaultCompleted = false;
 let recoveringVault = false;
+let writingPhysicalBackup = false;
+let readingPhysicalBackup = false;
+let physicalBackupWriteCompleted = false;
+let physicalBackupReadCompleted = false;
+let physicalBackupStatusState = "idle";
+let physicalBackupReadStatusState = "idle";
 let walletConnectionPending = null;
 let walletConnectionOperationId = 0;
 let walletConnectionError = null;
@@ -239,6 +262,8 @@ const TRANSACTION_ACTIVITY_FINAL_STATUSES = new Set([
 ]);
 const BACKUP_PLACEMENT_STORAGE_KEY = "framkey.backupPlacement.v1";
 const WORKSPACE_STORAGE_KEY = "framkey.workspace.v1";
+const SAFETY_TASK_STORAGE_KEY = "framkey.safetyTask.v1";
+const SAFETY_TASK_KEYS = new Set(["rom", "restore", "create"]);
 const RECOVERY_SCHEMES = {
   cloudPhysical: {
     key: "cloudPhysical",
@@ -306,6 +331,7 @@ let activeRecoverySchemeKey = "cloudPhysical";
 let selectedRecoverySlotFiles = {};
 let backupPlacementState = loadBackupPlacementState();
 let activeWorkspace = loadWorkspaceSelection();
+let activeSafetyTask = loadSafetyTaskSelection();
 
 const refreshStatusButton = document.querySelector("#refresh-status");
 const refreshRpcHealthButton = document.querySelector("#refresh-rpc-health");
@@ -335,6 +361,15 @@ const refreshConnectionsButton = document.querySelector("#refresh-connections");
 const refreshProviderEventsButton = document.querySelector("#refresh-provider-events");
 const clearProviderEventsButton = document.querySelector("#clear-provider-events");
 const createVaultButton = document.querySelector("#create-vault");
+const safetyActionPhysicalBackupButton = document.querySelector("#safety-action-physical-backup");
+const safetyActionRecoverButton = document.querySelector("#safety-action-recover");
+const safetyActionCreateButton = document.querySelector("#safety-action-create");
+const safetyTaskButtons = Array.from(document.querySelectorAll("[data-safety-task]"));
+const safetyPanels = Array.from(document.querySelectorAll("[data-safety-panel]"));
+const choosePhysicalBackupFileButton = document.querySelector("#choose-physical-backup-file");
+const writePhysicalBackupButton = document.querySelector("#write-physical-backup");
+const choosePhysicalBackupOutputDirButton = document.querySelector("#choose-physical-backup-output-dir");
+const readPhysicalBackupButton = document.querySelector("#read-physical-backup");
 const chooseRecoveryOutDirButton = document.querySelector("#choose-recovery-out-dir");
 const clearRecoveryFilesButton = document.querySelector("#clear-recovery-files");
 const recoverVaultButton = document.querySelector("#recover-vault");
@@ -400,6 +435,18 @@ function loadWorkspaceSelection() {
   return "wallet";
 }
 
+function loadSafetyTaskSelection() {
+  try {
+    const value = window.localStorage?.getItem(SAFETY_TASK_STORAGE_KEY);
+    if (SAFETY_TASK_KEYS.has(value)) {
+      return value;
+    }
+  } catch {
+    // Local storage is optional in bundled WebViews.
+  }
+  return "rom";
+}
+
 function setActiveWorkspace(workspace, { persist = true } = {}) {
   if (!workspaceTabs.some((tab) => tab.dataset.workspaceTab === workspace)) {
     workspace = "wallet";
@@ -413,6 +460,7 @@ function setActiveWorkspace(workspace, { persist = true } = {}) {
   for (const panel of workspacePanels) {
     panel.hidden = !panelWorkspaces(panel).includes(workspace);
   }
+  setActiveSafetyTask(activeSafetyTask, { persist: false });
   if (persist) {
     try {
       window.localStorage?.setItem(WORKSPACE_STORAGE_KEY, workspace);
@@ -421,6 +469,30 @@ function setActiveWorkspace(workspace, { persist = true } = {}) {
     }
   }
   window.scrollTo(0, 0);
+}
+
+function setActiveSafetyTask(task, { persist = true } = {}) {
+  if (!SAFETY_TASK_KEYS.has(task)) {
+    task = "rom";
+  }
+  activeSafetyTask = task;
+  for (const button of safetyTaskButtons) {
+    const selected = button.dataset.safetyTask === task;
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
+    button.dataset.selected = selected ? "true" : "false";
+  }
+  for (const panel of safetyPanels) {
+    const visible =
+      panel.dataset.safetyPanel === task && panelWorkspaces(panel).includes(activeWorkspace);
+    panel.hidden = !visible;
+  }
+  if (persist) {
+    try {
+      window.localStorage?.setItem(SAFETY_TASK_STORAGE_KEY, task);
+    } catch {
+      // Selection persistence is a convenience, not runtime state.
+    }
+  }
 }
 
 function panelWorkspaces(panel) {
@@ -560,7 +632,7 @@ function renderWalletProductOverview() {
     authorizingKeychain || connectionPending || Boolean(latestStatus?.wallet?.mock) || !helperReady;
   walletActionSendButton.textContent = `Send ${nativeSymbolForStatus(latestStatus)}`;
   walletActionSendButton.disabled = !address || connectionPending;
-  walletActionDefiButton.textContent = "Apps";
+  walletActionDefiButton.textContent = pending.length > 0 ? "Review approval" : "Apps";
   renderWalletHomeChains({ address, connectionPending });
   renderMultichainAccounts();
 }
@@ -2023,6 +2095,328 @@ function resetCreateCompletion() {
   updateCreateVaultActionState();
 }
 
+function scrollToSafetyPanel(panel) {
+  if (panel?.dataset?.safetyPanel) {
+    setActiveSafetyTask(panel.dataset.safetyPanel);
+  }
+  setActiveWorkspace("recovery");
+  panel?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function selectedPhysicalBackupPath() {
+  return physicalBackupPath.value.trim();
+}
+
+function selectedPhysicalBackupOutputDir() {
+  return physicalBackupOutputDir.value.trim();
+}
+
+function physicalBackupReady() {
+  return Boolean(selectedPhysicalBackupPath()) && physicalBackupConfirm.checked;
+}
+
+function physicalBackupReadReady() {
+  return Boolean(selectedPhysicalBackupOutputDir());
+}
+
+function updatePhysicalBackupActionState() {
+  const hasPath = Boolean(selectedPhysicalBackupPath());
+  const hasOutputDir = Boolean(selectedPhysicalBackupOutputDir());
+  physicalBackupSummary.textContent = hasPath ? fileNameFromPath(selectedPhysicalBackupPath()) : "No file selected";
+  physicalBackupStepFile.dataset.state = hasPath ? "good" : "idle";
+  physicalBackupStepWrite.dataset.state = hasPath ? (physicalBackupConfirm.checked ? "warn" : "active") : "locked";
+  physicalBackupStepRead.dataset.state = hasOutputDir
+    ? physicalBackupReadStatusState === "error"
+      ? "bad"
+      : physicalBackupReadCompleted
+        ? "good"
+        : "active"
+    : "idle";
+  physicalBackupWriteSummary.textContent = hasPath
+    ? physicalBackupWriteCompleted
+      ? "Exact readback verified"
+      : physicalBackupStatusState === "error"
+        ? "Write failed"
+      : physicalBackupConfirm.checked
+        ? "Ready to write the connected ROM"
+      : "Confirm replacement before writing"
+    : "Choose a backup file first";
+  physicalBackupReadSummary.textContent = hasOutputDir
+    ? physicalBackupReadCompleted
+      ? "ROM backup saved"
+      : physicalBackupReadStatusState === "error"
+        ? "Read failed"
+        : "Ready to read the connected ROM"
+    : "Choose an output directory";
+  writePhysicalBackupButton.disabled =
+    writingPhysicalBackup || readingPhysicalBackup || physicalBackupWriteCompleted || !physicalBackupReady();
+  if (writingPhysicalBackup) {
+    writePhysicalBackupButton.textContent = "Writing...";
+  } else if (physicalBackupWriteCompleted) {
+    writePhysicalBackupButton.textContent = "Verified";
+  } else {
+    writePhysicalBackupButton.textContent = physicalBackupReady() ? "Write and verify" : "Confirm write";
+  }
+  readPhysicalBackupButton.disabled =
+    writingPhysicalBackup || readingPhysicalBackup || physicalBackupReadCompleted || !physicalBackupReadReady();
+  if (readingPhysicalBackup) {
+    readPhysicalBackupButton.textContent = "Reading...";
+  } else if (physicalBackupReadCompleted) {
+    readPhysicalBackupButton.textContent = "Saved";
+  } else {
+    readPhysicalBackupButton.textContent = physicalBackupReadReady() ? "Read ROM" : "Choose folder";
+  }
+}
+
+function resetPhysicalBackupCompletion() {
+  physicalBackupWriteCompleted = false;
+  physicalBackupReadCompleted = false;
+  setPhysicalBackupStatus("idle");
+  setPhysicalBackupReadStatus("idle");
+  updatePhysicalBackupActionState();
+}
+
+async function choosePhysicalBackupFile() {
+  const response = await invokeCommand("framkey_pick_physical_backup_file");
+  const path = response?.result?.paths?.[0];
+  if (path && !response.result.cancelled) {
+    physicalBackupPath.value = path;
+    physicalBackupWriteCompleted = false;
+    setPhysicalBackupStatus("idle");
+    updatePhysicalBackupActionState();
+  }
+}
+
+async function choosePhysicalBackupOutputDir() {
+  const response = await invokeCommand("framkey_pick_physical_backup_out_dir");
+  const path = response?.result?.paths?.[0];
+  if (path && !response.result.cancelled) {
+    physicalBackupOutputDir.value = path;
+    physicalBackupReadCompleted = false;
+    setPhysicalBackupReadStatus("idle");
+    updatePhysicalBackupActionState();
+  }
+}
+
+async function writePhysicalBackup() {
+  if (writingPhysicalBackup) {
+    return;
+  }
+  if (!selectedPhysicalBackupPath()) {
+    renderError(new Error("Choose a physical backup file first"));
+    updatePhysicalBackupActionState();
+    return;
+  }
+  if (!physicalBackupConfirm.checked) {
+    renderError(new Error("Confirm the CH347 ROM replacement before writing"));
+    updatePhysicalBackupActionState();
+    return;
+  }
+
+  setPhysicalBackupBusy(true);
+  try {
+    const response = await invokeCommand("framkey_write_ch347_backup", {
+      request: {
+        backupPath: selectedPhysicalBackupPath(),
+        flashromPath: physicalBackupFlashrom.value.trim() || null,
+        chip: physicalBackupChip.value.trim() || null,
+        spispeed: physicalBackupSpispeed.value || null,
+        confirmWrite: physicalBackupConfirm.checked,
+      },
+    });
+    if (response?.error) {
+      throw new Error(response.error.message ?? "CH347 backup write failed");
+    }
+    if (!response?.result?.verified) {
+      throw new Error("CH347 backup write did not return a verified readback");
+    }
+    physicalBackupWriteCompleted = true;
+    setPhysicalBackupStatus("success", { result: response.result });
+  } catch (error) {
+    physicalBackupWriteCompleted = false;
+    setPhysicalBackupStatus("error", {
+      message: operationErrorMessage(error),
+    });
+    throw error;
+  } finally {
+    setPhysicalBackupBusy(false);
+  }
+}
+
+async function readPhysicalBackup() {
+  if (readingPhysicalBackup) {
+    return;
+  }
+  if (!selectedPhysicalBackupOutputDir()) {
+    renderError(new Error("Choose a CH347 ROM read output directory first"));
+    updatePhysicalBackupActionState();
+    return;
+  }
+
+  setPhysicalBackupReadBusy(true);
+  try {
+    const response = await invokeCommand("framkey_read_ch347_backup", {
+      request: {
+        outputDir: selectedPhysicalBackupOutputDir(),
+        flashromPath: physicalBackupFlashrom.value.trim() || null,
+        chip: physicalBackupChip.value.trim() || null,
+        spispeed: physicalBackupSpispeed.value || null,
+      },
+    });
+    if (response?.error) {
+      throw new Error(response.error.message ?? "CH347 ROM read failed");
+    }
+    if (!response?.result?.verified) {
+      throw new Error("CH347 ROM read did not return verified output");
+    }
+    physicalBackupReadCompleted = true;
+    setPhysicalBackupReadStatus("success", { result: response.result });
+  } catch (error) {
+    physicalBackupReadCompleted = false;
+    setPhysicalBackupReadStatus("error", {
+      message: operationErrorMessage(error),
+    });
+    throw error;
+  } finally {
+    setPhysicalBackupReadBusy(false);
+  }
+}
+
+function setPhysicalBackupBusy(busy) {
+  writingPhysicalBackup = busy;
+  choosePhysicalBackupFileButton.disabled = busy;
+  choosePhysicalBackupOutputDirButton.disabled = busy || readingPhysicalBackup;
+  physicalBackupFlashrom.disabled = busy;
+  physicalBackupChip.disabled = busy;
+  physicalBackupSpispeed.disabled = busy;
+  physicalBackupConfirm.disabled = busy;
+  updatePhysicalBackupActionState();
+  if (busy) {
+    setPhysicalBackupStatus("busy");
+  }
+}
+
+function setPhysicalBackupReadBusy(busy) {
+  readingPhysicalBackup = busy;
+  choosePhysicalBackupFileButton.disabled = busy || writingPhysicalBackup;
+  choosePhysicalBackupOutputDirButton.disabled = busy;
+  physicalBackupFlashrom.disabled = busy;
+  physicalBackupChip.disabled = busy;
+  physicalBackupSpispeed.disabled = busy;
+  physicalBackupConfirm.disabled = busy || writingPhysicalBackup;
+  updatePhysicalBackupActionState();
+  if (busy) {
+    setPhysicalBackupReadStatus("busy");
+  }
+}
+
+function setPhysicalBackupStatus(state, options = {}) {
+  physicalBackupStatusState = state;
+  physicalBackupStatus.hidden = false;
+  physicalBackupStatus.dataset.tone = state;
+  physicalBackupStatus.replaceChildren();
+
+  if (state === "busy") {
+    physicalBackupWriteSummary.textContent = "Writing and reading back the connected ROM";
+    physicalBackupStatus.append(
+      operationStatusHeader("Writing CH347 ROM"),
+      operationProgressBar(),
+      textSpan("Approve the macOS administrator prompt, then keep the programmer and ROM connected."),
+    );
+    return;
+  }
+
+  if (state === "success") {
+    const result = options.result ?? {};
+    const sizeLabel =
+      Number(result.payloadSize) > 0 && Number(result.romImageSize) > Number(result.payloadSize)
+        ? `${formatByteCount(result.payloadSize)} payload -> ${formatByteCount(result.romImageSize)} ROM`
+        : formatByteCount(result.saveSize);
+    physicalBackupWriteSummary.textContent = "Exact readback verified";
+    physicalBackupStatus.append(
+      operationStatusHeader("Write verified"),
+      textSpan(
+        `${sizeLabel} · ${shortHash(result.backupBlake3)} · ${
+          result.chipDetection === "override" ? result.chip : "auto-detect"
+        } · ${result.spiSpeed}`,
+      ),
+    );
+    return;
+  }
+
+  if (state === "error") {
+    physicalBackupWriteSummary.textContent = "Write failed";
+    physicalBackupStatus.append(
+      operationStatusHeader("CH347 write failed"),
+      textSpan(options.message ?? "Check the error details and try again."),
+    );
+    return;
+  }
+
+  physicalBackupStatus.hidden = true;
+}
+
+function setPhysicalBackupReadStatus(state, options = {}) {
+  physicalBackupReadStatusState = state;
+  physicalBackupReadStatus.hidden = false;
+  physicalBackupReadStatus.dataset.tone = state;
+  physicalBackupReadStatus.replaceChildren();
+
+  if (state === "busy") {
+    physicalBackupReadSummary.textContent = "Reading and extracting the connected ROM";
+    physicalBackupReadStatus.append(
+      operationStatusHeader("Reading CH347 ROM"),
+      operationProgressBar(),
+      textSpan("Approve the macOS administrator prompt, then keep the programmer and ROM connected."),
+    );
+    return;
+  }
+
+  if (state === "success") {
+    const result = options.result ?? {};
+    const extracted = Boolean(result.layoutParsed);
+    const sizeLabel =
+      extracted && Number(result.romImageSize) > Number(result.payloadSize)
+        ? `${formatByteCount(result.payloadSize)} payload <- ${formatByteCount(result.romImageSize)} ROM`
+        : `${formatByteCount(result.outputSize)} full ROM`;
+    physicalBackupReadSummary.textContent = extracted ? "Backup payload extracted" : "Full ROM image saved";
+    physicalBackupReadStatus.append(
+      operationStatusHeader(extracted ? "Backup extracted" : "ROM image saved"),
+      textSpan(
+        `${sizeLabel} · ${shortHash(result.outputBlake3)} · ${
+          result.chipDetection === "override" ? result.chip : "auto-detect"
+        } · ${result.spiSpeed}`,
+      ),
+      operationStatusPathAction(result.outputPath),
+    );
+    return;
+  }
+
+  if (state === "error") {
+    physicalBackupReadSummary.textContent = "Read failed";
+    physicalBackupReadStatus.append(
+      operationStatusHeader("CH347 read failed"),
+      textSpan(options.message ?? "Check the error details and try again."),
+    );
+    return;
+  }
+
+  physicalBackupReadStatus.hidden = true;
+}
+
+function operationStatusPathAction(path) {
+  const row = document.createElement("div");
+  row.className = "operation-status-actions";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Show";
+  button.addEventListener("click", () => {
+    revealPath(path).catch(() => {});
+  });
+  row.append(button);
+  return row;
+}
+
 function operationStatusHeader(text) {
   const header = document.createElement("div");
   header.className = "operation-status-header";
@@ -2054,6 +2448,13 @@ function operationErrorMessage(error) {
   }
   if (message.includes("exited with signal: 9") || message.includes("before returning JSON")) {
     return "The signing service could not start under macOS code-signing rules. Rebuild and restart FRAMKey, then try again.";
+  }
+  if (
+    message.includes("administrator authorization") ||
+    message.includes("User canceled") ||
+    message.includes("User cancelled")
+  ) {
+    return "macOS did not authorize the CH347 helper. The ROM operation did not run.";
   }
   return message;
 }
@@ -7549,6 +7950,27 @@ function shortHash(value) {
   return `${value.slice(0, 10)}...${value.slice(-8)}`;
 }
 
+function formatByteCount(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "-";
+  }
+  if (bytes < 1024) {
+    return `${bytes} bytes`;
+  }
+  const units = ["KiB", "MiB", "GiB"];
+  let amount = bytes;
+  let unit = "bytes";
+  for (const nextUnit of units) {
+    amount /= 1024;
+    unit = nextUnit;
+    if (Math.abs(amount) < 1024) {
+      break;
+    }
+  }
+  return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${unit}`;
+}
+
 function shortOrigin(value) {
   if (typeof value !== "string") {
     return valueOrDash(value);
@@ -8112,6 +8534,18 @@ clearProviderEventsButton.addEventListener("click", () => {
 createVaultButton.addEventListener("click", () => {
   createVault().catch(() => {});
 });
+safetyActionPhysicalBackupButton?.addEventListener("click", () => {
+  scrollToSafetyPanel(physicalBackupPanel);
+  choosePhysicalBackupFileButton?.focus();
+});
+safetyActionRecoverButton?.addEventListener("click", () => {
+  scrollToSafetyPanel(recoverVaultPanel);
+  restoreSchemeCards[0]?.focus();
+});
+safetyActionCreateButton?.addEventListener("click", () => {
+  scrollToSafetyPanel(createVaultPanel);
+  vaultGeneration?.focus();
+});
 confirmOverwrite.addEventListener("change", () => {
   updateCreateVaultActionState();
 });
@@ -8123,6 +8557,30 @@ recoveryOutDir.addEventListener("input", () => {
 });
 chooseRecoveryOutDirButton.addEventListener("click", () => {
   chooseRecoveryOutDir().catch(() => {});
+});
+choosePhysicalBackupFileButton.addEventListener("click", () => {
+  choosePhysicalBackupFile().catch(() => {});
+});
+writePhysicalBackupButton.addEventListener("click", () => {
+  writePhysicalBackup().catch(() => {});
+});
+choosePhysicalBackupOutputDirButton.addEventListener("click", () => {
+  choosePhysicalBackupOutputDir().catch(() => {});
+});
+readPhysicalBackupButton.addEventListener("click", () => {
+  readPhysicalBackup().catch(() => {});
+});
+physicalBackupFlashrom.addEventListener("input", () => {
+  resetPhysicalBackupCompletion();
+});
+physicalBackupChip.addEventListener("input", () => {
+  resetPhysicalBackupCompletion();
+});
+physicalBackupSpispeed.addEventListener("change", () => {
+  resetPhysicalBackupCompletion();
+});
+physicalBackupConfirm.addEventListener("change", () => {
+  updatePhysicalBackupActionState();
 });
 for (const card of restoreSchemeCards) {
   card.addEventListener("click", () => {
@@ -8171,6 +8629,7 @@ renderRpcHealthBaseline();
 renderTransactionActivityBaseline();
 renderRecoveryPanel();
 updateCreateVaultActionState();
+updatePhysicalBackupActionState();
 renderRecoveryInputStatus();
 setActiveWorkspace(activeWorkspace, { persist: false });
 updateWorkspaceReviewCounts();

@@ -942,6 +942,15 @@ button:active {
   animation: none;
 }
 
+.operation-status-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.operation-status-actions button {
+  min-width: 96px;
+}
+
 .operation-progress {
   position: relative;
   height: 6px;
@@ -4936,7 +4945,8 @@ body {
 }
 
 .defi-home-panel .workspace-command-strip,
-.activity-home-panel .workspace-command-strip {
+.activity-home-panel .workspace-command-strip,
+.recovery-home-panel .workspace-command-strip {
   display: flex;
 }
 
@@ -4950,6 +4960,61 @@ body {
 
 .safety-command-strip {
   border-left: 4px solid var(--warn);
+}
+
+.safety-task-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.15fr) repeat(2, minmax(220px, 0.85fr));
+  gap: 10px;
+}
+
+.safety-task-card {
+  min-width: 0;
+  min-height: 116px;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 12px;
+  background: #ffffff;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.safety-task-card:hover,
+.safety-task-card:focus-visible {
+  border-color: rgba(174, 119, 0, 0.46);
+  box-shadow: 0 10px 24px rgba(45, 45, 40, 0.08);
+}
+
+.safety-task-card[aria-pressed="true"] {
+  border-color: rgba(174, 119, 0, 0.34);
+  border-left-color: var(--warn);
+  background: #fffaf0;
+}
+
+.safety-task-card span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.safety-task-card strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 17px;
+}
+
+.safety-task-card small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .apps-cockpit,
@@ -5539,6 +5604,7 @@ body {
   }
 
   .user-action-grid,
+  .safety-task-grid,
   .compact-progress,
   .compact-status-grid,
   .recovery-set-actions,
@@ -5547,14 +5613,37 @@ body {
   }
 }
 
-/* Recovery is a guided task, not a storage-policy form. */
+/* Safety keeps hardware write, restore, and create actions separate. */
 .recovery-home-panel {
-  display: none;
+  display: grid;
+  grid-column: 1 / -1;
+  order: 0;
 }
 
-.recover-vault-panel {
+.physical-backup-panel,
+.recover-vault-panel,
+.create-vault-panel {
   grid-column: 1 / -1;
-  order: 8;
+  order: 2;
+}
+
+.recovery-panel {
+  grid-column: 1 / -1;
+  order: 4;
+}
+
+.create-vault-panel .panel-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.create-vault-panel .panel-header span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 720;
 }
 
 .restore-flow {
@@ -5898,6 +5987,34 @@ body {
   font-weight: 720;
 }
 
+.physical-backup-flow .restore-step-danger {
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: start;
+}
+
+.physical-backup-options {
+  grid-column: 2 / -1;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.8fr) 128px;
+  gap: 10px;
+  align-items: end;
+  min-width: 0;
+}
+
+.physical-backup-options .field-label {
+  min-width: 0;
+}
+
+.physical-backup-options .small-input {
+  width: 100%;
+}
+
+.physical-backup-flow .restore-confirm-row,
+.physical-backup-flow #write-physical-backup {
+  grid-column: 2 / -1;
+  justify-self: start;
+}
+
 .recovery-panel[data-empty="true"] {
   display: none;
 }
@@ -5960,6 +6077,14 @@ body {
   .restore-slot-grid[data-count="2"],
   .restore-slot-grid[data-count="3"] {
     grid-template-columns: 1fr;
+  }
+
+  .physical-backup-options {
+    grid-template-columns: 1fr;
+  }
+
+  .physical-backup-flow #write-physical-backup {
+    justify-self: stretch;
   }
 }
 

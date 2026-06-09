@@ -683,9 +683,140 @@
               <strong id="recovery-home-drill">Not run</strong>
             </article>
           </div>
+          <div class="safety-task-grid safety-task-selector" aria-label="Safety actions">
+            <button
+              id="safety-action-physical-backup"
+              class="safety-task-card"
+              type="button"
+              data-safety-task="rom"
+              aria-pressed="true"
+            >
+              <span>CH347 ROM</span>
+              <strong>Write / read physical backup</strong>
+              <small>Write a backup file to ROM, or read a ROM back into a backup file.</small>
+            </button>
+            <button
+              id="safety-action-recover"
+              class="safety-task-card"
+              type="button"
+              data-safety-task="restore"
+              aria-pressed="false"
+            >
+              <span>Recovery</span>
+              <strong>Use an existing backup</strong>
+              <small>Choose enough backup files and restore the vault device.</small>
+            </button>
+            <button
+              id="safety-action-create"
+              class="safety-task-card"
+              type="button"
+              data-safety-task="create"
+              aria-pressed="false"
+            >
+              <span>New wallet</span>
+              <strong>Create backups</strong>
+              <small>Generate backup files and write the connected GBA.</small>
+            </button>
+          </div>
         </section>
 
-        <div class="panel recover-vault-panel workspace-panel" data-workspace="recovery">
+        <div class="panel physical-backup-panel workspace-panel" data-workspace="recovery" data-safety-panel="rom">
+          <div class="panel-header">
+            <h2>CH347 ROM physical backup</h2>
+          </div>
+          <input
+            id="physical-backup-path"
+            class="restore-hidden-input"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="Physical backup file path"
+          />
+          <input
+            id="physical-backup-output-dir"
+            class="restore-hidden-input"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            aria-label="Physical backup output directory"
+          />
+          <ol class="restore-flow physical-backup-flow" aria-label="CH347 ROM backup steps">
+            <li id="physical-backup-step-file" class="restore-step" data-state="idle">
+              <span class="restore-step-number">1</span>
+              <div class="restore-step-copy">
+                <strong>Choose backup file</strong>
+                <span id="physical-backup-summary">No file selected</span>
+              </div>
+              <div class="restore-step-actions">
+                <button id="choose-physical-backup-file" type="button">Choose File</button>
+              </div>
+            </li>
+            <li id="physical-backup-step-write" class="restore-step restore-step-danger" data-state="locked">
+              <span class="restore-step-number">2</span>
+              <div class="restore-step-copy">
+                <strong>Write + verify CH347</strong>
+                <span id="physical-backup-write-summary">Choose a backup file first</span>
+              </div>
+              <div class="physical-backup-options">
+                <label class="field-label" for="physical-backup-flashrom">
+                  <span>flashrom</span>
+                  <input
+                    id="physical-backup-flashrom"
+                    class="url-input"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    value="/opt/homebrew/sbin/flashrom"
+                  />
+                </label>
+                <label class="field-label" for="physical-backup-chip">
+                  <span>Chip</span>
+                  <input
+                    id="physical-backup-chip"
+                    class="url-input"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder="Auto-detect"
+                  />
+                </label>
+                <label class="field-label" for="physical-backup-spispeed">
+                  <span>Speed</span>
+                  <select id="physical-backup-spispeed" class="small-input">
+                    <option value="15M" selected>15M</option>
+                    <option value="7.5M">7.5M</option>
+                    <option value="3.75M">3.75M</option>
+                    <option value="1.875M">1.875M</option>
+                    <option value="30M">30M</option>
+                    <option value="60M">60M</option>
+                    <option value="937.5K">937.5K</option>
+                    <option value="468.75K">468.75K</option>
+                  </select>
+                </label>
+              </div>
+              <label class="check-row restore-confirm-row" for="physical-backup-confirm">
+                <input id="physical-backup-confirm" type="checkbox" />
+                <span>Replace the connected ROM with this backup</span>
+              </label>
+              <button id="write-physical-backup" type="button" disabled>Write and verify</button>
+              <div id="physical-backup-status" class="operation-status" data-tone="idle" aria-live="polite" hidden></div>
+            </li>
+            <li id="physical-backup-step-read" class="restore-step" data-state="idle">
+              <span class="restore-step-number">3</span>
+              <div class="restore-step-copy">
+                <strong>Read ROM backup</strong>
+                <span id="physical-backup-read-summary">Choose an output directory</span>
+              </div>
+              <div class="restore-step-actions">
+                <button id="choose-physical-backup-output-dir" type="button">Choose Folder</button>
+                <button id="read-physical-backup" type="button" disabled>Read ROM</button>
+              </div>
+              <div id="physical-backup-read-status" class="operation-status" data-tone="idle" aria-live="polite" hidden></div>
+            </li>
+          </ol>
+        </div>
+
+        <div class="panel recover-vault-panel workspace-panel" data-workspace="recovery" data-safety-panel="restore">
           <div class="panel-header">
             <h2>Use an existing backup</h2>
           </div>
@@ -767,11 +898,13 @@
           </details>
         </div>
 
-        <details class="panel create-vault-panel secondary-task-panel workspace-panel" data-workspace="recovery">
-          <summary>
-            <strong>Create a new wallet</strong>
-            <span>Generate backups, bind this Mac, then write the connected GBA.</span>
-          </summary>
+        <div class="panel create-vault-panel workspace-panel" data-workspace="recovery" data-safety-panel="create">
+          <div class="panel-header">
+            <div>
+              <h2>Create a new wallet</h2>
+              <span>Generate backups, bind this Mac, then write the connected GBA.</span>
+            </div>
+          </div>
           <ol class="restore-flow create-flow" aria-label="New wallet creation steps">
             <li class="restore-step" data-state="active">
               <span class="restore-step-number">1</span>
@@ -824,7 +957,7 @@
               <div id="create-vault-status" class="operation-status" data-tone="idle" aria-live="polite" hidden></div>
             </li>
           </ol>
-        </details>
+        </div>
 
         <div class="panel recovery-panel workspace-panel" data-workspace="recovery">
           <div class="panel-header">
@@ -836,7 +969,7 @@
           </div>
         </div>
 
-        <div class="panel review-panel workspace-panel" data-workspace="wallet defi recovery activity diagnostics">
+        <div class="panel review-panel workspace-panel" data-workspace="defi">
           <div class="panel-header">
             <h2>Pending approvals</h2>
             <div class="panel-actions">
