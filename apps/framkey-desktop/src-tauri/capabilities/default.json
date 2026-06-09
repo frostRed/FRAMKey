@@ -8,6 +8,7 @@
     "allow-framkey-provider-request",
     "allow-framkey-review-queue",
     "allow-framkey-transaction-activity",
+    "allow-framkey-clear-transaction-activity",
     "allow-framkey-recovery-state",
     "allow-framkey-clear-recovery-state",
     "allow-framkey-decide-review-request",

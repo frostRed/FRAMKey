@@ -3077,6 +3077,31 @@ fn transaction_activity_persistence_roundtrips_sanitized_entries() {
 }
 
 #[test]
+fn transaction_activity_clear_persists_empty_history() {
+    let path = unique_test_path("transaction-activity-clear.json");
+    let mut log = TransactionActivityLog::new();
+    log.items.push_front(fixture_activity_entry("expired"));
+    log.write_to_path(&path).unwrap();
+
+    let state = AppState::new_with_transaction_activity_persistence(path.clone());
+    let before = transaction_activity_snapshot(&state, &fixture_config(), false).unwrap();
+    assert_eq!(before["count"], json!(1));
+    assert_eq!(before["persistence"]["itemsRestored"], json!(1));
+
+    assert_eq!(state.clear_transaction_activity().unwrap(), 1);
+    let after = transaction_activity_snapshot(&state, &fixture_config(), false).unwrap();
+    assert_eq!(after["count"], json!(0));
+    assert_eq!(after["items"].as_array().unwrap().len(), 0);
+    assert_eq!(after["persistence"]["restored"], json!(false));
+    assert_eq!(after["persistence"]["itemsRestored"], json!(0));
+
+    let persisted = TransactionActivityLog::read_from_path(&path).unwrap();
+    assert_eq!(persisted.len(), 0);
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
 fn transaction_activity_persistence_corrupt_file_falls_back_to_empty_log() {
     let path = unique_test_path("transaction-activity-corrupt.json");
     if let Some(parent) = path.parent() {

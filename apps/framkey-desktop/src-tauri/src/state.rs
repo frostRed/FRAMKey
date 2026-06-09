@@ -1044,6 +1044,19 @@ impl AppState {
         Ok(guard.snapshot())
     }
 
+    pub(crate) fn clear_transaction_activity(&self) -> Result<usize> {
+        let mut guard = self
+            .transaction_activity
+            .lock()
+            .map_err(|_| anyhow::anyhow!("FRAMKey transaction activity lock poisoned"))?;
+        let cleared = guard.clear();
+        self.persist_transaction_activity_locked(&guard);
+        if let Ok(mut persistence) = self.transaction_activity_persistence.lock() {
+            persistence.mark_cleared();
+        }
+        Ok(cleared)
+    }
+
     pub(crate) fn transaction_activity_persistence_snapshot(
         &self,
     ) -> Result<TransactionActivityPersistenceStatus> {
@@ -1534,6 +1547,12 @@ impl TransactionActivityLog {
     pub(crate) fn snapshot(&self) -> Vec<TransactionActivityEntry> {
         self.items.iter().cloned().collect()
     }
+
+    pub(crate) fn clear(&mut self) -> usize {
+        let cleared = self.items.len();
+        self.items.clear();
+        cleared
+    }
 }
 
 pub(crate) const TRANSACTION_ACTIVITY_PERSISTENCE_VERSION: u32 = 1;
@@ -1592,6 +1611,11 @@ impl TransactionActivityPersistenceStatus {
         self.enabled = true;
         self.last_saved_at_unix_ms = Some(now_unix_ms());
         self.warning = None;
+    }
+
+    pub(crate) fn mark_cleared(&mut self) {
+        self.restored = false;
+        self.items_restored = 0;
     }
 }
 

@@ -644,6 +644,21 @@ pub(crate) async fn framkey_transaction_activity(
 }
 
 #[tauri::command]
+pub(crate) fn framkey_clear_transaction_activity(
+    window: WebviewWindow,
+    state: tauri::State<'_, AppState>,
+) -> ProviderEnvelope {
+    match ensure_trusted_window(&window).and_then(|()| state.clear_transaction_activity()) {
+        Ok(cleared) => {
+            ProviderEnvelope::result("clear_transaction_activity", json!({"cleared": cleared}))
+        }
+        Err(error) => {
+            ProviderEnvelope::error("clear_transaction_activity", error_to_provider_error(error))
+        }
+    }
+}
+
+#[tauri::command]
 pub(crate) fn framkey_decide_review_request(
     window: WebviewWindow,
     state: tauri::State<'_, AppState>,

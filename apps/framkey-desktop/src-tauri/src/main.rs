@@ -43,6 +43,7 @@ fn main() {
             framkey_provider_request,
             framkey_review_queue,
             framkey_transaction_activity,
+            framkey_clear_transaction_activity,
             framkey_decide_review_request,
             framkey_dismiss_review_request,
             framkey_clear_review_queue,

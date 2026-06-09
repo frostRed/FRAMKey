@@ -213,6 +213,12 @@
           "markdownDescription": "Enables the framkey_clear_review_queue command without any pre-configured scope."
         },
         {
+          "description": "Enables the framkey_clear_transaction_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-framkey-clear-transaction-activity",
+          "markdownDescription": "Enables the framkey_clear_transaction_activity command without any pre-configured scope."
+        },
+        {
           "description": "Enables the framkey_create_keychain_vault command without any pre-configured scope.",
           "type": "string",
           "const": "allow-framkey-create-keychain-vault",
@@ -421,6 +427,12 @@
           "type": "string",
           "const": "deny-framkey-clear-review-queue",
           "markdownDescription": "Denies the framkey_clear_review_queue command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the framkey_clear_transaction_activity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-framkey-clear-transaction-activity",
+          "markdownDescription": "Denies the framkey_clear_transaction_activity command without any pre-configured scope."
         },
         {
           "description": "Denies the framkey_create_keychain_vault command without any pre-configured scope.",
