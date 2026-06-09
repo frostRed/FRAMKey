@@ -1,3 +1,270 @@
+# Activity Actions Clarity
+
+Status: completed
+
+## Goal
+
+Make the Activity workspace controls match user expectations: approvals controls only manage pending approvals, while restored transaction history has its own clear action that removes the persisted sanitized activity log.
+
+## Scope
+
+- Rename or state the approvals panel as pending approvals.
+- Disable or clarify the approvals clear button when no approval is waiting.
+- Add a trusted UI-only clear-history action for Recent wallet activity.
+- Clear the in-memory transaction activity log and its persisted local sanitized history file.
+
+## Invariants
+
+- Do not change review capture, approval decisions, signer access, dApp account grants, transaction policy, receipt fetching, or broadcast behavior.
+- Do not expose raw calldata, signatures, RPC credentials, wallet secrets, Keychain material, or recovery material.
+- Clearing history must not clear pending approvals, connected sites, watched assets, recovery state, or wallet connection state.
+- A restored expired review should be removable by the user, but pending approvals remain process-local and are still handled by the review queue.
+
+## Likely Files
+
+- `apps/framkey-desktop/src-tauri/src/main.rs`
+- `apps/framkey-desktop/src-tauri/src/commands.rs`
+- `apps/framkey-desktop/src-tauri/src/state.rs`
+- `apps/framkey-desktop/src-tauri/src/tests.rs`
+- `apps/framkey-desktop/src-tauri/capabilities/default.json`
+- `apps/framkey-desktop/ui/index.html`
+- `apps/framkey-desktop/ui/main.js`
+- `docs/tauri-defi-browser.md`
+- `PLANS.md`
+
+## Verification
+
+- `node --check apps/framkey-desktop/ui/main.js` (passed)
+- `cargo test -p framkey-desktop transaction_activity_clear_persists_empty_history` (passed)
+- Static browser check for pending approval labels and disabled clear buttons (passed)
+- `cargo check -p framkey-desktop` (passed)
+- `cargo build -p framkey-signer-helper && cargo tauri build --debug --bundles app --no-sign` from `apps/framkey-desktop/src-tauri` (passed)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
+
+## Main Risks
+
+- A "Clear" button near approvals can be mistaken for clearing activity history unless the labels and empty-state behavior are explicit.
+- Clearing persistent activity is user-visible data deletion, so the command must stay trusted-main-window only.
+
+# Receive Address QR Modal
+
+Status: completed
+
+## Goal
+
+Make receive cards practical for consumer wallet use by pairing full-address copy with a QR button that shows the selected receive address as a local QR code.
+
+## Scope
+
+- Add a QR action to each enabled receive card.
+- Add a trusted UI modal/dialog for the selected chain address.
+- Generate QR codes locally in the app UI without external services.
+- Keep copy address available from both the receive card and QR dialog.
+
+## Invariants
+
+- Do not send receive addresses to remote QR services or dApp JavaScript.
+- Do not change address derivation, vault unlock, balances, signing, PSBT, EVM provider, or broadcast behavior.
+- Locked cards must not show QR codes for missing/fake addresses.
+- The QR dialog must work for EVM hex addresses and BTC bech32 receive addresses.
+
+## Likely Files
+
+- `apps/framkey-desktop/ui/index.html`
+- `apps/framkey-desktop/ui/qr.js`
+- `apps/framkey-desktop/ui/main.js`
+- `apps/framkey-desktop/ui/styles.css`
+
+## Verification
+
+- `node --check apps/framkey-desktop/ui/main.js` (passed)
+- `node --check apps/framkey-desktop/ui/qr.js` (passed)
+- Node VM QR generation check for EVM, BTC mainnet, and BTC Testnet4 address strings (passed)
+- Static browser check for locked receive-card QR button state and `qr.js` script loading (passed)
+- `cargo check -p framkey-desktop -p framkey-native-host` (passed)
+- `cargo build -p framkey-signer-helper` (passed)
+- `cargo tauri build --debug --bundles app --no-sign` (passed)
+- Packaged-app mock autosmoke with `FRAMKEY_WALLET_MODE=mock_in_memory FRAMKEY_SIMULATION_PROVIDER=local_decoder_only FRAMKEY_DESKTOP_AUTOSMOKE=1 target/debug/bundle/macos/FRAMKey.app/Contents/MacOS/framkey-desktop` (passed; reached `trusted_ui_autosmoke_stopped`)
+- `cargo fmt --all -- --check` (passed)
+- `git diff --check` (passed)
+
+## Main Risks
+
+- QR generation must be deterministic and scannable for the address lengths FRAMKey exposes.
+- The modal must not obscure pending approval surfaces or leave focus-breaking state behind after close.
+
+# Chain-Scoped Wallet Actions
+
+Status: completed
+
+## Goal
+
+Make the Wallet/Home information architecture chain-first: users choose EVM or Bitcoin first, then receive or send inside that chain.
+
+## Scope
+
+- Replace separate Receive and Send sections with EVM and Bitcoin action groups.
+- Put EVM receive, ETH send, and ERC-20 send inside the EVM group.
+- Put BTC receive and BTC send inside the Bitcoin group.
+- Keep full address display and copy actions in the chain groups.
+- Preserve existing send forms, trusted review, BTC PSBT/UTXO, and backend behavior.
+
+## Invariants
+
+- Do not change vault unlock, account derivation, BTC network selection, RPC/balance, PSBT signing, EVM review, or broadcast behavior.
+- BTC receive/send remains trusted wallet UI only and never becomes an EIP-1193 provider capability.
+- Testnet4 remains visible as a BTC account/network where the backend exposes it.
+- Locked and connected states must remain clear without showing fake addresses.
+
+## Likely Files
+
+- `apps/framkey-desktop/ui/index.html`
+- `apps/framkey-desktop/ui/main.js`
+- `apps/framkey-desktop/ui/styles.css`
+
+## Verification
+
+- Static desktop/mobile browser check.
+- `node --check apps/framkey-desktop/ui/main.js`
+- `cargo check -p framkey-desktop`
+- `git diff --check`
+
+## Main Risks
+
+- Chain grouping must not hide the summary or copy affordance.
+- BTC may produce multiple network cards, so layout must handle more than two receive cards gracefully.
+
+# Consumer Home Multichain Dashboard
+
+Status: completed
+
+## Goal
+
+Rework Home from a tool-like status console into a consumer wallet dashboard where EVM and Bitcoin feel like equal first-class accounts, daily actions are obvious, and implementation diagnostics are secondary.
+
+## Scope
+
+- Replace the current status-heavy first viewport with a wallet-oriented hero, simple next action, and peer EVM/Bitcoin account cards.
+- Keep unlock, disconnect, EVM send, DeFi, BTC balance, and BTC send actions wired to the existing trusted UI flows.
+- Move technical status into concise readiness chips and short supporting text instead of large diagnostic grids.
+- Preserve the detailed account, asset, and send panels below the overview for users who need full addresses or explicit forms.
+
+## Invariants
+
+- Do not change card read, Keychain, LocalAuthentication, helper authorization, vault, BTC backend, PSBT, signing, review, or broadcast behavior.
+- BTC remains wallet-UI-only and does not route through EIP-1193, EVM chain ids, SIWE, Permit, or ERC-20 paths.
+- EVM send and dApp access remain trusted-review gated.
+- The Home page must stay responsive, avoid text overlap, and remain usable when locked, connected, degraded, or in mock mode.
+
+## Likely Files
+
+- `apps/framkey-desktop/ui/index.html`
+- `apps/framkey-desktop/ui/main.js`
+- `apps/framkey-desktop/ui/styles.css`
+- `docs/tauri-defi-browser.md`
+- `README.md`
+
+## Verification
+
+- Static browser smoke at desktop and mobile widths.
+- `node --check apps/framkey-desktop/ui/main.js`
+- `cargo check -p framkey-desktop`
+- `cargo tauri build --debug --bundles app --no-sign`
+- Mock UI smoke from the generated app bundle.
+- `git diff --check`
+
+## Main Risks
+
+- Consumer-facing copy must not imply BTC can be requested by dApps or that testnet assets are production funds.
+- Hiding diagnostics from the first viewport must not make signing setup, RPC issues, or pending approvals invisible.
+- The Home overview should reuse existing state renderers so Accounts, Assets, Send, Activity, and System do not drift.
+
+# Home Multichain Information Architecture
+
+Status: completed
+
+## Goal
+
+Rework the trusted Home workspace so EVM and BTC are first-class peers in the first viewport instead of presenting FRAMKey as an ETH-first wallet with BTC as a secondary account detail.
+
+## Scope
+
+- Replace the ETH-balance-dominant Home card with a multichain vault overview.
+- Show EVM and Bitcoin summary cards side by side with equivalent account status, address summary, and primary actions.
+- Keep EVM DeFi/provider behavior and BTC trusted UI-only PSBT behavior distinct.
+- Preserve the detailed Accounts panel below the overview for full addresses, BTC Testnet4, balance refresh, and send controls.
+
+## Invariants
+
+- Do not route BTC through EVM provider, `eth_sendTransaction`, SIWE, Permit, or ERC-20 paths.
+- Do not change Keychain, LocalAuthentication, vault, helper, GBxCart, BTC backend, PSBT, signing, or broadcast behavior.
+- Keep disconnected/error states clear without implying that ETH is the only account surface.
+- Keep controls responsive and avoid text overlap on desktop and mobile.
+
+## Likely Files
+
+- `apps/framkey-desktop/ui/index.html`
+- `apps/framkey-desktop/ui/main.js`
+- `apps/framkey-desktop/ui/styles.css`
+- `README.md`
+- `docs/tauri-defi-browser.md`
+
+## Verification
+
+- `node --check apps/framkey-desktop/ui/main.js`
+- `cargo check -p framkey-desktop`
+- `cargo tauri build --debug --bundles app --no-sign`
+- Mock UI smoke or local app visual check after rebuilding.
+- `git diff --check`
+
+## Main Risks
+
+- The overview must not hide EVM network/RPC readiness or BTC backend/trusted-send constraints.
+- BTC has multiple visible networks while EVM has one active chain, so summary text needs to stay concise.
+- Reusing detailed account-card state in the overview should avoid divergent Home and Accounts behavior.
+
+# GBxCart Port Auto-Discovery Default
+
+Status: completed
+
+## Goal
+
+Make the desktop/native default vault-device path use GBxCart USB auto-discovery instead of a stale hard-coded serial device node, so first Unlock reaches the intended card-read then local-auth sequence on machines where macOS assigns a different `/dev/cu.usbserial-*` suffix.
+
+## Scope
+
+- Change FRAMKey desktop and native-host default GBxCart config from a fixed `/dev/cu.usbserial-210` hint to no port hint, allowing the existing GBxCart VID/PID auto-discovery path to choose the current adapter.
+- Keep `FRAMKEY_GBXCART_PORT` and `~/.framkey/desktop.json` / native-host config `device.port` overrides for explicit local setups or multiple adapters.
+- Update docs to describe auto-detection as the default and the serial port as an optional override.
+
+## Invariants
+
+- Do not change Keychain, LocalAuthentication, helper authorization, vault encryption, or recovery behavior.
+- Do not change GBxCart read/write protocol semantics or save type defaults.
+- Do not remove explicit port override support.
+- Do not log wallet secrets, Keychain material, recovery material, or RPC/backend credentials.
+
+## Likely Files
+
+- `apps/framkey-desktop/src-tauri/src/config.rs`
+- `crates/framkey-native-host/src/config.rs`
+- `README.md`
+- `docs/tauri-defi-browser.md`
+- `docs/browser-bridge.md`
+
+## Verification
+
+- `cargo fmt --all -- --check`
+- `cargo check -p framkey-desktop -p framkey-native-host`
+- Focused config tests or existing package tests that validate default config/device behavior.
+- `git diff --check`
+
+## Main Risks
+
+- On a machine with multiple matching CH340/GBxCart adapters, auto-discovery may choose the first preferred `/dev/cu.*` entry; explicit port config remains the required disambiguation path.
+- Existing docs and examples must not imply `/dev/cu.usbserial-210` is the only supported runtime path.
+
 # BTC Balance Backend and Controlled PSBT Send
 
 Status: completed

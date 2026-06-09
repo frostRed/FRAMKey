@@ -84,7 +84,7 @@ The native host reads optional JSON config from:
 
 Default development behavior assumes:
 
-- GBxCart port `/dev/cu.usbserial-210`
+- GBxCart port auto-detected from the attached GBxCart USB serial adapter
 - save type `gba-sram-fram-512kbit`
 - chain id `0x1`
 - Keychain service `io.framkey.local-kek`
@@ -98,7 +98,6 @@ Example config:
   "chain_id": "0x1",
   "device": {
     "kind": "gbx_cart",
-    "port": "/dev/cu.usbserial-210",
     "save_type": "gba-sram-fram-512kbit"
   },
   "keychain": {
@@ -112,6 +111,8 @@ Example config:
   }
 }
 ```
+
+Omit `device.port` for auto-detection. Add it only to disambiguate multiple adapters or pin a specific macOS serial device.
 
 For fixture testing without GBxCart:
 
