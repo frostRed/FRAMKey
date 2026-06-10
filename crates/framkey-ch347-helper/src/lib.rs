@@ -208,24 +208,39 @@ pub fn read_request_file(path: &Path) -> Result<Ch347HelperRequest> {
 }
 
 pub fn write_response_file(path: &Path, response: &Ch347HelperResponse) -> Result<()> {
-    let payload = serde_json::to_vec_pretty(response)?;
+    let payload = response_json_bytes(response)?;
     let mut file = OpenOptions::new()
         .write(true)
-        .truncate(true)
+        .create_new(true)
         .open(path)
-        .with_context(|| format!("failed to open CH347 helper response {}", path.display()))?;
+        .with_context(|| format!("failed to create CH347 helper response {}", path.display()))?;
     file.write_all(&payload)?;
-    file.write_all(b"\n")?;
     file.flush()?;
     Ok(())
+}
+
+pub fn response_json_bytes(response: &Ch347HelperResponse) -> Result<Vec<u8>> {
+    let mut payload = serde_json::to_vec_pretty(response)?;
+    payload.push(b'\n');
+    Ok(payload)
+}
+
+pub fn read_response_bytes(bytes: &[u8]) -> Result<Ch347HelperResponse> {
+    if bytes.len() > MAX_CH347_HELPER_JSON_BYTES {
+        return Err(FramkeyError::invalid_data(format!(
+            "CH347 helper response exceeds {MAX_CH347_HELPER_JSON_BYTES} bytes"
+        ))
+        .into());
+    }
+    serde_json::from_slice(bytes).context("failed to parse CH347 helper response JSON")
 }
 
 pub fn read_response_file(path: &Path) -> Result<Ch347HelperResponse> {
     let bytes = read_limited_file(path, MAX_CH347_HELPER_JSON_BYTES)
         .with_context(|| format!("failed to read CH347 helper response {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| {
+    read_response_bytes(&bytes).with_context(|| {
         format!(
-            "failed to parse CH347 helper response JSON from {}",
+            "failed to parse CH347 helper response from {}",
             path.display()
         )
     })

@@ -66,6 +66,7 @@ pub(crate) fn create_keychain_vault(
             ),
         }
     }
+    remember_vault_generation_from_signer(&metadata, &keychain_item_id, &device_id)?;
     let signer_helper = helper_report(&config.helper)?;
 
     Ok(json!({
@@ -105,6 +106,9 @@ pub(crate) fn recover_keychain_vault(
     let recovery_paths = request.recovery_file_paths()?;
     let recovery_files = read_recovery_backup_files(&recovery_paths)?;
     let vault_backup = SaveImage::new(read_encrypted_vault_backup_from_bundle(&vault_backup_path)?);
+    let backup_checkpoint = inspect_keychain_vault_checkpoint(vault_backup.as_bytes())
+        .context("recovery vault backup rollback check failed")?;
+    enforce_configured_vault_high_water(&backup_checkpoint)?;
     let vault_backup_blake3 = vault_backup.blake3_hash().to_string();
     let response = recover_keychain_vault_with_helper(
         config,
@@ -126,6 +130,7 @@ pub(crate) fn recover_keychain_vault(
 
     let image = SaveImage::new(save_image);
     write_configured_save_image(config, &image)?;
+    remember_vault_generation_from_signer(&metadata, &keychain_item_id, &device_id)?;
     let signer_helper = helper_report(&config.helper)?;
 
     Ok(json!({

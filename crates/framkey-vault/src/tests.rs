@@ -119,6 +119,15 @@ fn keychain_encrypted_save_image_opens_with_matching_binding() {
     assert!(opened.payload_hash_valid);
     assert_eq!(opened.recovered_shard_count, 0);
 
+    let inspected = inspect_keychain_vault_metadata(&built.save_image).unwrap();
+    assert_eq!(inspected.image_size, DEFAULT_FRAM_SAVE_IMAGE_SIZE);
+    assert_eq!(inspected.generation, 4);
+    assert_eq!(inspected.wallet_id, built.metadata.wallet_id);
+    assert_eq!(inspected.keychain_item_id, item_id);
+    assert_eq!(inspected.device_id, encode_hex(&device_id));
+    assert!(inspected.payload_hash_valid);
+    assert_eq!(inspected.recovered_shard_count, 0);
+
     let wrong_kek = SecretBytes::new([0x5A; 32]);
     assert!(
         open_keychain_encrypted_save_image(&built.save_image, item_id, device_id, &wrong_kek)

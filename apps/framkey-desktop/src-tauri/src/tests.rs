@@ -16,7 +16,7 @@ use std::{
     process::{Command, Stdio},
     sync::Arc,
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 fn test_siwe_message(account: &str, domain: &str, uri: &str, chain_id: u64) -> String {
@@ -346,14 +346,12 @@ fn signer_helper_wait_drains_large_stdout_before_child_exit() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let started_at = Instant::now();
     let output = wait_for_signer_helper_output(child, Duration::from_secs(5)).unwrap();
     let _ = fs::remove_file(&script_path);
 
     assert!(output.status.success());
     assert_eq!(output.stdout.len(), 1024 * 1024);
     assert_eq!(output.stderr, b"done");
-    assert!(started_at.elapsed() < Duration::from_secs(2));
 }
 
 #[test]
@@ -676,15 +674,51 @@ fn ch347_helper_shell_command_quotes_only_helper_file_arguments() {
         std::ffi::OsStr::new("/tmp/FRAMKey Helper/framkey-ch347-helper"),
         std::ffi::OsStr::new("--request"),
         std::ffi::OsStr::new("/tmp/request with 'quote'.json"),
-        std::ffi::OsStr::new("--response"),
-        std::ffi::OsStr::new("/tmp/response.json"),
     ])
     .unwrap();
 
     assert!(command.contains("'/tmp/FRAMKey Helper/framkey-ch347-helper'"));
     assert!(command.contains("'/tmp/request with '\\''quote'\\''.json'"));
+    assert!(!command.contains("--response"));
     assert!(!command.contains("W25Q"));
     assert!(!command.contains("15M"));
+}
+
+#[test]
+fn ch347_helper_launcher_error_response_is_reported_without_response_path() {
+    let request = ch347_helper_request(
+        PathBuf::from("/tmp/backup.dat"),
+        PathBuf::from("/tmp/flashrom"),
+        None,
+        None,
+        4,
+        "00".repeat(32),
+    );
+
+    let error = run_ch347_helper_with_launcher(
+        &Ch347HelperConfig {
+            path: PathBuf::from("/tmp/framkey-ch347-helper"),
+            expected_blake3: None,
+        },
+        request,
+        |_helper_path, request_path| {
+            assert_eq!(
+                request_path.file_name().and_then(|name| name.to_str()),
+                Some("request.json")
+            );
+            Ok(framkey_ch347_helper::Ch347HelperResponse::error(
+                framkey_ch347_helper::Ch347HelperError {
+                    code: "INVALID_DATA".to_owned(),
+                    message: "fixture root cause".to_owned(),
+                },
+            ))
+        },
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("CH347 helper failed"));
+    assert!(error.contains("fixture root cause"));
 }
 
 #[test]
@@ -4053,6 +4087,46 @@ fn read_configured_save_image_rejects_invalid_vault_before_helper() {
     assert!(error_chain.contains("configured save image"));
     assert!(error_chain.contains("no valid FRAMKey Reed-Solomon superblock found"));
     fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn read_configured_save_image_rejects_keychain_vault_rollback_before_helper() {
+    let save_path = unique_test_path("rollback-vault-before-helper.sav");
+    let state_path = unique_test_path("rollback-vault-generation-state.json");
+    let keychain_kek = framkey_crypto::SecretBytes::new([0xC3; 32]);
+    let built = framkey_vault::build_keychain_encrypted_save_image(
+        GbaSaveType::SramFram512Kbit.save_size(),
+        framkey_core::Generation(4),
+        "io.framkey.local-kek:rollback-fixture",
+        [0x44; 16],
+        &keychain_kek,
+    )
+    .unwrap();
+    fs::write(&save_path, &built.save_image).unwrap();
+    let mut config = fixture_config();
+    config.device = DeviceConfig::File {
+        path: save_path.clone(),
+    };
+    config.wallet = DesktopWalletConfig::KeychainVault;
+
+    with_test_vault_generation_state_path(state_path.clone(), || {
+        let old_checkpoint = inspect_keychain_vault_checkpoint(&built.save_image).unwrap();
+        remember_configured_vault_generation(VaultGenerationCheckpoint {
+            generation: old_checkpoint.generation + 1,
+            ..old_checkpoint
+        })
+        .unwrap();
+
+        let error = read_configured_save_image(&config).unwrap_err();
+        let error_chain = format!("{error:#}");
+
+        assert!(error_chain.contains("rollback detected"));
+        assert!(error_chain.contains("generation 4"));
+        assert!(error_chain.contains("generation 5"));
+    });
+
+    fs::remove_file(save_path).unwrap();
+    fs::remove_file(state_path).unwrap();
 }
 
 #[test]

@@ -9,6 +9,7 @@ mod paths;
 mod provider;
 mod recovery_ops;
 mod review;
+mod rollback;
 mod session;
 mod signer_runtime;
 mod state;
@@ -29,6 +30,7 @@ pub(crate) use review::{
     ReviewDecision, ReviewQueue, ReviewRequest, ReviewStatus, dangerous_method_kind,
     network_switch_authorization,
 };
+pub(crate) use rollback::*;
 pub(crate) use session::*;
 pub(crate) use signer_runtime::*;
 pub(crate) use state::*;

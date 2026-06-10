@@ -84,12 +84,22 @@ pub(crate) fn load_keychain_account(config: &DesktopConfig) -> Result<DesktopAcc
 pub(crate) fn read_configured_save_image(config: &DesktopConfig) -> Result<Vec<u8>> {
     let device = config.device.open_device();
     let save_image = device.read_save_image()?.as_bytes().to_vec();
-    inspect_save_image(&save_image).with_context(|| {
-        format!(
-            "configured save image from {} is not a valid FRAMKey vault image",
-            config.device.describe()
-        )
-    })?;
+    if config.wallet == DesktopWalletConfig::KeychainVault {
+        let checkpoint = inspect_keychain_vault_checkpoint(&save_image).with_context(|| {
+            format!(
+                "configured save image from {} is not a valid FRAMKey Keychain vault image",
+                config.device.describe()
+            )
+        })?;
+        enforce_configured_vault_high_water(&checkpoint)?;
+    } else {
+        inspect_save_image(&save_image).with_context(|| {
+            format!(
+                "configured save image from {} is not a valid FRAMKey vault image",
+                config.device.describe()
+            )
+        })?;
+    }
     Ok(save_image)
 }
 
@@ -240,7 +250,14 @@ pub(crate) fn open_keychain_vault_with_helper(
     )?;
 
     match response.into_result() {
-        Ok(SignerHelperResult::OpenKeychainVault(result)) => Ok(result),
+        Ok(SignerHelperResult::OpenKeychainVault(result)) => {
+            remember_vault_generation_from_signer(
+                &result.metadata,
+                &result.keychain_item_id,
+                &result.device_id,
+            )?;
+            Ok(result)
+        }
         Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
@@ -268,7 +285,14 @@ pub(crate) fn personal_sign_with_helper(
     )?;
 
     match response.into_result() {
-        Ok(SignerHelperResult::PersonalSign(result)) => Ok(result),
+        Ok(SignerHelperResult::PersonalSign(result)) => {
+            remember_vault_generation_from_signer(
+                &result.metadata,
+                &result.keychain_item_id,
+                &result.device_id,
+            )?;
+            Ok(result)
+        }
         Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
@@ -296,7 +320,14 @@ pub(crate) fn sign_typed_data_with_helper(
     )?;
 
     match response.into_result() {
-        Ok(SignerHelperResult::SignTypedData(result)) => Ok(result),
+        Ok(SignerHelperResult::SignTypedData(result)) => {
+            remember_vault_generation_from_signer(
+                &result.metadata,
+                &result.keychain_item_id,
+                &result.device_id,
+            )?;
+            Ok(result)
+        }
         Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
@@ -324,7 +355,14 @@ pub(crate) fn sign_transaction_with_helper(
     )?;
 
     match response.into_result() {
-        Ok(SignerHelperResult::SignTransaction(result)) => Ok(result),
+        Ok(SignerHelperResult::SignTransaction(result)) => {
+            remember_vault_generation_from_signer(
+                &result.metadata,
+                &result.keychain_item_id,
+                &result.device_id,
+            )?;
+            Ok(result)
+        }
         Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
@@ -356,7 +394,14 @@ pub(crate) fn sign_btc_psbt_with_helper(
     )?;
 
     match response.into_result() {
-        Ok(SignerHelperResult::SignBtcPsbt(result)) => Ok(result),
+        Ok(SignerHelperResult::SignBtcPsbt(result)) => {
+            remember_vault_generation_from_signer(
+                &result.metadata,
+                &result.keychain_item_id,
+                &result.device_id,
+            )?;
+            Ok(result)
+        }
         Ok(result) => {
             anyhow::bail!("unexpected signer helper result: {result:?}")
         }
@@ -364,6 +409,18 @@ pub(crate) fn sign_btc_psbt_with_helper(
             anyhow::bail!("signer helper failed: {:?}: {}", error.code, error.message)
         }
     }
+}
+
+pub(crate) fn remember_vault_generation_from_signer(
+    metadata: &framkey_ipc::SignerVaultMetadata,
+    keychain_item_id: &str,
+    device_id: &str,
+) -> Result<()> {
+    remember_configured_vault_generation(checkpoint_from_signer_metadata(
+        metadata,
+        keychain_item_id,
+        device_id,
+    )?)
 }
 
 pub(crate) fn signer_evm_transaction(transaction: EvmTransaction) -> SignerEvmTransaction {

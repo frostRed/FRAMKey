@@ -13,6 +13,12 @@ use framkey_gbxcart::GbaSaveType;
 
 use crate::*;
 
+#[cfg(test)]
+thread_local! {
+    static TEST_VAULT_GENERATION_STATE_PATH: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 pub(crate) fn config_path() -> Result<PathBuf> {
     if let Ok(path) = std::env::var("FRAMKEY_DESKTOP_CONFIG") {
         return Ok(PathBuf::from(path));
@@ -48,6 +54,33 @@ pub(crate) fn recovery_ui_state_path() -> Result<PathBuf> {
     let home = std::env::var_os("HOME")
         .ok_or_else(|| anyhow::anyhow!("HOME is required to locate FRAMKey recovery state"))?;
     Ok(PathBuf::from(home).join(".framkey/recovery-state.json"))
+}
+
+pub(crate) fn vault_generation_state_path() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(path) = TEST_VAULT_GENERATION_STATE_PATH.with(|path| path.borrow().clone()) {
+        return Ok(path);
+    }
+    if let Ok(path) = std::env::var("FRAMKEY_DESKTOP_GENERATION_STATE_PATH") {
+        return Ok(PathBuf::from(path));
+    }
+    let home = std::env::var_os("HOME").ok_or_else(|| {
+        anyhow::anyhow!("HOME is required to locate FRAMKey vault generation state")
+    })?;
+    Ok(PathBuf::from(home).join(".framkey/vault-generation-state.json"))
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_vault_generation_state_path<R>(path: PathBuf, f: impl FnOnce() -> R) -> R {
+    let previous = TEST_VAULT_GENERATION_STATE_PATH.with(|state| state.replace(Some(path)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    TEST_VAULT_GENERATION_STATE_PATH.with(|state| {
+        state.replace(previous);
+    });
+    match result {
+        Ok(value) => value,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 pub(crate) fn write_json_atomically(path: &Path, bytes: &[u8]) -> Result<()> {

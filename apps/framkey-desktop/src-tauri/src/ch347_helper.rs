@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use framkey_ch347_helper::{
     CH347_HELPER_READ_OPERATION, CH347_HELPER_WRITE_OPERATION, Ch347HelperReadRequest,
     Ch347HelperReadResult, Ch347HelperRequest, Ch347HelperResponse, Ch347HelperResult,
-    Ch347HelperWriteRequest, Ch347HelperWriteResult, read_response_file,
+    Ch347HelperWriteRequest, Ch347HelperWriteResult, read_response_bytes,
 };
 use serde_json::Value;
 
@@ -31,7 +31,7 @@ pub(crate) fn run_ch347_read_helper_privileged(
 pub(crate) fn run_ch347_helper_with_launcher(
     helper: &Ch347HelperConfig,
     request: Ch347HelperWriteRequest,
-    launcher: impl FnOnce(&Path, &Path, &Path) -> Result<()>,
+    launcher: impl FnOnce(&Path, &Path) -> Result<Ch347HelperResponse>,
 ) -> Result<Ch347HelperWriteResult> {
     let result = run_ch347_helper_request_with_launcher(
         helper,
@@ -49,7 +49,7 @@ pub(crate) fn run_ch347_helper_with_launcher(
 pub(crate) fn run_ch347_read_helper_with_launcher(
     helper: &Ch347HelperConfig,
     request: Ch347HelperReadRequest,
-    launcher: impl FnOnce(&Path, &Path, &Path) -> Result<()>,
+    launcher: impl FnOnce(&Path, &Path) -> Result<Ch347HelperResponse>,
 ) -> Result<Ch347HelperReadResult> {
     let result = run_ch347_helper_request_with_launcher(
         helper,
@@ -67,28 +67,15 @@ pub(crate) fn run_ch347_read_helper_with_launcher(
 pub(crate) fn run_ch347_helper_request_with_launcher(
     helper: &Ch347HelperConfig,
     request: Ch347HelperRequest,
-    launcher: impl FnOnce(&Path, &Path, &Path) -> Result<()>,
+    launcher: impl FnOnce(&Path, &Path) -> Result<Ch347HelperResponse>,
 ) -> Result<Ch347HelperResult> {
     verify_ch347_helper_hash(helper)?;
     let workspace = Ch347HelperWorkspace::new()?;
     let request_path = workspace.path("request.json");
-    let response_path = workspace.path("response.json");
     write_new_file(&request_path, &serde_json::to_vec_pretty(&request)?)?;
-    write_new_file(&response_path, b"{}")?;
 
-    let launch_result = launcher(&helper.path, &request_path, &response_path);
-    let response = read_response_file(&response_path);
-    match (launch_result, response) {
-        (Ok(()), Ok(response)) => helper_response_result(response),
-        (Ok(()), Err(error)) => Err(error),
-        (Err(launch_error), Ok(response)) => match helper_response_result(response) {
-            Ok(result) => Ok(result),
-            Err(response_error) => Err(response_error.context(format!(
-                "CH347 privileged helper launch failed: {launch_error}"
-            ))),
-        },
-        (Err(launch_error), Err(_)) => Err(launch_error),
-    }
+    let response = launcher(&helper.path, &request_path)?;
+    helper_response_result(response)
 }
 
 pub(crate) fn ch347_helper_status_value(helper: &Ch347HelperConfig) -> Value {
@@ -139,16 +126,13 @@ pub(crate) fn verify_ch347_helper_hash(helper: &Ch347HelperConfig) -> Result<()>
 pub(crate) fn launch_ch347_helper_privileged(
     helper_path: &Path,
     request_path: &Path,
-    response_path: &Path,
-) -> Result<()> {
+) -> Result<Ch347HelperResponse> {
     #[cfg(target_os = "macos")]
     {
         let command = shell_command(&[
             helper_path.as_os_str(),
             std::ffi::OsStr::new("--request"),
             request_path.as_os_str(),
-            std::ffi::OsStr::new("--response"),
-            response_path.as_os_str(),
         ])?;
         let script = format!(
             "do shell script {} with administrator privileges",
@@ -162,8 +146,15 @@ pub(crate) fn launch_ch347_helper_privileged(
             .spawn()
             .context("failed to launch macOS administrator authorization for CH347 helper")?;
         let output = wait_for_signer_helper_output(child, CH347_HELPER_TIMEOUT)?;
+        if !output.stdout.is_empty()
+            && let Ok(response) = read_response_bytes(&output.stdout)
+        {
+            return Ok(response);
+        }
         if output.status.success() {
-            return Ok(());
+            anyhow::bail!(
+                "CH347 helper exited successfully without returning a valid JSON response"
+            );
         }
         anyhow::bail!(
             "macOS administrator authorization for CH347 helper failed with {}; {}",
@@ -174,7 +165,7 @@ pub(crate) fn launch_ch347_helper_privileged(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (helper_path, request_path, response_path);
+        let _ = (helper_path, request_path);
         anyhow::bail!("CH347 privileged helper is currently supported on macOS only");
     }
 }
@@ -293,8 +284,7 @@ impl Drop for Ch347HelperWorkspace {
 pub(crate) fn fake_ch347_helper_launcher(
     _helper_path: &Path,
     request_path: &Path,
-    response_path: &Path,
-) -> Result<()> {
+) -> Result<Ch347HelperResponse> {
     let response = match framkey_ch347_helper::read_request_file(request_path)
         .and_then(framkey_ch347_helper::execute_request)
         .map(Ch347HelperResponse::ok)
@@ -302,6 +292,5 @@ pub(crate) fn fake_ch347_helper_launcher(
         Ok(response) => response,
         Err(error) => framkey_ch347_helper::error_response(&error),
     };
-    framkey_ch347_helper::write_response_file(response_path, &response)?;
-    helper_response_result(response).map(|_| ())
+    Ok(response)
 }

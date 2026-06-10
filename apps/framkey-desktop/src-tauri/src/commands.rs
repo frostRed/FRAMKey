@@ -7,7 +7,13 @@ use tauri::{Manager, WebviewWindow};
 use crate::*;
 
 #[tauri::command]
-pub(crate) fn framkey_status(state: tauri::State<'_, AppState>) -> ProviderEnvelope {
+pub(crate) fn framkey_status(
+    window: WebviewWindow,
+    state: tauri::State<'_, AppState>,
+) -> ProviderEnvelope {
+    if let Err(error) = ensure_trusted_window(&window) {
+        return ProviderEnvelope::error("status", error_to_provider_error(error));
+    }
     match state.with_config(|config| Ok(status_result(config))) {
         Ok(result) => ProviderEnvelope::result("status", result),
         Err(error) => ProviderEnvelope::error("status", error_to_provider_error(error)),

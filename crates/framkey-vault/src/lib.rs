@@ -14,8 +14,8 @@ pub use constants::{
 pub use dev_vault::{build_dev_encrypted_save_image, open_dev_encrypted_save_image};
 pub use keychain_vault::{
     build_keychain_encrypted_save_image, build_keychain_encrypted_save_image_with_recovery,
-    open_keychain_encrypted_save_image, rewrap_keychain_vault_with_recovery,
-    with_keychain_wallet_secret,
+    inspect_keychain_vault_metadata, open_keychain_encrypted_save_image,
+    rewrap_keychain_vault_with_recovery, with_keychain_wallet_secret,
 };
 pub use save_image::{build_save_image_with_payload, inspect_save_image, save_image_payload};
 pub use test_image::build_test_save_image;

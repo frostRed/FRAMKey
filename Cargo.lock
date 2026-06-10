@@ -1264,6 +1264,7 @@ dependencies = [
  "framkey-btc",
  "framkey-ch347",
  "framkey-ch347-helper",
+ "framkey-core",
  "framkey-crypto",
  "framkey-device",
  "framkey-evm",

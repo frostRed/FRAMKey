@@ -7,9 +7,10 @@ use framkey_crypto::encode_hex;
 
 use crate::{
     CH347_HELPER_OPERATION, CH347_HELPER_READ_OPERATION, Ch347HelperReadRequest,
-    Ch347HelperWriteRequest, MAX_CH347_HELPER_IMAGE_BYTES, PHYSICAL_BACKUP_ROM_HEADER_BYTES,
-    execute_read_request, execute_write_request, extract_physical_backup_from_rom_image,
-    parse_spi_speed, prepare_physical_backup_rom_image,
+    Ch347HelperResponse, Ch347HelperResult, Ch347HelperWriteRequest, MAX_CH347_HELPER_IMAGE_BYTES,
+    PHYSICAL_BACKUP_ROM_HEADER_BYTES, execute_read_request, execute_write_request,
+    extract_physical_backup_from_rom_image, parse_spi_speed, prepare_physical_backup_rom_image,
+    read_response_bytes, response_json_bytes, write_response_file,
 };
 
 #[test]
@@ -92,6 +93,58 @@ fn error_response_keeps_root_cause_context() {
             .message
             .contains("flashrom CH347 write failed with status 1")
     );
+}
+
+#[test]
+fn response_round_trips_through_stdout_bytes() {
+    let response = Ch347HelperResponse::ok(Ch347HelperResult::Read(crate::Ch347HelperReadResult {
+        operation: CH347_HELPER_READ_OPERATION.to_owned(),
+        device: "ch347".to_owned(),
+        helper_process: "framkey-ch347-helper".to_owned(),
+        privileged: true,
+        flashrom_path: "/opt/homebrew/sbin/flashrom".to_owned(),
+        chip: None,
+        chip_detection: "auto".to_owned(),
+        spi_speed: "15M".to_owned(),
+        output_path: "/tmp/backup-01.dat".to_owned(),
+        output_kind: "physical_backup_payload".to_owned(),
+        output_size: 4,
+        output_blake3: "aa".repeat(32),
+        save_size: 8192,
+        payload_size: 4,
+        rom_image_size: 8192,
+        payload_blake3: "aa".repeat(32),
+        rom_image_blake3: "bb".repeat(32),
+        storage_format: "framkey_physical_backup_v1".to_owned(),
+        verified: true,
+        read_count: 1,
+        layout_parsed: true,
+        backup_bytes_printed: false,
+        wallet_secret_touched: false,
+        recovery_share_bytes_printed: false,
+    }));
+
+    let bytes = response_json_bytes(&response).unwrap();
+    let parsed = read_response_bytes(&bytes).unwrap();
+
+    assert_eq!(parsed, response);
+}
+
+#[test]
+fn response_file_writer_refuses_to_replace_existing_path() {
+    let dir = unique_temp_dir("ch347-response-file");
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("response.json");
+    fs::write(&path, b"existing").unwrap();
+    let response = crate::error_response(&anyhow::anyhow!("fixture"));
+
+    let error = write_response_file(&path, &response)
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("failed to create CH347 helper response"));
+    assert_eq!(fs::read(&path).unwrap(), b"existing");
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

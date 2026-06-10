@@ -196,6 +196,25 @@ pub fn open_keychain_encrypted_save_image(
     })
 }
 
+pub fn inspect_keychain_vault_metadata(image: &[u8]) -> Result<KeychainVaultMetadata> {
+    let (inspection, vault) = parse_keychain_vault_image(image)?;
+    let (keychain_item_id, device_id) = first_keychain_wrapper_binding(&vault)?;
+
+    Ok(KeychainVaultMetadata {
+        image_size: image.len(),
+        shard_size: inspection.shard_size,
+        data_shards: inspection.data_shards,
+        parity_shards: inspection.parity_shards,
+        wallet_id: encode_hex(&vault.wallet_id.0),
+        generation: vault.generation.0,
+        wallet_type: vault.wallet_type,
+        keychain_item_id,
+        device_id: encode_hex(&device_id),
+        payload_hash_valid: inspection.payload_hash_valid,
+        recovered_shard_count: inspection.recovered_shard_count,
+    })
+}
+
 pub fn rewrap_keychain_vault_with_recovery(
     image: &[u8],
     recovery_files: &[RecoveryBackupFile],
@@ -205,19 +224,7 @@ pub fn rewrap_keychain_vault_with_recovery(
 ) -> Result<RecoveryRewrappedKeychainVaultImage> {
     validate_keychain_wrapper_binding(keychain_item_id)?;
 
-    let inspection = inspect_save_image(image)?;
-
-    let payload = save_image_payload(image)?;
-    let mut vault: VaultFile = serde_json::from_slice(&payload)
-        .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
-    vault.validate()?;
-
-    if vault.generation.0 != inspection.generation {
-        return Err(FramkeyError::invalid_data(format!(
-            "vault generation {} does not match save header generation {}",
-            vault.generation.0, inspection.generation
-        )));
-    }
+    let (_inspection, mut vault) = parse_keychain_vault_image(image)?;
 
     validate_recovery_files_for_vault(&vault, recovery_files)?;
     let recovery_policy_id = PolicyId(hex_16(&recovery_files[0].policy_id, "policy id")?);
@@ -314,19 +321,7 @@ pub fn with_keychain_wallet_secret<R>(
 ) -> Result<(KeychainVaultMetadata, R)> {
     validate_keychain_wrapper_binding(keychain_item_id)?;
 
-    let inspection = inspect_save_image(image)?;
-
-    let payload = save_image_payload(image)?;
-    let vault: VaultFile = serde_json::from_slice(&payload)
-        .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
-    vault.validate()?;
-
-    if vault.generation.0 != inspection.generation {
-        return Err(FramkeyError::invalid_data(format!(
-            "vault generation {} does not match save header generation {}",
-            vault.generation.0, inspection.generation
-        )));
-    }
+    let (inspection, vault) = parse_keychain_vault_image(image)?;
 
     let encrypted_dek = vault
         .dek_wrappers
@@ -374,4 +369,42 @@ pub fn with_keychain_wallet_secret<R>(
     let result = use_secret(&metadata, &wallet_secret)?;
 
     Ok((metadata, result))
+}
+
+fn parse_keychain_vault_image(image: &[u8]) -> Result<(crate::SaveImageInspection, VaultFile)> {
+    let inspection = inspect_save_image(image)?;
+
+    let payload = save_image_payload(image)?;
+    let vault: VaultFile = serde_json::from_slice(&payload)
+        .map_err(|error| FramkeyError::invalid_data(error.to_string()))?;
+    vault.validate()?;
+
+    if vault.generation.0 != inspection.generation {
+        return Err(FramkeyError::invalid_data(format!(
+            "vault generation {} does not match save header generation {}",
+            vault.generation.0, inspection.generation
+        )));
+    }
+
+    Ok((inspection, vault))
+}
+
+fn first_keychain_wrapper_binding(vault: &VaultFile) -> Result<(String, [u8; 16])> {
+    let mut bindings = vault
+        .dek_wrappers
+        .iter()
+        .filter_map(|wrapper| match wrapper {
+            DekWrapper::MacKeychain {
+                device_id,
+                keychain_item_id,
+                ..
+            } => Some((keychain_item_id.clone(), *device_id)),
+            _ => None,
+        });
+    let Some(first) = bindings.next() else {
+        return Err(FramkeyError::invalid_data(
+            "vault does not contain a macOS Keychain DEK wrapper",
+        ));
+    };
+    Ok(first)
 }

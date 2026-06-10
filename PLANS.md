@@ -1,3 +1,56 @@
+# Release Security Hardening
+
+Status: completed
+
+## Goal
+
+Fix the release-blocking security issues found in the pre-public audit: local vault rollback detection, CH347 privileged helper response handling, Tauri CSP inline-script exposure, and the missing Rust-side trusted-window check on `framkey_status`.
+
+## Scope
+
+- Add desktop-local high-water generation memory for Keychain vault images and enforce it before normal unlock/signing helper access.
+- Update the high-water state only after a vault image has been successfully opened/signed by the signer helper or after create/recover writes the configured device successfully.
+- Remove the CH347 privileged helper's root write to a user-owned response path by returning the helper response over stdout.
+- Tighten the Tauri CSP to avoid inline script execution.
+- Require trusted main-window validation in the `framkey_status` command handler.
+
+## Invariants
+
+- Do not change the vault save-image format or recovery bundle format.
+- Do not update high-water generation state from an unauthenticated higher-generation image before helper validation succeeds.
+- Do not expose wallet secrets, recovery shares, Keychain KEKs, private keys, backup bytes, or RPC credentials in new state or errors.
+- Do not expose CH347 or status commands to untrusted dApp windows.
+- Keep changes localized to existing desktop/helper/vault boundaries.
+
+## Likely Files
+
+- `crates/framkey-vault/src/keychain_vault.rs`
+- `crates/framkey-vault/src/lib.rs`
+- `apps/framkey-desktop/src-tauri/src/paths.rs`
+- `apps/framkey-desktop/src-tauri/src/signer_runtime.rs`
+- `apps/framkey-desktop/src-tauri/src/recovery_ops.rs`
+- `apps/framkey-desktop/src-tauri/src/ch347_helper.rs`
+- `apps/framkey-desktop/src-tauri/src/commands.rs`
+- `apps/framkey-desktop/src-tauri/tauri.conf.json`
+- `crates/framkey-ch347-helper/src/main.rs`
+- `crates/framkey-ch347-helper/src/lib.rs`
+- focused tests near the affected boundaries
+
+## Verification
+
+- Passed: `cargo fmt --all -- --check`
+- Passed: `cargo check -p framkey-vault -p framkey-ch347-helper -p framkey-desktop`
+- Passed: `cargo nextest run -p framkey-vault -p framkey-ch347-helper -p framkey-desktop --no-fail-fast` (186 tests passed; one existing leaky-test marker reported by nextest)
+- Passed: `node --check apps/framkey-desktop/ui/main.js`
+- Passed: `git diff --check`
+- Passed: `cargo clippy -p framkey-vault -p framkey-ch347-helper -p framkey-desktop --all-targets --no-deps -- -A clippy::large_enum_variant -A clippy::needless_range_loop -D warnings`
+
+## Main Risks
+
+- A rollback check must not create an irreversible denial-of-service from forged higher-generation unauthenticated images.
+- CH347 helper stdout must remain bounded and parseable through the existing administrator launcher path.
+- CSP tightening must not break the current external-script-only UI load path.
+
 # Safety Workspace UI Reorganization
 
 Status: completed
@@ -65,7 +118,7 @@ Add a trusted desktop Safety action that reads the connected CH347 SPI ROM, veri
 - Do not return backup bytes, recovery share bytes, wallet secrets, Keychain material, private keys, signatures, or RPC credentials to the UI.
 - Do not write outside the selected output directory.
 - Use create-new output semantics so existing backup files are not overwritten.
-- Keep the helper launch boundary restricted to fixed `--request` and `--response` path arguments.
+- Keep the helper launch boundary restricted to a fixed `--request` path argument and stdout response IPC.
 
 ## Likely Files
 

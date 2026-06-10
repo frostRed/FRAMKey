@@ -47,6 +47,7 @@ Only the signer helper may touch decrypted EOA wallet material in the Keychain-p
 - Browser bridge methods are read-only until an approval broker, simulation layer, and transaction parser exist.
 - Tauri approval broker decisions are real for SIWE-only `personal_sign` and policy-validated Permit/Permit2 `eth_signTypedData_v4`; `eth_sendTransaction` additionally requires an `allowed` transaction policy. The current default transaction policy emits ordinary-signable `allowed` or fail-closed `blocked` outcomes: unknown active approval spenders/operators, unsupported Universal Router commands, multicall incomplete semantics, risky Uniswap swap parameters, third-party Aave recipients/accounts, and missing or malformed Aave risk evidence do not reach signer-helper or mock signing. Non-SIWE personal messages, unknown typed-data, and raw `eth_sign` approvals remain dry-run/blocked before signing. BTC transaction approvals are real only for trusted UI-origin P2WPKH sends whose PSBT summary has `canSign=true`; they do not create any dApp-facing BTC signing method. Alchemy simulation responses, Aave account data, and BTC Esplora UTXOs are kept as audit/input data, not as a full post-transaction position simulator, and broader transaction policy is still required before larger real-funds use.
 - macOS Keychain KEK is only a DEK wrapper, not the wallet secret. New local KEKs are stored in a local, non-synchronizing macOS login Keychain item. Each KEK store/load is gated by macOS device-owner LocalAuthentication, so the system can use Touch ID or the account password in one prompt flow. Opening and signing existing vaults read the KEK once and do not write the Keychain item. Connect and signing paths trigger macOS authorization when needed; the trusted Diagnostics panel can also launch the real signer helper for a Keychain-only `Repair Signing Access` probe. That probe can trigger the system authorization prompt but does not read the card, pass a vault image, or decrypt the wallet secret. Local ad-hoc builds can bind the login Keychain ACL partition-list to the current signer-helper `CDHash` with `vault trust-keychain-helper-access`; FRAMKey does not use an allow-all-applications ACL or accept the login Keychain password as a command argument. Replacement create and recovery flows reset the local KEK instead of reusing an existing local Keychain item.
+- Configured Keychain vaults use private local app state to remember the highest validated vault generation per wallet. Normal open/sign paths reject older configured vault images before signer-helper access, and the high-water state advances only after helper validation/signing succeeds or after create/recover has successfully written the configured device.
 - Keychain vault build, open, recovery rewrap, SIWE `personal_sign`, and transaction signing operations delegate sensitive handling to a one-request signer helper process.
 - Helper requests run as the helper process identity so LocalAuthentication prompts and Keychain access bind to the real helper binary; the CLI can pin the helper binary BLAKE3 hash.
 - Recovery does not require displaying or storing plaintext seed phrases.
@@ -58,7 +59,7 @@ Only the signer helper may touch decrypted EOA wallet material in the Keychain-p
 - User approving a malicious transaction after a misleading UI.
 - Malicious or compromised dependency supply chain.
 - Physical copying of the GBA save area.
-- Rollback to an older encrypted vault if generation checks are not enforced.
+- Rollback before this Mac has recorded local high-water generation state for that wallet, such as on a fresh install or after intentionally erasing private app state.
 
 ## Required Hardening Before Real Funds
 
@@ -68,5 +69,4 @@ Only the signer helper may touch decrypted EOA wallet material in the Keychain-p
 - Dependency locking and auditing.
 - Transaction parser coverage for approvals, Permit, Permit2, typed data, and unknown calldata.
 - Broader transaction policy coverage, asset-change normalization, and fail-closed allow rules before real-value transaction signing.
-- Explicit rollback detection with local generation memory.
 - Production recovery UX polish, backup-health checks, and recovery drills for Mac replacement or local Keychain loss.

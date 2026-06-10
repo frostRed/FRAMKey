@@ -29,3 +29,6 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true
+
+[dev-dependencies]
+framkey-core = { path = "../../../crates/framkey-core" }
